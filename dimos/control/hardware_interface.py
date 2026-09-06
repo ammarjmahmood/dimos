@@ -29,13 +29,15 @@ import time
 from typing import TYPE_CHECKING
 
 from dimos.hardware.manipulators.spec import ControlMode, ManipulatorAdapter
+from dimos.hardware.whole_body.spec import MotorCommand
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from dimos.control.components import HardwareComponent, HardwareId, JointName, JointState
+    from dimos.control.task import JointCommand
     from dimos.hardware.drive_trains.spec import TwistBaseAdapter
     from dimos.hardware.spec import JointLimits
-    from dimos.hardware.whole_body.spec import MotorCommand, WholeBodyAdapter
+    from dimos.hardware.whole_body.spec import WholeBodyAdapter
 
 logger = setup_logger()
 
@@ -129,6 +131,20 @@ class ConnectedHardware:
             )
             for i, name in enumerate(self._joint_names)
         }
+
+    def write_joint_commands(self, commands: dict[str, JointCommand]) -> bool:
+        """Dispatch scalar commands only when this device has one coherent mode."""
+        modes = {mode for _, mode in commands.values()}
+        if len(modes) != 1 or None in modes:
+            return False
+        mode = next(iter(modes))
+        assert mode is not None
+        values: dict[str, float] = {}
+        for name, (value, _) in commands.items():
+            if isinstance(value, MotorCommand):
+                return False
+            values[name] = value
+        return self.write_command(values, mode)
 
     def write_command(self, commands: dict[str, float], mode: ControlMode) -> bool:
         """Write commands - allows partial joint sets, holds last for missing.
@@ -350,6 +366,8 @@ class ConnectedWholeBody(ConnectedHardware):
         self._kp_by_name = dict(zip(self._joint_names, self._kp, strict=False))
         self._kd_by_name = dict(zip(self._joint_names, self._kd, strict=False))
 
+        self._last_motor_commands: dict[str, MotorCommand] = {}
+
         self._last_commanded: dict[str, float] = {}
         self._initialized = False
         self._warned_unknown_joints: set[str] = set()
@@ -389,47 +407,42 @@ class ConnectedWholeBody(ConnectedHardware):
         }
 
     def write_command(self, commands: dict[str, float], mode: ControlMode) -> bool:
-        """Write position commands — converts to MotorCommand with per-joint PD gains.
+        """Translate position-only callers through the same whole-body writer."""
+        return self.write_joint_commands({name: (value, mode) for name, value in commands.items()})
 
-        Only POSITION / SERVO_POSITION are supported; other modes are warned
-        and dropped (matches ConnectedHardware's warn-and-skip pattern).
-        Per-joint kp/kd come from ``component.wb_config`` (resolved in
-        ``__init__``); fall back to ``_DEFAULT_KP``/``_DEFAULT_KD`` when
-        the blueprint didn't supply gains.
-        """
-        from dimos.hardware.whole_body.spec import MotorCommand
-
-        if mode not in (ControlMode.POSITION, ControlMode.SERVO_POSITION):
-            logger.warning(
-                f"WholeBody {self.hardware_id} only supports POSITION/SERVO_POSITION; "
-                f"got {mode.name} — skipping"
-            )
-            return False
+    def write_joint_commands(self, commands: dict[str, JointCommand]) -> bool:
+        """Write one arbitrated batch; uncommanded joints hold position with zero velocity/torque."""
+        resolved: dict[str, MotorCommand] = {}
+        for name, (value, mode) in commands.items():
+            if name not in self._kp_by_name:
+                return False
+            if isinstance(value, MotorCommand):
+                if mode is not None:
+                    return False
+                resolved[name] = value
+            elif mode in (ControlMode.POSITION, ControlMode.SERVO_POSITION):
+                resolved[name] = MotorCommand(
+                    q=value, dq=0.0, kp=self._kp_by_name[name], kd=self._kd_by_name[name]
+                )
+            else:
+                return False
 
         if not self._initialized and not self._try_initialize_last_commanded():
             return False
 
-        for joint_name, value in commands.items():
-            if joint_name in self._joint_names:
-                self._last_commanded[joint_name] = value
-            elif joint_name not in self._warned_unknown_joints:
-                logger.warning(
-                    f"WholeBody {self.hardware_id} received command for unknown joint "
-                    f"{joint_name}. Valid joints: {self._joint_names}"
+        motor_cmds = []
+        for name in self._joint_names:
+            previous = self._last_motor_commands[name]
+            motor_cmds.append(
+                resolved.get(
+                    name,
+                    MotorCommand(q=previous.q, dq=0.0, kp=previous.kp, kd=previous.kd, tau=0.0),
                 )
-                self._warned_unknown_joints.add(joint_name)
-
-        motor_cmds = [
-            MotorCommand(
-                q=self._last_commanded[name],
-                dq=0.0,
-                kp=self._kp_by_name[name],
-                kd=self._kd_by_name[name],
-                tau=0.0,
             )
-            for name in self._joint_names
-        ]
-        return self._wb_adapter.write_motor_commands(motor_cmds)
+        if not self._wb_adapter.write_motor_commands(motor_cmds):
+            return False
+        self._last_motor_commands = dict(zip(self._joint_names, motor_cmds, strict=True))
+        return True
 
     def write_motor_commands(self, commands: list[MotorCommand]) -> bool:
         """Direct pass-through to adapter for full MotorCommand control."""
@@ -441,6 +454,8 @@ class ConnectedWholeBody(ConnectedHardware):
             return False
         states = self._wb_adapter.read_motor_states()
         for i, name in enumerate(self._joint_names):
-            self._last_commanded[name] = states[i].q
+            self._last_motor_commands[name] = MotorCommand(
+                q=states[i].q, dq=0.0, kp=self._kp_by_name[name], kd=self._kd_by_name[name]
+            )
         self._initialized = True
         return True

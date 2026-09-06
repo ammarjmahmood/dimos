@@ -35,6 +35,7 @@ from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.control.task import (
     ControlTask,
     CoordinatorState,
+    JointCommand,
     JointCommandOutput,
     JointStateSnapshot,
     ResourceClaim,
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
     from dimos.control.components import HardwareId, JointName, JointState as JointReading, TaskName
     from dimos.control.hardware_interface import ConnectedHardware
     from dimos.hardware.manipulators.spec import ControlMode
-    from dimos.hardware.whole_body.spec import IMUState
+    from dimos.hardware.whole_body.spec import IMUState, MotorCommand
 
 logger = setup_logger()
 
@@ -57,8 +58,8 @@ class JointWinner(NamedTuple):
     """Tracks the winning task for a joint during arbitration."""
 
     priority: int
-    value: float
-    mode: ControlMode
+    value: float | MotorCommand
+    mode: ControlMode | None
     task_name: str
 
 
@@ -290,7 +291,7 @@ class TickLoop:
         self,
         commands: list[tuple[ControlTask, ResourceClaim, JointCommandOutput | None]],
     ) -> tuple[
-        dict[str, tuple[float, ControlMode, str]],
+        dict[str, tuple[float | MotorCommand, ControlMode | None, str]],
         dict[str, dict[str, str]],
     ]:
         """Per-joint arbitration with mode conflict detection.
@@ -312,6 +313,9 @@ class TickLoop:
                 continue
 
             for i, joint_name in enumerate(output.joint_names):
+                if joint_name not in claim.joints:
+                    logger.error(f"Task {task.name} commanded unclaimed joint {joint_name}")
+                    continue
                 candidate = JointWinner(claim.priority, values[i], output.mode, task.name)
 
                 # First claim on this joint
@@ -336,8 +340,8 @@ class TickLoop:
                 if candidate.mode != current.mode:
                     logger.warning(
                         f"Mode conflict on {joint_name}: {task.name} wants "
-                        f"{candidate.mode.name}, but {current.task_name} wants "
-                        f"{current.mode.name}. Dropping {task.name}."
+                        f"{candidate.mode}, but {current.task_name} wants "
+                        f"{current.mode}. Dropping {task.name}."
                     )
                     preemptions.setdefault(task.name, {})[joint_name] = current.task_name
                 # Same priority + same mode: first wins (keep current)
@@ -374,14 +378,14 @@ class TickLoop:
 
     def _route_to_hardware(
         self,
-        joint_commands: dict[str, tuple[float, ControlMode, str]],
-    ) -> dict[str, tuple[dict[str, float], ControlMode]]:
+        joint_commands: dict[str, tuple[float | MotorCommand, ControlMode | None, str]],
+    ) -> dict[str, dict[str, JointCommand]]:
         """Route joint-centric commands to hardware.
 
         Returns:
-            {hardware_id: ({joint: value}, mode)}
+            {hardware_id: {joint: (value, mode)}}
         """
-        hw_commands: dict[str, tuple[dict[str, float], ControlMode]] = {}
+        hw_commands: dict[str, dict[str, JointCommand]] = {}
 
         with self._hardware_lock:
             for joint_name, (value, mode, _) in joint_commands.items():
@@ -390,40 +394,25 @@ class TickLoop:
                     logger.warning(f"Unknown joint {joint_name}, cannot route")
                     continue
 
-                if hw_id not in hw_commands:
-                    hw_commands[hw_id] = ({}, mode)
-                else:
-                    # Check for mode conflict across joints on same hardware
-                    existing_mode = hw_commands[hw_id][1]
-                    if mode != existing_mode:
-                        logger.error(
-                            f"Mode conflict for hardware {hw_id}: joint {joint_name} wants "
-                            f"{mode.name} but hardware already has {existing_mode.name}. "
-                            f"Dropping command for {joint_name}."
-                        )
-                        continue
-
-                hw_commands[hw_id][0][joint_name] = value
+                hw_commands.setdefault(hw_id, {})[joint_name] = (value, mode)
 
         return hw_commands
 
     def _write_all_hardware(
         self,
-        hw_commands: dict[str, tuple[dict[str, float], ControlMode]],
+        hw_commands: dict[str, dict[str, JointCommand]],
     ) -> None:
         """Write commands to all hardware interfaces."""
         hardware = self._hardware
         with self._hardware_lock:
-            for hw_id, (positions, mode) in hw_commands.items():
+            for hw_id, commands in hw_commands.items():
                 if hw_id in hardware:
                     if not hardware[hw_id].ready_for_control():
                         continue
                     try:
-                        accepted = hardware[hw_id].write_command(positions, mode)
+                        accepted = hardware[hw_id].write_joint_commands(commands)
                         if not accepted:
-                            logger.error(
-                                f"Hardware {hw_id} rejected {mode.name} command from control task"
-                            )
+                            logger.error(f"Hardware {hw_id} rejected command from control task")
                     except Exception as e:
                         logger.error(f"Failed to write to {hw_id}: {e}")
 

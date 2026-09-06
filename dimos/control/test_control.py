@@ -62,7 +62,12 @@ from dimos.control.tick_loop import TickLoop
 from dimos.core.stream import In
 from dimos.hardware.manipulators.spec import ManipulatorAdapter
 from dimos.hardware.spec import JointLimits
-from dimos.hardware.whole_body.spec import MotorState, WholeBodyAdapter
+from dimos.hardware.whole_body.spec import (
+    MotorCommand,
+    MotorState,
+    WholeBodyAdapter,
+    WholeBodyConfig,
+)
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -154,6 +159,21 @@ def coordinator_state():
 
 
 class TestJointCommandOutput:
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"mode": ControlMode.POSITION},
+            {"mode": None, "positions": [0.0]},
+            {"mode": None, "motor_commands": []},
+            {"mode": None, "motor_commands": [MotorCommand(dq=float("nan"))]},
+            {"mode": None, "motor_commands": [MotorCommand(kp=-1.0)]},
+        ],
+    )
+    def test_rejects_ambiguous_or_invalid_motor_commands(self, kwargs):
+        arguments = {"motor_commands": [MotorCommand()], **kwargs}
+        with pytest.raises(ValueError):
+            JointCommandOutput(joint_names=["robot/joint"], **arguments)
+
     def test_position_output(self):
         output = JointCommandOutput(
             joint_names=["j1", "j2"],
@@ -1132,7 +1152,7 @@ class TestTickLoop:
 
         state, per_hardware = tick_loop._read_all_hardware()
         imu = tick_loop._read_all_imu()
-        tick_loop._write_all_hardware({"g1": ({"g1/joint1": 0.25}, ControlMode.SERVO_POSITION)})
+        tick_loop._write_all_hardware({"g1": {"g1/joint1": (0.25, ControlMode.SERVO_POSITION)}})
 
         assert state.joint_positions == {}
         assert per_hardware == {}
@@ -1163,7 +1183,7 @@ class TestTickLoop:
         )
 
         state, _per_hardware = tick_loop._read_all_hardware()
-        tick_loop._write_all_hardware({"g1": ({"g1/joint1": 0.25}, ControlMode.SERVO_POSITION)})
+        tick_loop._write_all_hardware({"g1": {"g1/joint1": (0.25, ControlMode.SERVO_POSITION)}})
 
         assert state.joint_positions == {"g1/joint1": 0.5}
         adapter.write_motor_commands.assert_called_once()
@@ -1285,7 +1305,7 @@ class TestTickLoop:
 
     def test_write_all_hardware_rejected_command_logs_error(self, mocker):
         hardware = {"arm": MagicMock()}
-        hardware["arm"].write_command.return_value = False
+        hardware["arm"].write_joint_commands.return_value = False
         log_error = mocker.patch("dimos.control.tick_loop.logger.error")
         tick_loop = TickLoop(
             tick_rate=100.0,
@@ -1296,11 +1316,87 @@ class TestTickLoop:
             joint_to_hardware={"arm/joint1": "arm"},
         )
 
-        tick_loop._write_all_hardware({"arm": ({"arm/joint1": 0.25}, ControlMode.SERVO_POSITION)})
+        tick_loop._write_all_hardware({"arm": {"arm/joint1": (0.25, ControlMode.SERVO_POSITION)}})
 
-        log_error.assert_called_once_with(
-            "Hardware arm rejected SERVO_POSITION command from control task"
+        log_error.assert_called_once_with("Hardware arm rejected command from control task")
+
+    def test_full_motor_targets_arbitrate_with_position_tasks_in_one_batch(self, mocker):
+        joints = ["robot/leg", "robot/wheel", "robot/other_leg"]
+        adapter = mocker.Mock(spec=WholeBodyAdapter)
+        adapter.has_motor_states.return_value = True
+        adapter.read_motor_states.return_value = [MotorState(q=0.1)] * 3
+        adapter.write_motor_commands.return_value = True
+        hardware = ConnectedWholeBody(
+            adapter,
+            HardwareComponent(
+                hardware_id="robot",
+                hardware_type=HardwareType.WHOLE_BODY,
+                joints=joints,
+                wb_config=WholeBodyConfig(kp=(80, 0, 80), kd=(2, 0.6, 2)),
+            ),
         )
+        loop = TickLoop(
+            tick_rate=50,
+            hardware={"robot": hardware},
+            hardware_lock=threading.Lock(),
+            tasks={},
+            task_lock=threading.Lock(),
+            joint_to_hardware=dict.fromkeys(joints, "robot"),
+        )
+        policy = mocker.Mock(name="policy")
+        policy.name = "policy"
+        override = mocker.Mock(name="override")
+        override.name = "override"
+        leg = MotorCommand(q=0.3, dq=0.2, kp=80, kd=2, tau=0.4)
+        wheel = MotorCommand(q=0, dq=5, kp=0, kd=0.6)
+        winners, preemptions = loop._arbitrate(
+            [
+                (
+                    policy,
+                    ResourceClaim(frozenset(joints), priority=10, mode=None),
+                    JointCommandOutput(
+                        joint_names=joints[:2], motor_commands=[leg, wheel], mode=None
+                    ),
+                ),
+                (
+                    override,
+                    ResourceClaim(frozenset([joints[0], joints[2]]), priority=20),
+                    JointCommandOutput(joint_names=[joints[0], joints[2]], positions=[0.8, -0.4]),
+                ),
+            ]
+        )
+        loop._write_all_hardware(loop._route_to_hardware(winners))
+        adapter.write_motor_commands.assert_called_once_with(
+            [
+                MotorCommand(q=0.8, dq=0, kp=80, kd=2),
+                wheel,
+                MotorCommand(q=-0.4, dq=0, kp=80, kd=2),
+            ]
+        )
+        assert preemptions == {"policy": {joints[0]: "override"}}
+
+        # A partial position command must not retain the previous wheel speed.
+        adapter.reset_mock()
+        assert hardware.write_command({joints[0]: 0.5}, ControlMode.POSITION)
+        adapter.write_motor_commands.assert_called_once_with(
+            [
+                MotorCommand(q=0.5, dq=0, kp=80, kd=2),
+                MotorCommand(q=0, dq=0, kp=0, kd=0.6),
+                MotorCommand(q=-0.4, dq=0, kp=80, kd=2),
+            ]
+        )
+
+    def test_manipulator_rejects_full_motor_targets_without_writing(self, mock_adapter):
+        hardware = ConnectedHardware(
+            mock_adapter,
+            HardwareComponent(
+                hardware_id="arm",
+                hardware_type=HardwareType.MANIPULATOR,
+                joints=["arm/joint1"],
+            ),
+        )
+        assert not hardware.write_joint_commands({"arm/joint1": (MotorCommand(q=0.5), None)})
+        mock_adapter.write_joint_positions.assert_not_called()
 
 
 class TestIntegration:

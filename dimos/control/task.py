@@ -28,11 +28,14 @@ Use the t_now passed in CoordinatorState.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from dimos.control.components import JointName
 from dimos.hardware.manipulators.spec import ControlMode as ControlMode
-from dimos.hardware.whole_body.spec import IMUState
+from dimos.hardware.whole_body.spec import IMUState, MotorCommand
+
+JointCommand = tuple[float | MotorCommand, ControlMode | None]
 
 if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.Pose import Pose
@@ -58,7 +61,7 @@ class ResourceClaim:
 
     joints: frozenset[JointName]
     priority: int = 0
-    mode: ControlMode = ControlMode.POSITION
+    mode: ControlMode | None = ControlMode.POSITION
 
     def conflicts_with(self, other: ResourceClaim) -> bool:
         """Check if two claims compete for the same joints."""
@@ -138,17 +141,38 @@ class JointCommandOutput:
         velocities: Velocity commands (rad/s), or None
         efforts: Effort commands (Nm), or None
         mode: Control mode - must match which field is populated
+        motor_commands: Complete whole-body motor targets. Set mode=None and
+            leave scalar fields unset when supplying these.
     """
 
     joint_names: list[JointName]
     positions: list[float] | None = None
     velocities: list[float] | None = None
     efforts: list[float] | None = None
-    mode: ControlMode = ControlMode.POSITION
+    mode: ControlMode | None = ControlMode.POSITION
+    motor_commands: list[MotorCommand] | None = None
 
     def __post_init__(self) -> None:
         """Validate that lengths match and at least one value field is set."""
         n = len(self.joint_names)
+
+        if self.motor_commands is not None:
+            if self.mode is not None or any(
+                value is not None for value in (self.positions, self.velocities, self.efforts)
+            ):
+                raise ValueError("motor_commands require mode=None and no scalar commands")
+            if len(self.motor_commands) != n or len(set(self.joint_names)) != n:
+                raise ValueError("motor_commands require one command per unique joint name")
+            for command in self.motor_commands:
+                if not all(
+                    isfinite(v)
+                    for v in (command.q, command.dq, command.kp, command.kd, command.tau)
+                ):
+                    raise ValueError("motor commands must be finite")
+                if command.kp < 0 or command.kd < 0:
+                    raise ValueError("motor gains must be nonnegative")
+        elif self.mode is None:
+            raise ValueError("mode=None requires motor_commands")
 
         if self.positions is not None and len(self.positions) != n:
             raise ValueError(f"positions length {len(self.positions)} != joint_names length {n}")
@@ -157,9 +181,11 @@ class JointCommandOutput:
         if self.efforts is not None and len(self.efforts) != n:
             raise ValueError(f"efforts length {len(self.efforts)} != joint_names length {n}")
 
-    def get_values(self) -> list[float] | None:
+    def get_values(self) -> list[float] | list[MotorCommand] | None:
         """Get the active values based on mode."""
         match self.mode:
+            case None:
+                return self.motor_commands
             case ControlMode.POSITION | ControlMode.SERVO_POSITION:
                 return self.positions
             case ControlMode.VELOCITY:
