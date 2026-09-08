@@ -173,3 +173,62 @@ The additional ignored `.venv-mj310` is an intentionally unsupported diagnostic
 environment for reproducing the stock controller failure. It is not a proposed
 installation workaround. No original venv package, lockfile or upstream source
 was modified.
+
+## Full Adoption Attempt: Model Import Boundary
+
+2026-09-08: Pim requested a second, like-for-like experiment using our own
+robosuite robot definitions and replacing sim2 composition/runtime/controller
+ownership. This is distinct from the raw-model feasibility bridge above.
+The production rewrite is **paused for an asset-contract decision**, not done.
+
+Direct use of upstream `RobotModel` does not preserve the current MJCF inputs:
+
+| Check | Native MuJoCo | Upstream RobotModel |
+|---|---|---|
+| Real G1 first hip damping | 0.001 | 0.1 |
+| Real G1 first hip armature | 0.01 | 2.5 |
+| Existing xArm7 model construction | Used by current sim2 | `KeyError: 'size1'` |
+| Collision geom appearance | Authored RGBA | Recolored by upstream |
+
+The G1 measurement compiled both real models with the same meshes. The probe
+explicitly redirected upstream's mesh file references to the original asset
+directory to isolate physics/default behavior from asset-path resolution.
+No dynamics or rendering options were patched. Both models had `nq=36`.
+
+The causes are in upstream `robosuite/models/base.py`: `MujocoXML` removes
+the original default tree after a limited inline expansion; nested inheritance
+and top-level defaults are not preserved as a general MJCF importer would
+preserve them. `RobotModel.__init__` then supplies its own damping/armature
+where explicit attributes are absent. `MujocoXMLModel` also deliberately
+recolors collision geometry. These are model-loader behaviors, not a claim
+that robosuite's supported, authored models are unusable.
+
+Three small counterexample tests reproduce these boundaries without external
+assets or runtime patches:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest \
+  experiments/robosuite_emulator/test_model_import.py -q --noconftest -o addopts=''
+```
+
+Result: **3 passed in 0.75 seconds**. Passing means the counterexamples are
+reproduced; it is not migration acceptance.
+
+The separate dependency boundary still exists: upstream requires
+`mujoco>=3.3,<3.10`, whereas current DimOS requires `mujoco>=3.10`. All new
+probes used the already-isolated MuJoCo 3.9 environment, not a modified DimOS
+installation.
+
+Baseline at `a82725e85`: sim2 plus the three robot-local definitions contains
+**3,275 production lines in 28 files**, excluding five test files and two demos
+(4,300 lines / 35 files including those). The production migration currently
+has **zero changed files**. Do not present the prior 874-line experimental
+bridge, or these new counterexamples, as the completed replacement's size.
+
+Before continuing, choose the input contract: adopt robosuite-authored MJCF
+conventions, including migrating existing assets, or retain lossless general
+MJCF loading. The latter needs native composition or a separately reviewed
+upstream importer correction. Do not silently add a second converter, patch
+the installed dependency, or accept changed physical parameters to make the
+comparison pass. Preserve independent sensor workers, DimOS control ownership,
+scene controls and the provisional SHM motor path in either experiment.
