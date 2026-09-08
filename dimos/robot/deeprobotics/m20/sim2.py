@@ -18,6 +18,7 @@ from math import pi
 from pathlib import Path
 
 from dimos.control.tasks.m20_locomotion_task.m20_locomotion_task import HOME, KD, KP, POLICY_JOINTS
+from dimos.sim2.models import RobotModel
 from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar, Mount
 from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
@@ -25,9 +26,15 @@ from dimos.utils.data import LfsPath
 
 ASSETS = Path(__file__).parent / "assets"
 POLICY_PATH = LfsPath("m20_sdk/policy.onnx")
+
+
+class M20Model(RobotModel):
+    def __init__(self, idn: str = "0") -> None:
+        super().__init__(ASSETS / "m20.xml", idn, meshdir=LfsPath("m20_sdk/meshes"))
+
+
 M20 = RobotConfig(
-    model=ASSETS / "m20.xml",
-    meshdir=LfsPath("m20_sdk/meshes"),
+    model=M20Model,
     root_body="base_link",
     floating=True,
     spawn_height=0.6,

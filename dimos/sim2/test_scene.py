@@ -13,12 +13,14 @@
 # limitations under the License.
 
 from dataclasses import replace
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
 import pytest
 
 from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.sim2.models import RobotModel
 from dimos.sim2.runtime import SimulationRuntime
 from dimos.sim2.scene import describe_scene, scene_robot
 from dimos.sim2.scene_types import (
@@ -33,8 +35,15 @@ from dimos.sim2.spec import ControlInterface, Joint, RobotConfig, RobotInstance,
 pytestmark = pytest.mark.mujoco
 
 
+class SceneTestRobot(RobotModel):
+    path = Path()
+
+    def __init__(self, idn="0"):
+        super().__init__(self.path, idn)
+
+
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, monkeypatch):
     scene = tmp_path / "scene.xml"
     scene.write_text("""<mujoco><worldbody>
       <geom type="plane" size="2 2 .1"/>
@@ -64,8 +73,12 @@ def world(tmp_path):
         spawns={"workbench": Pose(0, 0, 0.2)},
     )
     scene.with_suffix(".json").write_text(metadata.model_dump_json())
+    monkeypatch.setattr(SceneTestRobot, "path", robot)
     config = RobotConfig(
-        robot, "base", ControlInterface.MANIPULATOR, (Joint("j", "j", "a", mode="position"),)
+        SceneTestRobot,
+        "base",
+        ControlInterface.MANIPULATOR,
+        (Joint("j", "j", "a", mode="position"),),
     )
     runtime = SimulationRuntime(
         WorldConfig(scene, {"arm": RobotInstance(config, xyz=(0, 0, 0.2))}), uuid4().hex

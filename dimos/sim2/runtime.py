@@ -29,6 +29,7 @@ from scipy.spatial.transform import Rotation
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.control.interface import descriptor
+from dimos.sim2.environment import EmulatorEnvironment
 from dimos.sim2.ipc.abi import (
     ABI_VERSION,
     ChannelDescriptor,
@@ -36,7 +37,8 @@ from dimos.sim2.ipc.abi import (
     FrameLayout,
 )
 from dimos.sim2.ipc.channel import FrameMetadata, RobotChannel
-from dimos.sim2.scene import describe_scene, load_scene
+from dimos.sim2.robot import MotorRobot
+from dimos.sim2.scene import describe_scene
 from dimos.sim2.scene_types import EntityState, RegionState, SceneState, SceneUpdate
 from dimos.sim2.sensors.spec import Imu
 from dimos.sim2.spec import ControlInterface, RobotConfig, WorldConfig
@@ -46,6 +48,7 @@ STATE = mujoco.mjtState.mjSTATE_INTEGRATION
 
 @dataclass
 class RobotBinding:
+    robot: MotorRobot
     config: RobotConfig
     channel: RobotChannel
     qpos: NDArray[np.int32]
@@ -63,8 +66,9 @@ class SimulationRuntime:
         self.config = config
         self.world_id = uuid4().hex
         self.description = describe_scene(config.scene)
-        self.model = load_scene(config, self.description)
-        self.data = mujoco.MjData(self.model)
+        self.environment = EmulatorEnvironment(config, self.description)
+        self.model = self.environment.sim.model._model
+        self.data = self.environment.sim.data._data
         self.lock = threading.RLock()
         self.episode = 0
         self.tick = 0
@@ -122,14 +126,10 @@ class SimulationRuntime:
         try:
             for robot_id, instance in config.robots.items():
                 definition = instance.config
-                joints = [
-                    self.model.joint(robot_id + "/" + j.model_name).id for j in definition.joints
-                ]
-                actuators = np.array(
-                    [self.model.actuator(robot_id + "/" + j.actuator).id for j in definition.joints]
-                )
+                robot = self.environment.robots[robot_id]
+                servo = robot.composite_controller
                 channel = RobotChannel.create(
-                    descriptor(sim_id + "/" + robot_id, definition.control, len(joints))
+                    descriptor(sim_id + "/" + robot_id, definition.control, len(definition.joints))
                 )
                 imus = [s for s in definition.sensors if isinstance(s, Imu)]
                 imu = None
@@ -140,28 +140,17 @@ class SimulationRuntime:
                     )
                     imu = (g, a, q)
                 self.robots[robot_id] = RobotBinding(
+                    robot,
                     definition,
                     channel,
-                    self.model.jnt_qposadr[joints],
-                    self.model.jnt_dofadr[joints],
-                    actuators,
-                    self.model.body(robot_id + "/" + definition.root_body).id,
-                    np.array([j.scale for j in definition.joints]),
-                    np.array([j.offset for j in definition.joints]),
+                    servo.qpos,
+                    servo.dofs,
+                    servo.actuators,
+                    robot.root,
+                    servo.scale,
+                    servo.offset,
                     imu,
                 )
-            mujoco.mj_resetData(self.model, self.data)
-            for binding in self.robots.values():
-                self.data.qpos[binding.qpos] = (
-                    np.array([j.home for j in binding.config.joints]) * binding.scale
-                    + binding.offset
-                )
-                for joint, aid in zip(binding.config.joints, binding.actuators, strict=True):
-                    self.data.ctrl[aid] = (
-                        joint.home * joint.ctrl_scale + joint.ctrl_offset
-                        if joint.mode == "position"
-                        else 0.0
-                    )
             self._apply_update(self.description.initial)
             self._baseline = np.empty(nstate)
             mujoco.mj_getState(self.model, self.data, self._baseline, STATE)
@@ -174,6 +163,7 @@ class SimulationRuntime:
         with self.lock:
             update = initial if initial is not None else SceneUpdate()
             self._validate_update(update)
+            self.environment.reset()
             mujoco.mj_setState(self.model, self.data, self._baseline, STATE)
             self._apply_update(update)
             return self._finish_change()
@@ -184,6 +174,7 @@ class SimulationRuntime:
         for binding in self.robots.values():
             binding.channel.set_episode(self.episode)
             binding.enabled = True
+            binding.robot.composite_controller.reset()
         self._publish(force_snapshot=True)
         for binding in self.robots.values():
             binding.channel.set_lifecycle("ready")
@@ -320,50 +311,27 @@ class SimulationRuntime:
         with self.lock:
             if self.paused:
                 return
-            for binding in self.robots.values():
-                self._apply(binding)
-            mujoco.mj_step(self.model, self.data)
+            actions = {key: self._command(binding) for key, binding in self.robots.items()}
+            self.environment.step(actions)
             self.tick += 1
             self._publish()
 
-    def _apply(self, b: RobotBinding) -> None:
+    def _command(self, b: RobotBinding) -> NDArray[np.float64]:
         action = b.channel.read_action()
-        q = self.data.qpos[b.qpos]
-        dq = self.data.qvel[b.dofs]
+        command: NDArray[np.float64] = b.robot.composite_controller.home.copy()
+        enabled = True
         if action is not None and action.metadata.episode_id == self.episode:
             values = action.values
             enabled = bool(values["enabled"][0])
-            target = values["position"] * b.scale + b.offset
-            velocity = values["velocity"] * b.scale
+            command[:, 0] = values["position"]
+            command[:, 1] = values["velocity"]
+            command[:, 4] = values["effort"]
             if b.config.control == ControlInterface.WHOLE_BODY:
-                kp, kd = values["kp"], values["kd"]
-                ff = values["effort"]
-            else:
-                kp = np.array([j.kp for j in b.config.joints])
-                kd = np.array([j.kd for j in b.config.joints])
-                ff = values["effort"]
-        else:
-            enabled = True
-            target = np.array([j.home for j in b.config.joints]) * b.scale + b.offset
-            velocity = np.zeros_like(dq)
-            kp = np.array([j.kp for j in b.config.joints])
-            kd = np.array([j.kd for j in b.config.joints])
-            ff = np.zeros_like(dq)
-        torque = kp * (target - q) + kd * (velocity - dq) + ff
+                command[:, 2] = values["kp"]
+                command[:, 3] = values["kd"]
         b.enabled = enabled
-        for i, (joint, aid) in enumerate(zip(b.config.joints, b.actuators, strict=True)):
-            if joint.mode == "position":
-                public_target = (
-                    (target[i] - b.offset[i]) / b.scale[i]
-                    if enabled
-                    else (q[i] - b.offset[i]) / b.scale[i]
-                )
-                value = public_target * joint.ctrl_scale + joint.ctrl_offset
-            else:
-                value = torque[i] if enabled else 0.0
-            if self.model.actuator_ctrllimited[aid]:
-                value = np.clip(value, *self.model.actuator_ctrlrange[aid])
-            self.data.ctrl[aid] = value
+        b.robot.enabled = enabled
+        return command
 
     def _publish(self, *, force_snapshot: bool = False) -> None:
         meta = FrameMetadata(0, self.episode, self.tick, 0, float(self.data.time))
@@ -412,3 +380,4 @@ class SimulationRuntime:
             channel.set_lifecycle("closed")
             channel.unlink()
             channel.close()
+        self.environment.close()

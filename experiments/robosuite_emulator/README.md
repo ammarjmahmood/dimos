@@ -1,234 +1,233 @@
-# Robosuite Hardware-Emulator Spike
+# Robosuite-Backed sim2 Comparison
 
-Isolated experiment on `test/robosuite-emulator-spike`, based on `a82725e85`.
-No production simulation, blueprint, policy, dependency-lock or notebook changes.
+2026-09-08. Branch `test/robosuite-emulator-spike`, separate worktree
+`~/Desktop/dimos-robosuite-emulator-spike`. Native baseline: `a82725e85`.
+This is a working alternative for comparison, not an accepted migration.
+The original worktree, user changes, running simulator and upstream source
+were not modified.
 
-## Questions
+## What Changed
 
-1. Can robosuite step the exact DimOS G1 model under the unchanged GR00T task?
-2. Can mounted RGB-D and ideal lidar use its Observable interface?
-3. What is reused, and what must remain a DimOS-specific bridge?
-4. What changes when using the ordinary robosuite RobotEnv/controller path?
-
-This is not a replacement backend or a complete deployed DimOS blueprint. The
-hardware probe deliberately uses robosuite's lower-level MujocoEnv, retaining
-the existing sim2 model composition. Its standard RobotEnv path is probed
-separately; succeeding at the former does not prove the latter is drop-in.
-
-## Environment
-
-The separate venv installs robosuite from the local upstream checkout
-`5ce6643f3092639d08f7b0f90ed1c6a84f50552c` (also upstream HEAD when checked),
-and MuJoCo 3.9. The current DimOS `sim` extra requires MuJoCo >=3.10, whereas
-this robosuite revision declares <3.10. This is a real packaging conflict.
-
-Other DimOS dependencies are read from the original venv through the local
-`dimos_spike_dependencies.pth`; original packages are not modified. Invoke the
-experiment from this worktree with `PYTHONPATH=.`. This is an isolated runtime
-probe, not evidence of a clean dependency-resolved DimOS installation.
-
-## Findings
-
-**Robosuite can host this hardware-emulation direction. It is not inherently
-incompatible with arbitrary robot models or custom sensors. This experiment
-does not establish that replacing sim2 with it reduces the required code.**
-
-Two deliberately separate paths were exercised:
+The earlier raw-MjModel probe is retained in Git at `d92e83f0f`. It did not
+demonstrate robot/model/controller adoption and is removed from the current
+tree rather than kept as a second implementation. This version changes the
+actual sim2 production path:
 
 ```text
-Existing G1 RobotConfig + scene
-  -> existing sim2 model composition
-  -> MotorEnvironment (robosuite MujocoEnv subclass)
-       physics stepping, resets, camera rendering, Observables
-       DimOS motor adapter + PD/effort bindings
-       existing sim2 lidar raycaster
-  <- unchanged DimOS G1GrootWBCTask, called by synchronous test driver
-
-Stock robosuite Lift + XArm7
-  -> FixedBaseRobot + CompositeController
-  -> wrist RGB-D + added custom Observable
+Existing DimOS blueprint / ControlCoordinator / policy
+  -> unchanged WholeBodyAdapter or ManipulatorAdapter / SHM
+  -> SimulationRuntime: lifecycle, commands, snapshots, scene RPCs
+  -> EmulatorEnvironment (robosuite MujocoEnv)
+       Task composes SceneModel + robot models + optional upstream objects
+       MotorRobot (robosuite Robot) creates robot-local model via its factory
+       MotorFirmware (registered CompositeController) applies motor commands
+       MujocoEnv.step/reset owns simulation advancement
+  -> unchanged independent camera/lidar workers and typed DimOS streams
 ```
 
-The first path bypasses robosuite's RobotEnv, RobotModel and composite-controller
-ownership. No upstream code was patched. The second path actually uses those
-standard robot/controller facilities, but does not drive them from DimOS.
-Neither path is a deployed replacement blueprint.
+No custom robot registry, second task system, persistent converted asset
+format, physics fallback, new transport, or duplicate blueprint was added.
+Robot definitions are classes registered by robosuite. Their existing joint
+maps, gains, units, sensor mounts and SHM contracts remain DimOS declarations.
+Motor firmware applies PD once to effort actuators, or forwards native
+position-servo targets; policy/IK ownership stays outside the emulator.
 
-### Measured Results
+This deliberately subclasses the generic `Robot` and `MujocoEnv`, not
+`FixedBaseRobot`/`RobotEnv`. Those higher-level manipulation assumptions do not
+describe G1/M20 motor hardware. Our custom controller does not demonstrate
+swapping in upstream OSC/IK or running RoboCasa task environments unchanged.
 
-Captured locally on 2026-09-08. Full generated JSON, trajectories and rendered
-images remain at `/tmp/robosuite-emulator-evidence`; this table records the
-important evidence persistently. The small logistics world has 84 geoms with
-G1, not a large furnished office.
+### API And Extension Example
 
-| Probe | Result |
-| --- | --- |
-| G1 balance-command run, two cameras and lidar | 10 simulated seconds in 3.307 wall seconds, 3.02x real time; setup 0.764 s |
-| Main RGB-D camera | 640x480 at 10 Hz, 100 captures; finite metric depth, nonblank image visually inspected |
-| Additional pelvis camera | 320x240 RGB at 15 Hz, 149 captures due to sampling phase; configuration-only addition |
-| Ideal lidar | 15,000-ray pattern at 10 Hz, 100 captures, 12,444 valid points in final scan |
-| Combined policy/physics/sensor tick | p50 1.296 ms; p95 14.814 ms |
-| G1 native versus robosuite control | All 271 recorded qpos, motor-target and root samples bit-identical on MuJoCo 3.9 |
-| G1 sustained walking | Both control-only probes numerically failed at the same point, around 5.4 s; not a walking success |
-| Stock XArm7, MuJoCo 3.9 | Environment, composite controller, wrist RGB-D and custom Observable with corruption all worked |
-| Stock XArm7, MuJoCo 3.10 | Environment construction failed at the upstream `mj_fullM` call, matching its dependency cap |
-| Focused bridge tests | Four passed: native step equivalence, reset/model reuse, motor stop sentinels, mounts/lidar geometry isolation |
+An existing robot's definition changes from a model path to a small model
+class; asset paths live in that robot-local class. Examples are the three
+robot-local `sim2.py` files. G1, M20 and xArm blueprints need no new copies.
+An upstream model can instead be subclassed directly, as the Panda example
+does, with our instance namespace and joint/actuator mappings.
 
-The 10-second G1 run stayed upright, but drifted about 0.98 m horizontally with
-zero commanded walking velocity. Minimum root height was 0.728 m. It therefore
-proves sustained sensor/physics operation, not correct position holding. A
-separate three-second sensor run (two seconds balance, one second walking)
-completed, but does not establish sustained locomotion either.
+```python
+from robosuite.models.objects import BoxObject
+from dimos.sim2.blueprint import simulation_blueprint
+from dimos.sim2.scene import scene_path
+from dimos.sim2.sensors.spec import Camera, Mount
+from dimos.sim2.spec import ObjectInstance, RobotInstance
+from dimos.robot.manipulators.xarm.sim2 import XARM7
 
-The identical native/robosuite walking failure shows that this particular
-failure is not introduced by swapping the stepping backend in this driver. Its
-cause has not been diagnosed. The driver calls the real policy task but does
-not reproduce ControlCoordinator arbitration, safety or scheduling; it holds
-non-policy arm joints at their configured home positions. Do not infer from
-this that the user's running G1 blueprint is broken.
+arm = XARM7.with_sensor(Camera("overview", Mount("link_base"), depth=False))
+blueprint = simulation_blueprint(
+    scene=scene_path(None, "workbench.xml"),
+    robots={"arm": RobotInstance(arm, xyz=(0, 0, 0.12))},
+    objects=(
+        ObjectInstance(BoxObject, "box", (0.4, 0, 0.8),
+                       {"size": [0.03, 0.03, 0.03], "rgba": [1, 0.1, 0.1, 1]}),
+    ),
+    viewer=False,
+)
+```
 
-The native comparison includes sim2 shared-memory publication while the
-robosuite probe is in-process. Timing is not a transport-equivalent backend
-speed comparison. No GUI, typed streams, network transport, multiplayer,
-large-scene throughput or real-time scheduling was tested.
+The object becomes an ordinary named sim2 scene entity: inspect, relocate
+and reset it using the existing scene API. It is not a generated task or a
+success predicate. Robot camera addition still changes configuration only;
+new lidar physics still needs a sensor implementation.
 
-The stock xArm probe took ten zero-action steps. It did not solve Lift and did
-not run the existing DimOS xArm manipulation blueprint. Its custom measurement
-is a simple joint-norm Observable, not a physically realistic new sensor.
+`test_extensions.py` exercises an upstream Panda, BoxObject, CylinderObject,
+mounted wrist camera, DimOS joint commands, robosuite Observable, object
+editing/reset without recompilation, blueprint parsing, and construction
+inside a real DimOS forkserver worker. The worker test uses the Actor pipe,
+not cross-worker Zenoh RPC.
 
-### Extension Workflow
+## Asset Input Boundary
 
-For another compatible whole-body effort-actuated robot, the experiment takes
-the existing `RobotConfig`: model, root, joint/actuator mapping, initial state,
-gains and mounted sensors. It currently requires one robot, exactly the native
-joint units, an IMU, and the existing sim2 composition conventions. It does
-not prove arbitrary actuation modes, multiple robots, or a new locomotion
-policy integration.
+Raw upstream RobotModel loading changes G1 damping/armature, recolors collision
+geometry, and cannot resolve xArm's nested defaults. The three counterexamples
+in `test_model_import.py` remain as evidence, not accepted behavior.
 
-Adding a second already-supported camera used `RobotConfig.with_sensor(Camera(
-..., Mount("pelvis", ...)))`; no environment subclass or renderer change was
-needed. Existing lidar patterns likewise remain configuration. A genuinely
-new sensor physics model still needs an implementation, mount/state lookup,
-sample-rate wiring and a DimOS stream publisher. Robosuite's Observable wraps
-that measurement and provides sampling/noise/delay machinery; it does not
-provide realistic MID360 physics or the DimOS publisher automatically.
+`models.py` uses MuJoCo's own XML serialization to resolve includes, angle
+units, implicit names and actuator shortcuts. It expands inherited defaults
+before robosuite composition, preserves authored appearance, and suppresses
+unrequested upstream joint retuning. Meshes/textures remain shared files
+referenced by absolute path; only temporary XML is produced.
 
-For the standard robosuite robot path, existing XArm7 was selected by name.
-A new robot family would additionally need the appropriate upstream robot
-model/runtime/controller declarations. The motor bridge deliberately avoids
-those manipulation-oriented declarations; that is an architectural choice,
-not proof they are impossible to extend.
+Native `MjSpec.to_xml()` compiles internally. Consequently this path adds
+cold model preparation, especially costly for a large scene. It also rounds
+XML numbers to six significant digits; this is **not a universally lossless
+MJCF importer**. A 90-degree test differs by approximately 3.7e-6 radians.
+Real G1, M20 and xArm parameter tests cover masses/inertias, joint dynamics,
+actuators, contacts and materials at 1e-6 tolerance. No arbitrary-model or
+cross-MuJoCo-version equivalence is claimed.
 
-### What This Would Replace
+## Measured Comparison
 
-- Robosuite can own environment stepping, resets, camera access and Observable
-  scheduling/noise/delay. Its standard arm environments also supply existing
-  controllers and task machinery.
-- DimOS still needs hardware-facing joint and sensor interfaces, policy
-  integration, transport/lifecycle ownership, robot configurations, model/mount
-  composition, and custom lidar/splat implementations.
-- This bridge retains existing sim2 scene composition and lidar. It adds an
-  adapter rather than demonstrating deletion of those systems.
-- The raw-model override does not implement upstream task/XML replay contracts.
-  Hosting G1 here does not automatically make RoboCasa tasks robot-independent.
-- Current robosuite's MuJoCo version cap must be reconciled before ordinary
-  installation into current DimOS. This is a localized compatibility problem,
-  not an argument that the two architectures can never coexist.
+Same `demo_runtime.py`, same interpreter/MuJoCo 3.9 and input workloads;
+`PYTHONPATH` selects native or experimental sim2. Both paths use the real
+SHM adapters and independent sensor model snapshots. Sensors are captured
+synchronously in this harness, not timed through deployed worker streams.
+Setup times exclude Python imports and policy loading. These are short local
+measurements, not platform throughput guarantees.
 
-**Recommendation:** keep this as a viable bridge experiment, not a migration
-decision. A production decision needs an actual deployed G1 ControlCoordinator
-run, a stock-arm DimOS control bridge, and a supported dependency combination.
-Those are the remaining gates; this experiment deliberately does not broaden
-into implementing them. There is not yet evidence that replacing the minimal
-hardware emulator with robosuite would make adding sensors/robots simpler.
+| Workload | Native setup | Robosuite setup | Native run | Robosuite run |
+|---|---:|---:|---:|---:|
+| G1 GR00T standing, logistics, 5 simulated seconds | 0.081 s | 0.103 s | 1.002 s | 1.058 s |
+| M20 motor commands, logistics, 2 simulated seconds | 0.031 s | 0.047 s | 0.414 s | 0.412 s |
+| xArm joint/gripper commands, workbench, 2 simulated seconds | 0.026 s | 0.035 s | 0.137 s | 0.151 s |
+| G1 GR00T, populated RoboCasa kitchen, 1 simulated second | 0.376 s | 0.549 s | 0.571 s | 0.616 s |
+| G1 GR00T, HSSD home, 1 simulated second, repeat | 4.642 s | 11.706 s | 2.668 s | 2.762 s |
 
-## Reproduce In This Worktree
+All rows include 640x480 RGB-D at 10 simulated Hz; G1/M20 also use 15,000-ray
+lidar at 10 simulated Hz. HSSD is slower than real time in **both** synchronous
+runs, dominated by capture (2.60/2.65 s). Robosuite does not fix that bottleneck.
+The first HSSD pair was 4.719/12.259 s setup; the repeat confirms the large
+preparation penalty. No extra cache was introduced to conceal it.
 
-These use the existing isolated venv and original read-only robot assets.
-They are headless probes; no Rerun or native viewer is launched.
+Behavior evidence:
+
+- G1: all recorded qpos, qvel, actuator commands and final RGB/depth arrays
+  match exactly in logistics, RoboCasa and HSSD. Minimum logistics root height
+  is 0.728 m in both. This proves the bounded standing run, not position-hold
+  quality, sustained locomotion, stairs or a full ControlCoordinator deployment.
+- xArm: maximum qpos difference 2.9e-15, qvel 6.4e-14, actuator control 5.7e-14.
+- M20: maximum qpos difference 4.7e-7, qvel 5.9e-5, actuator control 1.8e-6.
+  Small numerical differences remain; no bit-identical M20 claim or locomotion
+  policy acceptance is made.
+- Final RGB/depth are identical for all three devices. The uncontrolled G1
+  motor-only run fell and produced a black final image in both versions; that
+  is rejected as camera evidence and replaced by the standing-policy run.
+- G1 logistics produces 50 RGB-D frames and 50 lidar scans in five simulated
+  seconds; final image standard deviation 77.24, 152,154 valid depth pixels,
+  13,925 lidar returns. RoboCasa/HSSD images are nonblank; RoboCasa was visually
+  inspected. Saved captures and traces are in `/tmp/sim2-robosuite-comparison`.
+
+### Verification And Dependencies
+
+- 36 focused tests passed in 5.46 s, covering the existing sim2 tests plus
+  real-model preservation, upstream extensions and upstream counterexamples.
+- Strict mypy passed on the 11 affected production files with
+  `--no-incremental --follow-imports=silent`; robosuite is an untyped dependency.
+- Ruff checks pass. The lock resolves and `uv sync --extra sim --inexact
+  --frozen` succeeds in the experimental venv. The earlier cross-venv `.pth`
+  was removed; final tests use the normal installed dependency closure.
+- robosuite is pinned to `5ce6643f3092639d08f7b0f90ed1c6a84f50552c` (1.5.2).
+  Its `<3.10` cap changes this branch's sim requirement to MuJoCo 3.9;
+  the resolver also lowers the dm-control and mujoco-mjx versions. No upstream
+  patch is used. Moving all DimOS back to this version is a team decision.
+- The ordinary cross-worker RPC attempt timed out on macOS with stock Zenoh
+  1.9 loopback discovery. Model/config deployment itself succeeded. A separate
+  forkserver/Actor test proves construction/reset; full network blueprint
+  acceptance is **not** established. No transport workaround is included.
+
+## Code Size
+
+Count physical Python lines, including headers/blanks, in `dimos/sim2` plus
+the G1/M20/xArm robot-local definitions; exclude tests and `demo_*` scripts.
+
+| | Native | Robosuite alternative |
+|---|---:|---:|
+| Production Python files | 28 | 32 |
+| Production lines | 3,275 | 3,684 |
+
+Net **+409 lines (12.5%)**; 11 production files touched, including four new
+ones, +569/-160. The old composer is removed, not retained beside robosuite.
+
+| Responsibility | Change |
+|---|---:|
+| Model input preservation (`models.py`) | +147 |
+| Environment composition/lifecycle (`environment.py`) | +165 |
+| Generic robosuite robot (`robot.py`) | +75 |
+| Registered motor firmware (`control/firmware.py`) | +92 |
+| Existing runtime, scene resolver, spec and blueprint | -94 net |
+| Three robot-local definitions | +24 net |
+
+Separate from production: two affected colocated test files add 117 net lines;
+the new extension test is 163 lines and the comparison harness 283. The old
+699-line probe/test implementation is deleted; that deletion is **not** counted
+as an emulator code reduction. Dependency lock, docs and historical import
+counterexamples are also excluded from the production comparison.
+
+## What It Buys And What It Does Not
+
+**Demonstrated:** shared upstream robot/object model conventions, reusable
+Panda/object classes, native robosuite composition and Observable extensions,
+while keeping the same DimOS device interface and sensor configuration.
+
+**Still ours:** motor bindings/firmware, real-time process ownership, SHM,
+sensor workers, lidar/splat physics, typed streams, scene semantics and RPCs.
+The cameras still use sim2's existing renderer; Observable noise/delay is not
+automatically applied to those independent sensor streams.
+
+**Potential, not demonstrated:** adopting more upstream placement samplers,
+task environments, controllers, wrappers and datasets. RoboCasa tasks still
+carry robot/gripper/controller assumptions. Importing robosuite does not make
+those tasks or their success logic work on every DimOS robot.
+
+**Decision:** viable if adopting that ecosystem is a product objective, but
+not currently a smaller or faster hardware emulator. For the firm V1 goal,
+native sim2 remains the stronger default on these measurements. Asset-library
+reuse may be valuable independently of adopting the entire environment loop;
+that narrower approach was not implemented here. Do not migrate main based
+only on this experiment. Resolve the startup cost, asset-input guarantee and
+dependency policy explicitly if choosing the full robosuite path.
+
+## Reproduce
 
 ```bash
 cd ~/Desktop/dimos-robosuite-emulator-spike
+uv sync --extra sim --inexact --frozen
 
-PYTHONPATH=. .venv/bin/python -m experiments.robosuite_emulator.demo_compare \
-  --backend robosuite --assets-root "$HOME/Desktop/dimos" \
-  --output /tmp/robosuite-emulator-evidence --label g1-standing \
-  --seconds 10 --walk-speed 0 --sensors --extra-camera
+PYTHONPATH=. .venv/bin/python experiments/robosuite_emulator/demo_runtime.py \
+  --robot g1 --groot --sensors --seconds 5 --output /tmp/comparison/robosuite-g1
 
-PYTHONPATH=. .venv/bin/python -m experiments.robosuite_emulator.demo_compare \
-  --backend stock --assets-root "$HOME/Desktop/dimos" \
-  --output /tmp/robosuite-emulator-evidence
+PYTHONPATH="$HOME/Desktop/dimos" .venv/bin/python \
+  experiments/robosuite_emulator/demo_runtime.py \
+  --robot g1 --groot --sensors --seconds 5 --output /tmp/comparison/native-g1
 
-PYTHONPATH=. .venv/bin/python -m pytest \
-  experiments/robosuite_emulator/test_bridge.py -q --noconftest -o addopts=''
+PYTHONPATH=. .venv/bin/python -m pytest dimos/sim2 \
+  experiments/robosuite_emulator/test_extensions.py \
+  experiments/robosuite_emulator/test_model_import.py \
+  -q --noconftest -o addopts='' -m '' --timeout=45
 ```
 
-For control equivalence, run the same demo with `--backend native` and then
-`--backend robosuite`, no sensors, default walking speed, and distinct labels.
-Compare `qpos`, `commands` and `root` arrays in each `trajectory.npz`. Both
-probes are expected to exit nonzero on the recorded walking failure. Failed
-runs are not performance results.
-
-The additional ignored `.venv-mj310` is an intentionally unsupported diagnostic
-environment for reproducing the stock controller failure. It is not a proposed
-installation workaround. No original venv package, lockfile or upstream source
-was modified.
-
-## Full Adoption Attempt: Model Import Boundary
-
-2026-09-08: Pim requested a second, like-for-like experiment using our own
-robosuite robot definitions and replacing sim2 composition/runtime/controller
-ownership. This is distinct from the raw-model feasibility bridge above.
-The production rewrite is **paused for an asset-contract decision**, not done.
-
-Direct use of upstream `RobotModel` does not preserve the current MJCF inputs:
-
-| Check | Native MuJoCo | Upstream RobotModel |
-|---|---|---|
-| Real G1 first hip damping | 0.001 | 0.1 |
-| Real G1 first hip armature | 0.01 | 2.5 |
-| Existing xArm7 model construction | Used by current sim2 | `KeyError: 'size1'` |
-| Collision geom appearance | Authored RGBA | Recolored by upstream |
-
-The G1 measurement compiled both real models with the same meshes. The probe
-explicitly redirected upstream's mesh file references to the original asset
-directory to isolate physics/default behavior from asset-path resolution.
-No dynamics or rendering options were patched. Both models had `nq=36`.
-
-The causes are in upstream `robosuite/models/base.py`: `MujocoXML` removes
-the original default tree after a limited inline expansion; nested inheritance
-and top-level defaults are not preserved as a general MJCF importer would
-preserve them. `RobotModel.__init__` then supplies its own damping/armature
-where explicit attributes are absent. `MujocoXMLModel` also deliberately
-recolors collision geometry. These are model-loader behaviors, not a claim
-that robosuite's supported, authored models are unusable.
-
-Three small counterexample tests reproduce these boundaries without external
-assets or runtime patches:
-
-```bash
-PYTHONPATH=. .venv/bin/python -m pytest \
-  experiments/robosuite_emulator/test_model_import.py -q --noconftest -o addopts=''
-```
-
-Result: **3 passed in 0.75 seconds**. Passing means the counterexamples are
-reproduced; it is not migration acceptance.
-
-The separate dependency boundary still exists: upstream requires
-`mujoco>=3.3,<3.10`, whereas current DimOS requires `mujoco>=3.10`. All new
-probes used the already-isolated MuJoCo 3.9 environment, not a modified DimOS
-installation.
-
-Baseline at `a82725e85`: sim2 plus the three robot-local definitions contains
-**3,275 production lines in 28 files**, excluding five test files and two demos
-(4,300 lines / 35 files including those). The production migration currently
-has **zero changed files**. Do not present the prior 874-line experimental
-bridge, or these new counterexamples, as the completed replacement's size.
-
-Before continuing, choose the input contract: adopt robosuite-authored MJCF
-conventions, including migrating existing assets, or retain lossless general
-MJCF loading. The latter needs native composition or a separately reviewed
-upstream importer correction. Do not silently add a second converter, patch
-the installed dependency, or accept changed physical parameters to make the
-comparison pass. Preserve independent sensor workers, DimOS control ownership,
-scene controls and the provisional SHM motor path in either experiment.
+Use `--robot m20` or `--robot xarm` without `--groot` for motor comparisons;
+add `--scene robocasa-kitchen-1` or `--scene hssd-home` to the G1 command.
+The baseline worktree must remain at the compared implementation for matching
+results. Scripts are headless and use unique SHM names; they do not restart a
+user's blueprint. Each run writes JSON timings and NPZ model/state/RGB-D arrays.

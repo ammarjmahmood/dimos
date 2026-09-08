@@ -16,11 +16,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import math
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+from robosuite.models.objects import MujocoObject
+from robosuite.models.robots.robot_model import RobotModel
 
 from dimos.sim2.sensors.spec import Imu, Mount as Mount, Sensor
 
@@ -72,12 +75,11 @@ class Joint:
 
 @dataclass(frozen=True)
 class RobotConfig:
-    model: Path
+    model: type[RobotModel]
     root_body: str
     control: ControlInterface
     joints: tuple[Joint, ...]
     sensors: tuple[Sensor, ...] = ()
-    meshdir: Path | None = None
     floating: bool = False
     # Root height above a scene's support pose; explicit instances stay absolute.
     spawn_height: float = 0.0
@@ -115,14 +117,26 @@ class RobotInstance:
 
 
 @dataclass(frozen=True)
+class ObjectInstance:
+    model: type[MujocoObject]
+    name: str
+    xyz: tuple[float, float, float]
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class WorldConfig:
     scene: Path
     robots: dict[str, RobotInstance]
     timestep: float = 0.005
     snapshot_hz: float = 60.0
+    objects: tuple[ObjectInstance, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.robots or any(not name or "/" in name for name in self.robots):
             raise ValueError("world requires robots with nonempty, slash-free instance IDs")
         if any(not math.isfinite(v) or v <= 0 for v in (self.timestep, self.snapshot_hz)):
             raise ValueError("world timestep and snapshot rate must be finite and positive")
+        names = [obj.name for obj in self.objects]
+        if len(set(names)) != len(names) or any(not name or name in self.robots for name in names):
+            raise ValueError("object names must be unique, nonempty and distinct from robots")
