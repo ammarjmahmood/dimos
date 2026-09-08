@@ -12,120 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compose native scene and robot MJCFs once, with named device attachments."""
+"""Discover authored scenes and resolve robot placements."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import mujoco
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.scene_types import SceneDescription
-from dimos.sim2.sensors.spec import Camera, Imu, Mount
-from dimos.sim2.spec import RobotConfig, RobotInstance, WorldConfig
+from dimos.sim2.spec import RobotConfig, RobotInstance
 from dimos.utils.data import LfsPath
 
 
 def quaternion(rpy: tuple[float, float, float]) -> NDArray[np.float64]:
     return np.asarray(Rotation.from_euler("xyz", rpy).as_quat(scalar_first=True), dtype=np.float64)
-
-
-def load_scene(config: WorldConfig, description: SceneDescription | None = None) -> mujoco.MjModel:
-    world = mujoco.MjSpec.from_file(str(config.scene))
-    description = description if description is not None else describe_scene(config.scene)
-    for geom in world.geoms:
-        if geom.group in description.hidden_geom_groups:
-            geom.rgba[3] = 0
-    world.option.timestep = config.timestep
-    world.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-    for robot_id, instance in config.robots.items():
-        robot = mujoco.MjSpec.from_file(str(instance.config.model))
-        robot.option.integrator = world.option.integrator
-        if instance.config.meshdir is not None:
-            robot.meshdir = str(instance.config.meshdir)
-        root = robot.body(instance.config.root_body)
-        if root is None:
-            raise ValueError(f"{robot_id}: unknown robot root {instance.config.root_body!r}")
-        # Root placement belongs to the instance, not to the source asset.
-        root.pos = (0.0, 0.0, 0.0)
-        root.quat = (1.0, 0.0, 0.0, 0.0)
-        if not instance.config.floating:
-            root.mocap = True
-        for key in list(robot.keys):
-            robot.delete(key)
-        for sensor in instance.config.sensors:
-            attachment = sensor.camera if isinstance(sensor, Camera) else sensor.site
-            if isinstance(attachment, Mount):
-                body = robot.body(attachment.link)
-                if body is None:
-                    raise ValueError(f"{robot_id}/{sensor.name}: unknown body {attachment.link!r}")
-                if isinstance(sensor, Camera):
-                    body.add_camera(
-                        name=sensor.model_name,
-                        pos=attachment.xyz,
-                        quat=quaternion(attachment.rpy),
-                        fovy=60.0 if sensor.fovy is None else sensor.fovy,
-                    )
-                else:
-                    body.add_site(
-                        name=sensor.model_name,
-                        pos=attachment.xyz,
-                        quat=quaternion(attachment.rpy),
-                        size=(0.001, 0.001, 0.001),
-                        rgba=(0, 0, 0, 0),
-                    )
-            else:
-                target_kind = "camera" if isinstance(sensor, Camera) else "site"
-                target = (
-                    robot.camera(attachment)
-                    if isinstance(sensor, Camera)
-                    else robot.site(attachment)
-                )
-                if target is None:
-                    raise ValueError(
-                        f"{robot_id}/{sensor.name}: unknown {target_kind} {attachment!r}"
-                    )
-            if isinstance(sensor, Imu):
-                for suffix, kind in (
-                    ("gyro", mujoco.mjtSensor.mjSENS_GYRO),
-                    ("accel", mujoco.mjtSensor.mjSENS_ACCELEROMETER),
-                    ("quat", mujoco.mjtSensor.mjSENS_FRAMEQUAT),
-                ):
-                    robot.add_sensor(
-                        name=f"sensor/{sensor.name}/{suffix}",
-                        type=kind,
-                        objtype=mujoco.mjtObj.mjOBJ_SITE,
-                        objname=sensor.model_name,
-                    )
-        frame = world.worldbody.add_frame(pos=instance.xyz, quat=quaternion(instance.rpy))
-        world.attach(robot, prefix=robot_id + "/", frame=frame)
-    world.visual.global_.offwidth = max(
-        [
-            640,
-            *[
-                s.width
-                for r in config.robots.values()
-                for s in r.config.sensors
-                if isinstance(s, Camera)
-            ],
-        ]
-    )
-    world.visual.global_.offheight = max(
-        [
-            480,
-            *[
-                s.height
-                for r in config.robots.values()
-                for s in r.config.sensors
-                if isinstance(s, Camera)
-            ],
-        ]
-    )
-    return world.compile()
 
 
 def scene_path(value: str | None, default: str) -> Path:

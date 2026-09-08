@@ -17,12 +17,19 @@
 import math
 
 from dimos.robot.manipulators.xarm.config import XARM7_SIM_HOME
+from dimos.sim2.models import RobotModel
 from dimos.sim2.sensors.spec import Camera
 from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
 from dimos.utils.data import LfsPath
 
+
+class XArm7Model(RobotModel):
+    def __init__(self, idn: str = "0") -> None:
+        super().__init__(LfsPath("xarm7/xarm7.xml"), idn)
+
+
 XARM7 = RobotConfig(
-    model=LfsPath("xarm7/xarm7.xml"),
+    model=XArm7Model,
     root_body="link_base",
     control=ControlInterface.MANIPULATOR,
     joints=(

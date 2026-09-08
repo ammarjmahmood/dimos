@@ -28,7 +28,12 @@ from dimos.sim2.module import SimulationModule
 from dimos.sim2.sensors.camera.module import SimCameraModule, SimRGBDCameraModule
 from dimos.sim2.sensors.lidar.module import LidarModule
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
-from dimos.sim2.spec import ControlInterface, RobotInstance, WorldConfig
+from dimos.sim2.spec import (
+    ControlInterface,
+    ObjectInstance,
+    RobotInstance,
+    WorldConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -46,10 +51,11 @@ def simulation(
     sim_id: str = "sim",
     viewer: bool = True,
     timestep: float = 0.005,
+    objects: tuple[ObjectInstance, ...] = (),
 ) -> Simulation:
     modules = [
         SimulationModule.blueprint(
-            world=WorldConfig(scene=scene, robots=robots, timestep=timestep),
+            world=WorldConfig(scene=scene, robots=robots, timestep=timestep, objects=objects),
             sim_id=sim_id,
             viewer=viewer,
         )

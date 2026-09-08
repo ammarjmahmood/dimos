@@ -22,14 +22,24 @@ from dimos.robot.unitree.g1.control_config import (
     G1_GROOT_KP,
     g1_joints,
 )
+from dimos.sim2.models import RobotModel
 from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
 from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
 from dimos.utils.data import LfsPath
 
+
+class G1Model(RobotModel):
+    def __init__(self, idn: str = "0") -> None:
+        super().__init__(
+            Path(__file__).parent / "assets" / "g1_29dof.xml",
+            idn,
+            meshdir=LfsPath("g1_urdf/meshes"),
+        )
+
+
 G1_GROOT = RobotConfig(
-    model=Path(__file__).parent / "assets" / "g1_29dof.xml",
-    meshdir=LfsPath("g1_urdf/meshes"),
+    model=G1Model,
     root_body="pelvis",
     floating=True,
     spawn_height=0.793,
