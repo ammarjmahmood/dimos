@@ -126,7 +126,7 @@ class SimulationRuntime:
         try:
             for robot_id, instance in config.robots.items():
                 definition = instance.config
-                robot = self.environment.robots[robot_id]
+                robot = self.environment.robot_by_id[robot_id]
                 servo = robot.composite_controller
                 channel = RobotChannel.create(
                     descriptor(sim_id + "/" + robot_id, definition.control, len(definition.joints))
@@ -175,6 +175,8 @@ class SimulationRuntime:
             binding.channel.set_episode(self.episode)
             binding.enabled = True
             binding.robot.composite_controller.reset()
+        self.environment._obs_cache.clear()
+        self.environment._update_observables(force=True)
         self._publish(force_snapshot=True)
         for binding in self.robots.values():
             binding.channel.set_lifecycle("ready")
@@ -311,7 +313,9 @@ class SimulationRuntime:
         with self.lock:
             if self.paused:
                 return
-            actions = {key: self._command(binding) for key, binding in self.robots.items()}
+            actions = np.concatenate(
+                [self._command(binding).ravel() for binding in self.robots.values()]
+            )
             self.environment.step(actions)
             self.tick += 1
             self._publish()

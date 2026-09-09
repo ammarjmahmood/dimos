@@ -22,6 +22,7 @@ import pytest
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.models import RobotModel
+from dimos.sim2.robot import MotorManipulator, register_robot
 from dimos.sim2.runtime import SimulationRuntime
 from dimos.sim2.scene import describe_scene, load_scene, scene_robot
 from dimos.sim2.scene_types import (
@@ -38,6 +39,7 @@ from dimos.sim2.spec import ControlInterface, Joint, RobotConfig, RobotInstance,
 pytestmark = pytest.mark.mujoco
 
 
+@register_robot(MotorManipulator)
 class SceneTestRobot(RobotModel):
     path = Path()
 

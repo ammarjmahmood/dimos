@@ -38,15 +38,27 @@ class MotorFirmware(CompositeController):  # type: ignore[misc]  # Upstream is u
         definition: RobotConfig = composite_controller_specific_config["definition"]
         self.definition = definition
         model = self.sim.model
-        names = self.robot_model.correct_naming
+        owners = [
+            self.robot_model if j.gripper is None else self.grippers[j.gripper]
+            for j in definition.joints
+        ]
         self.qpos = np.array(
-            [model.get_joint_qpos_addr(names(j.model_name)) for j in definition.joints]
+            [
+                model.get_joint_qpos_addr(owner.correct_naming(j.model_name))
+                for owner, j in zip(owners, definition.joints, strict=True)
+            ]
         )
         self.dofs = np.array(
-            [model.get_joint_qvel_addr(names(j.model_name)) for j in definition.joints]
+            [
+                model.get_joint_qvel_addr(owner.correct_naming(j.model_name))
+                for owner, j in zip(owners, definition.joints, strict=True)
+            ]
         )
         self.actuators = np.array(
-            [model.actuator_name2id(names(j.actuator)) for j in definition.joints]
+            [
+                model.actuator_name2id(owner.correct_naming(j.actuator))
+                for owner, j in zip(owners, definition.joints, strict=True)
+            ]
         )
         self.scale = np.array([j.scale for j in definition.joints])
         self.offset = np.array([j.offset for j in definition.joints])

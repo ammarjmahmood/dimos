@@ -23,7 +23,14 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 import mujoco
+import numpy as np
+from numpy.typing import NDArray
 from robosuite.models.base import MujocoXML
+from robosuite.models.grippers import register_gripper
+from robosuite.models.grippers.gripper_model import GripperModel
+from robosuite.models.robots.manipulators.manipulator_model import (
+    ManipulatorModel as SuiteManipulatorModel,
+)
 from robosuite.models.robots.robot_model import RobotModel as SuiteRobotModel
 
 Defaults = dict[str, dict[str, dict[str, str]]]
@@ -93,12 +100,16 @@ class MJCFInput:
                 visit(child, children)
 
         visit(self.root, "main")
+        self._prepare_xml()
         worldbody = self.root.find("worldbody")
         assert worldbody is not None
         self._authored_geoms = [dict(geom.attrib) for geom in worldbody.iter("geom")]
         for index, geom in enumerate(worldbody.iter("geom")):
             if "name" not in geom.attrib:
                 geom.set("name", f"dimos_geom_{index}")
+
+    def _prepare_xml(self) -> None:
+        """Select robot-local components before upstream naming and indexing."""
 
     def resolve_asset_dependency(self) -> None:
         for asset in self.asset:
@@ -115,14 +126,12 @@ class SceneModel(MJCFInput, MujocoXML):  # type: ignore[misc]  # Upstream is unt
     """An authored world component; no extra robot-control marker bodies."""
 
 
-class RobotModel(MJCFInput, SuiteRobotModel):  # type: ignore[misc]  # Upstream is untyped.
-    """Base for robot-local definitions served by DimOS motor firmware.
+class AuthoredModel(MJCFInput):
+    """Preserve physical parameters and appearance in upstream model classes."""
 
-    Bodies/actuators remain ordinary robosuite model components. DimOS owns
-    policy execution, so the firmware runtime does not require arm/EEF parts.
-    """
-
-    arms: tuple[str, ...] = ()
+    correct_naming: Any
+    worldbody: ET.Element
+    idn: str
 
     def __init__(self, fname: Path, idn: str = "0", *, meshdir: Path | None = None) -> None:
         self.mesh_directory = meshdir
@@ -144,4 +153,142 @@ class RobotModel(MJCFInput, SuiteRobotModel):  # type: ignore[misc]  # Upstream 
         # Upstream's force=False calls add unrequested damping/armature. Native
         # MuJoCo defaults are intentional for this hardware-emulation model.
         if force:
-            super().set_joint_attribute(attrib, values, force=True)
+            super().set_joint_attribute(attrib, values, force=True)  # type: ignore[misc]
+
+
+class ModelParts:
+    """Explicit body-part membership, independent of spelling of motor names."""
+
+    joint_groups: dict[str, tuple[str, ...]] = {}
+    actuator_groups: dict[str, tuple[str, ...]] = {}
+    joints: list[str]
+    actuators: list[str]
+    correct_naming: Any
+    worldbody: ET.Element
+    _elements: dict[str, Any]
+    _joints: list[str]
+    _arms_joints: list[str]
+    _base_joints: list[str]
+    _torso_joints: list[str]
+    _head_joints: list[str]
+    _legs_joints: list[str]
+    _arms_actuators: list[str]
+    _base_actuators: list[str]
+    _torso_actuators: list[str]
+    _head_actuators: list[str]
+    _legs_actuators: list[str]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Serialized free joints belong to world physics, not robot motor metadata.
+        entries = [
+            (name, element)
+            for name, element in zip(self._joints, self._elements.get("joints", []), strict=True)
+            if element.get("type") != "free"
+        ]
+        self._joints = [name for name, _ in entries]
+        self._elements["joints"] = [element for _, element in entries]
+
+    def _partition(self, kind: str, names: list[str], groups: dict[str, tuple[str, ...]]) -> None:
+        assigned = [self.correct_naming(name) for values in groups.values() for name in values]
+        if len(assigned) != len(set(assigned)) or not set(assigned) <= set(names):
+            raise ValueError(f"invalid or overlapping {kind} body-part membership")
+        for part in ("arms", "base", "torso", "head", "legs"):
+            values = [self.correct_naming(name) for name in groups.get(part, ())]
+            if part == "arms" and part not in groups:
+                values = [name for name in names if name not in assigned]
+            setattr(self, f"_{part}_{kind}", values)
+
+    def update_joints(self) -> None:
+        self._partition("joints", self.joints, self.joint_groups)
+
+    def update_actuators(self) -> None:
+        self._partition("actuators", self.actuators, self.actuator_groups)
+
+    def add_null_base(self, base: Any) -> None:
+        super().add_null_base(base)  # type: ignore[misc]
+        # A moving complete robot's base frame follows its root, not world zero.
+        for site in list(self.worldbody.findall("site")):
+            if site.get("name") == base.correct_naming("center"):
+                self.worldbody.remove(site)
+                self._elements["root_body"].append(site)
+
+    @property
+    def init_qpos(self) -> NDArray[np.float64]:
+        return np.zeros(len(self.joints))
+
+
+class RobotModel(ModelParts, AuthoredModel, SuiteRobotModel):  # type: ignore[misc]
+    """An unarmed mechanical assembly using robosuite's ordinary robot lifecycle."""
+
+    arms: tuple[str, ...] = ()
+    default_base = "NullBase"
+    init_base_qpos = None
+    init_torso_qpos = None
+
+    @property
+    def all_joints(self) -> list[str]:
+        return self.joints
+
+    @property
+    def arm_joints(self) -> list[str]:
+        return self._arms_joints
+
+    @property
+    def base_joints(self) -> list[str]:
+        return self._base_joints
+
+    @property
+    def torso_joints(self) -> list[str]:
+        return self._torso_joints
+
+    @property
+    def head_joints(self) -> list[str]:
+        return self._head_joints
+
+    @property
+    def legs_joints(self) -> list[str]:
+        return self._legs_joints
+
+    @property
+    def arm_actuators(self) -> list[str]:
+        return self._arms_actuators
+
+    @property
+    def base_actuators(self) -> list[str]:
+        return self._base_actuators
+
+    @property
+    def torso_actuators(self) -> list[str]:
+        return self._torso_actuators
+
+    @property
+    def head_actuators(self) -> list[str]:
+        return self._head_actuators
+
+    @property
+    def legs_actuators(self) -> list[str]:
+        return self._legs_actuators
+
+
+class ManipulatorModel(ModelParts, AuthoredModel, SuiteManipulatorModel):  # type: ignore[misc]
+    """A robot-local manipulator with standard upstream gripper composition."""
+
+    default_base = "NullBase"
+
+
+@register_gripper
+class EndEffectorFrame(GripperModel):  # type: ignore[misc]
+    """Massless metadata for a robot with no actuated hand, not a grasping device."""
+
+    def __init__(self, idn: str = "0") -> None:
+        super().__init__(str(Path(__file__).parent / "assets/end_effector_frame.xml"), idn=idn)
+
+    @property
+    def init_qpos(self) -> NDArray[np.float64]:
+        return np.zeros(0)
+
+    def format_action(self, action: NDArray[np.float64]) -> NDArray[np.float64]:
+        if np.size(action):
+            raise ValueError("an unactuated end-effector frame accepts no commands")
+        return np.zeros(0)

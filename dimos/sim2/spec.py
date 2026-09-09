@@ -51,6 +51,8 @@ class Joint:
     lower: float = -6.283185307179586
     upper: float = 6.283185307179586
     max_velocity: float = 3.141592653589793
+    # None names a robot joint; an arm name selects its composed gripper model.
+    gripper: str | None = None
 
     def __post_init__(self) -> None:
         if self.scale == 0 or not all(

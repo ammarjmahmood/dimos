@@ -191,5 +191,13 @@ def test_two_robots_have_independent_channels_and_mounts():
         left = world.model.camera("left/wrist_camera").id
         right = world.model.camera("right/wrist_camera").id
         assert world.data.cam_xpos[right] - world.data.cam_xpos[left] == pytest.approx((2, 0, 0))
+        env = world.environment
+        commands = [robot.composite_controller.home.copy() for robot in env.robots]
+        commands[0][0, 0] = 0.2
+        commands[1][0, 0] = -0.2
+        for _ in range(100):
+            env.step(np.concatenate([command.ravel() for command in commands]))
+        assert env.robot_by_id["left"]._joint_positions[0] > 0.1
+        assert env.robot_by_id["right"]._joint_positions[0] < -0.1
     finally:
         world.close()

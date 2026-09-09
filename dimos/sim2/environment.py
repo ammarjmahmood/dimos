@@ -20,26 +20,30 @@ from copy import deepcopy
 from typing import Any
 import xml.etree.ElementTree as ET
 
-import numpy as np
-from numpy.typing import NDArray
-from robosuite.environments.base import MujocoEnv
+from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.tasks import Task
+from robosuite.robots import ROBOT_CLASS_MAPPING
 from robosuite.utils.mjcf_utils import array_to_string
 
 from dimos.sim2.models import SceneModel
-from dimos.sim2.robot import MotorRobot
+from dimos.sim2.robot import MotorRobot, motor_controller_config
 from dimos.sim2.scene import quaternion
 from dimos.sim2.scene_types import SceneDescription, SceneEntity
 from dimos.sim2.sensors.spec import Camera, Imu
 from dimos.sim2.spec import WorldConfig
 
 
-class EmulatorEnvironment(MujocoEnv):  # type: ignore[misc]  # Upstream is untyped.
+class EmulatorEnvironment(ManipulationEnv):  # type: ignore[misc]  # Upstream is untyped.
     def __init__(self, config: WorldConfig, description: SceneDescription) -> None:
         self.config = config
         self.description = description
-        self.robots = {key: MotorRobot(value.config, key) for key, value in config.robots.items()}
         super().__init__(
+            robots=[value.config.model.__name__ for value in config.robots.values()],
+            controller_configs=[
+                motor_controller_config(value.config) for value in config.robots.values()
+            ],
+            base_types="NullBase",
+            use_camera_obs=False,
             has_renderer=False,
             has_offscreen_renderer=False,
             renderer="mujoco",
@@ -49,12 +53,27 @@ class EmulatorEnvironment(MujocoEnv):  # type: ignore[misc]  # Upstream is untyp
             ignore_done=True,
             lite_physics=False,
         )
+        self.deterministic_reset = True
+
+    @property
+    def robot_by_id(self) -> dict[str, MotorRobot]:
+        return dict(zip(self.config.robots, self.robots, strict=True))
+
+    def _load_robots(self) -> None:
+        # Keep public DimOS instance namespaces rather than upstream's numeric IDs.
+        for index, ((robot_id, instance), robot_config) in enumerate(
+            zip(self.config.robots.items(), self.robot_configs, strict=True)
+        ):
+            self.robots[index] = ROBOT_CLASS_MAPPING[instance.config.model.__name__](
+                robot_type=instance.config.model.__name__, idn=robot_id, **robot_config
+            )
+            self.robots[index].load_model()
 
     def _load_model(self) -> None:
+        super()._load_model()
         arena = SceneModel(str(self.config.scene))
         for robot_id, instance in self.config.robots.items():
-            robot = self.robots[robot_id]
-            robot.load_model()
+            robot = self.robot_by_id[robot_id]
             model = robot.robot_model
             root = model.worldbody.find("body")
             if root is None or model.root_body != model.correct_naming(instance.config.root_body):
@@ -111,7 +130,7 @@ class EmulatorEnvironment(MujocoEnv):  # type: ignore[misc]  # Upstream is untyp
                 movable=body.find("joint[@type='free']") is not None,
             )
             objects.append(obj)
-        self.model = Task(arena, [robot.robot_model for robot in self.robots.values()], objects)
+        self.model = Task(arena, [robot.robot_model for robot in self.robots], objects)
         # Task merges model components, not world-level solver/render settings.
         for tag in ("compiler", "option", "visual", "size", "statistic"):
             original = arena.root.find(tag)
@@ -137,15 +156,14 @@ class EmulatorEnvironment(MujocoEnv):  # type: ignore[misc]  # Upstream is untyp
         self.model_timestep = self.config.timestep
         self.control_timestep = self.config.timestep
 
-    def _setup_references(self) -> None:
-        for robot in self.robots.values():
-            robot.reset_sim(self.sim)
-            robot.setup_references()
+    def _setup_observables(self) -> dict[str, Any]:
+        observables: dict[str, Any] = super()._setup_observables()
+        for observable in observables.values():
+            observable.set_sampling_rate(self.config.snapshot_hz)
+        return observables
 
     def _reset_internal(self) -> None:
         super()._reset_internal()
-        for robot in self.robots.values():
-            robot.reset(deterministic=True)
         cameras = [
             s
             for r in self.config.robots.values()
@@ -154,12 +172,6 @@ class EmulatorEnvironment(MujocoEnv):  # type: ignore[misc]  # Upstream is untyp
         ]
         self.sim.model.vis.global_.offwidth = max([640, *[s.width for s in cameras]])
         self.sim.model.vis.global_.offheight = max([480, *[s.height for s in cameras]])
-
-    def _pre_action(
-        self, action: dict[str, NDArray[np.float64]], policy_step: bool = False
-    ) -> None:
-        for key, robot in self.robots.items():
-            robot.control(action[key], policy_step)
 
     def reward(self, action: Any = None) -> float:
         return 0.0
