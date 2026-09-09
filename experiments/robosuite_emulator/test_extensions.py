@@ -29,6 +29,7 @@ from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.blueprint import simulation_blueprint
 from dimos.sim2.control.adapters import ManipulatorAdapter
 from dimos.sim2.module import SimulationModule
+from dimos.sim2.robot import MotorManipulator, register_robot
 from dimos.sim2.runtime import SimulationRuntime
 from dimos.sim2.scene import scene_path
 from dimos.sim2.scene_types import SceneUpdate
@@ -43,7 +44,10 @@ from dimos.sim2.spec import (
 )
 
 
+@register_robot(MotorManipulator)
 class PandaDeviceModel(Panda):
+    default_gripper = {"right": "EndEffectorFrame"}
+
     @property
     def naming_prefix(self):
         return f"{self.idn}/"

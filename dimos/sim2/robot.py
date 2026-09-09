@@ -12,54 +12,92 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""One robosuite runtime class for configured DimOS motor interfaces."""
+"""DimOS motor commands on upstream fixed-base and legged robot lifecycles."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 from robosuite.controllers import composite_controller_factory
-from robosuite.models.robots import create_robot
-from robosuite.robots.robot import Robot
+from robosuite.robots import ROBOT_CLASS_MAPPING
+from robosuite.robots.fixed_base_robot import FixedBaseRobot
+from robosuite.robots.legged_robot import LeggedRobot
 
 from dimos.sim2.control.firmware import MotorFirmware
 from dimos.sim2.spec import RobotConfig
 
 
-class MotorRobot(Robot):  # type: ignore[misc]  # Upstream is untyped.
-    def __init__(self, definition: RobotConfig, robot_id: str) -> None:
-        super().__init__(
-            robot_type=definition.model.__name__,
-            idn=robot_id,
-            composite_controller_config={"type": MotorFirmware.name, "body_parts": {}},
-            base_type=None,
-            gripper_type=None,
-        )
-        self.definition = definition
+def motor_controller_config(definition: RobotConfig) -> dict[str, Any]:
+    return {
+        "type": MotorFirmware.name,
+        "body_parts": {},
+        "composite_controller_specific_configs": {"definition": definition},
+    }
+
+
+class MotorRobot:
+    """Override actuator semantics, not upstream model/hand/observation ownership."""
+
+    sim: Any
+    robot_model: Any
+    composite_controller: MotorFirmware
+    gripper: dict[str, Any]
+    init_qpos: NDArray[np.float64]
+    recent_qpos: Any
+    recent_actions: Any
+    recent_torques: Any
+    _joint_positions: Any
+    _ref_joint_vel_indexes: list[int]
+
+    def __init__(
+        self,
+        robot_type: str,
+        idn: str | int = "0",
+        composite_controller_config: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if (
+            composite_controller_config is None
+            or composite_controller_config["type"] != MotorFirmware.name
+        ):
+            raise ValueError("DimOS motor robots require the DIMOS_MOTORS controller")
+        self.definition: RobotConfig = composite_controller_config[
+            "composite_controller_specific_configs"
+        ]["definition"]
         self.enabled = True
+        super().__init__(  # type: ignore[call-arg]  # Upstream robot mixin.
+            robot_type=robot_type,
+            idn=idn,
+            composite_controller_config=composite_controller_config,
+            **kwargs,
+        )
 
     def load_model(self) -> None:
-        # These robot-local models include their mechanical assembly. The
-        # factory and namespace are upstream; no second robot registry exists.
-        self.robot_model = create_robot(self.name, idn=self.idn)
+        super().load_model()  # type: ignore[misc]
+        joints = {
+            self.robot_model.correct_naming(j.model_name): j.home * j.scale + j.offset
+            for j in self.definition.joints
+            if j.gripper is None
+        }
+        self.init_qpos = np.array([joints[name] for name in self.robot_model.joints])
 
     def setup_references(self) -> None:
+        super().setup_references()  # type: ignore[misc]
         self.root = self.sim.model.body_name2id(self.robot_model.root_body)
-        self._load_controller()
 
     def _load_controller(self) -> None:
         self.composite_controller = composite_controller_factory(
-            MotorFirmware.name, self.sim, self.robot_model, {}
+            MotorFirmware.name, self.sim, self.robot_model, self.gripper
         )
         self.composite_controller.load_controller_config({}, {"definition": self.definition})
 
     def reset(self, deterministic: bool = False, rng: Any = None) -> None:
+        super().reset(deterministic=deterministic, rng=rng)  # type: ignore[misc]
         servo = self.composite_controller
-        servo.reset()
         self.enabled = True
-        self.sim.data.qpos[servo.qpos] = servo.home[:, 0] * servo.scale + servo.offset
         self.sim.data.ctrl[servo.actuators] = np.where(
             servo.position, servo.home[:, 0] * servo.ctrl_scale + servo.ctrl_offset, 0
         )
@@ -69,7 +107,29 @@ class MotorRobot(Robot):  # type: ignore[misc]  # Upstream is untyped.
             self.composite_controller.set_goal(action)
         applied = self.composite_controller.run_controller({"motors": self.enabled})
         self.sim.data.ctrl[self.composite_controller.actuators] = applied["motors"]
+        if policy_step:
+            self.recent_qpos.push(self._joint_positions)
+            self.recent_actions.push(np.asarray(action).ravel())
+            self.recent_torques.push(self.sim.data.qfrc_actuator[self._ref_joint_vel_indexes])
 
     @property
     def action_dim(self) -> int:
         return 5 * len(self.definition.joints)
+
+
+class MotorManipulator(MotorRobot, FixedBaseRobot):  # type: ignore[misc]
+    """Standard fixed-base robot with externally supplied motor commands."""
+
+
+class MotorLegged(MotorRobot, LeggedRobot):  # type: ignore[misc]
+    """Standard legged robot with externally supplied whole-body motor commands."""
+
+
+def register_robot(runtime: type[MotorRobot]) -> Callable[[type[Any]], type[Any]]:
+    """Register a custom model in the existing upstream runtime registry."""
+
+    def register(model: type[Any]) -> type[Any]:
+        ROBOT_CLASS_MAPPING[model.__name__] = runtime
+        return model
+
+    return register

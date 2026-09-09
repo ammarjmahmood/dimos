@@ -22,14 +22,43 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
     G1_GROOT_KP,
     g1_joints,
 )
-from dimos.sim2.models import RobotModel
+from dimos.sim2.models import ManipulatorModel
+from dimos.sim2.robot import MotorLegged, register_robot
 from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
 from dimos.sim2.spec import ControlInterface, Joint, Mount, RobotConfig
 from dimos.utils.data import LfsPath
 
 
-class G1Model(RobotModel):
+@register_robot(MotorLegged)
+class G1Model(ManipulatorModel):
+    arms = ("right", "left")
+    arm_type = "bimanual"
+    _eef_name = {"right": "right_wrist_yaw_link", "left": "left_wrist_yaw_link"}
+    default_gripper = {"right": "EndEffectorFrame", "left": "EndEffectorFrame"}
+    joint_groups = {
+        "arms": tuple(
+            f"{side}_{joint}_joint"
+            for side in ("right", "left")
+            for joint in (
+                "shoulder_pitch",
+                "shoulder_roll",
+                "shoulder_yaw",
+                "elbow",
+                "wrist_roll",
+                "wrist_pitch",
+                "wrist_yaw",
+            )
+        ),
+        "torso": ("waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint"),
+        "legs": tuple(
+            f"{side}_{joint}_joint"
+            for side in ("left", "right")
+            for joint in ("hip_pitch", "hip_roll", "hip_yaw", "knee", "ankle_pitch", "ankle_roll")
+        ),
+    }
+    actuator_groups = joint_groups
+
     def __init__(self, idn: str = "0") -> None:
         super().__init__(
             Path(__file__).parent / "assets" / "g1_29dof.xml",

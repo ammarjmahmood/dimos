@@ -1,0 +1,19 @@
+<mujoco model="end_effector_frame">
+  <worldbody>
+    <body name="frame">
+      <site name="ft_frame" size="0.001" rgba="0 0 0 0" group="5"/>
+      <body name="eef">
+        <site name="grip_site" size="0.001" rgba="0 0 0 0" group="5"/>
+        <site name="grip_site_cylinder" size="0.001" rgba="0 0 0 0" group="5"/>
+        <site name="ee" size="0.001" rgba="0 0 0 0" group="5"/>
+        <site name="ee_x" size="0.001" rgba="0 0 0 0" group="5"/>
+        <site name="ee_y" size="0.001" rgba="0 0 0 0" group="5"/>
+        <site name="ee_z" size="0.001" rgba="0 0 0 0" group="5"/>
+      </body>
+    </body>
+  </worldbody>
+  <sensor>
+    <force name="force_ee" site="ft_frame"/>
+    <torque name="torque_ee" site="ft_frame"/>
+  </sensor>
+</mujoco>
