@@ -116,10 +116,11 @@ def cases_for(scene_file: Path) -> list[EvalCase]:
         slug = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_").lower()
         seen[slug] = seen.get(slug, 0) + 1
         case_id = f"{scene['scene_id']}_{slug}" + (f"_{seen[slug]}" if seen[slug] > 1 else "")
+        inputs = f"{TASK_BRIEF}\n\ngo to the {label} at ({x:.2f}, {y:.2f})"
         out.append(
             EvalCase(
                 id=case_id,
-                inputs=f"{TASK_BRIEF}\n\ngo to the {label} at ({x:.2f}, {y:.2f})",
+                inputs=inputs,
                 environment=HabitatEnvironment(
                     blueprint=BLUEPRINT,
                     scene_id=scene["scene_id"],
@@ -129,7 +130,12 @@ def cases_for(scene_file: Path) -> list[EvalCase]:
                     raw_bridge=True,  # inert unless an agent connects; identical launches per arm
                     raw_topics=("world_state", "cmd_vel", "finished"),
                     record_topics=RECORD_TOPICS,
-                    extra_env={"DEMOOBJECTS__SCENE_JSON": str(objects), **MODULE_ENV},
+                    # The raw bridge gets the instruction too: text-only arms read one world state.
+                    extra_env={
+                        "DEMOOBJECTS__SCENE_JSON": str(objects),
+                        "RAWROBOTBRIDGE__GOAL": inputs,
+                        **MODULE_ENV,
+                    },
                 ),
                 grade=grade_nav((x, y), boxes[c["object_id"]]),
                 timeout_s=TIMEOUT_S,

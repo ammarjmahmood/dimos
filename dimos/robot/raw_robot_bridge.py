@@ -42,7 +42,8 @@ import numpy as np
 from PIL import Image as PILImage
 import zenoh
 
-from dimos.agents.typesafe.world_state import build_world_state
+from dimos.agents.typesafe.agent import TASK
+from dimos.agents.typesafe.world_state import Memory, RobotState, build_world_state
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
@@ -168,6 +169,46 @@ class Deadman:
             return (self.vx, self.vy, self.wz) if time.monotonic() < self.until else (0.0, 0.0, 0.0)
 
 
+def drive_words(vx: float, vy: float, wz: float) -> dict[str, str]:
+    """The held command as the TypeSafe agent's drive labels."""
+    return {
+        "x": "forward" if vx > 0 else "backward" if vx < 0 else "none",
+        "y": "left" if vy > 0 else "right" if vy < 0 else "none",
+        "yaw": "turn_left" if wz > 0 else "turn_right" if wz < 0 else "none",
+    }
+
+
+def world_state_json(
+    goal: str,
+    pose: PoseStamped,
+    *,
+    detections_3d: Detection3DArray | None,
+    lidar: PointCloud2 | None,
+    cmd: tuple[float, float, float],
+    memory: Memory,
+    now: float,
+    lidar_band: tuple[float, float, float],
+) -> str:
+    """The text-only surface: the document the TypeSafe agent reads, from the same builder."""
+    robot: RobotState = {
+        "motion": "driving" if cmd != (0.0, 0.0, 0.0) else "stopped",
+        "last_drive": drive_words(*cmd),
+    }
+    state = build_world_state(
+        goal,
+        pose,
+        task=TASK,
+        detections_3d=detections_3d,
+        detections_2d=None,
+        lidar=lidar,
+        robot=robot,
+        lidar_band=lidar_band,
+        memory=memory,
+        now=now,
+    )
+    return json.dumps(state)
+
+
 class RawRobotBridgeConfig(ModuleConfig):
     endpoint: str = RAW_ENDPOINT
     prefix: str = RAW_TOPIC_PREFIX
@@ -178,6 +219,7 @@ class RawRobotBridgeConfig(ModuleConfig):
     drive_hz: float = RAW_DRIVE_HZ
     topics: tuple[str, ...] = RAW_TOPICS
     world_state_hz: float = RAW_WORLD_STATE_HZ
+    goal: str = ""  # the task text; the world state then names its object first, as the TypeSafe agent's does
     stale_s: float = 2.0  # inputs older than this leave the world state
     lidar_z_min: float = -0.2
     lidar_z_max: float = 0.8
@@ -211,6 +253,7 @@ class RawRobotBridge(Module):
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._latest: dict[str, tuple[float, Any]] = {}
+        self._memory = Memory()
         self._topics = RawTopics(self.config.endpoint, self.config.prefix, listen=True)
         on = set(self.config.topics)
         q = self.config.jpeg_quality
@@ -283,20 +326,21 @@ class RawRobotBridge(Module):
             pose = self._fresh("odom")
             if pose is None:
                 continue
-            state = build_world_state(
-                "",
+            payload = world_state_json(
+                self.config.goal,
                 pose,
                 detections_3d=self._fresh("detections_3d"),
-                detections_2d=None,
                 lidar=self._fresh("lidar"),
-                robot={},
+                cmd=self._deadman.current(),
+                memory=self._memory,
+                now=time.monotonic(),
                 lidar_band=(
                     self.config.lidar_z_min,
                     self.config.lidar_z_max,
                     self.config.lidar_max_range,
                 ),
             )
-            self._put("world_state/json", json.dumps({**state, "goal": None}), pose.ts)
+            self._put("world_state/json", payload, pose.ts)
 
     def _drive(self) -> None:
         """Republish the held velocity until the deadman expires, then one zero."""

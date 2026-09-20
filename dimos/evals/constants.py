@@ -69,11 +69,15 @@ RAW_TOPIC_DOCS: dict[str, str] = {
     "odom": 'robot/odom/json          {{"t","x","y","z","qx","qy","qz","qw"}}: base_link pose in the odom frame',
     "camera_info": 'robot/camera_info/json   {{"width","height","K"}}: intrinsics, republished periodically',
     "world_state": (
-        'robot/world_state/json   JSON a few times per second: "robot" (position, yaw_deg, heading), '
-        '"objects" (label, position, size,\n'
-        '                         distance_m, bearing, bearing_deg; closest first) and "room.sectors" '
-        "(nearest obstacle per 45-degree sector\n"
-        "                         in the robot frame, state blocked/tight/clear). Text is the only sensor."
+        "robot/world_state/json   JSON at 2 Hz, the document a reactive driver reads; everything is relative to the robot,\n"
+        '                         no world coordinates. "task" explains the fields; "goal" is the instruction; "robot" has motion,\n'
+        '                         last_drive and recent (moved_m, turned_deg, target_closer_m, pattern over 8 s); "objects" lists\n'
+        "                         the goal's object first (target true) then nearby floor-level obstacles, each with a bearing word,\n"
+        '                         bearing_deg (left positive), distance_m to its edge and width_m; "way_to_target" says whether the\n'
+        "                         straight line to the target is clear or blocked, by what and how far, and lists open_sides (left,\n"
+        "                         right: an open direction, a corner or a doorway, with bearing, detour_deg and clear_m or range_m,\n"
+        '                         width_m, target_beyond; been_there when already driven); "free_space" is the nearest obstacle in\n'
+        "                         eight directions (clear_m, state clear/tight/blocked, by). Text is the only sensor."
     ),
     "cmd_vel": (
         'robot/cmd_vel/json       publish {{"vx": m/s, "vy": m/s, "wz": rad/s, "t": seconds}}; the robot holds\n'
