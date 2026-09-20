@@ -98,7 +98,9 @@ def grade_nav(
     return grade
 
 
-def cases_for(scene_file: Path) -> list[EvalCase]:
+def cases_for(scene_file: Path, goal_key: str = "end_xy") -> list[EvalCase]:
+    """``goal_key`` names the case field the instruction's coordinates come from: the object's
+    centre (``end_xy``) or the navigable point beside it (``end_nav_xy``, the planner arm)."""
     scene = json.loads(scene_file.read_text())
     objects = scene_file
     if "ground_truth" in scene:
@@ -112,11 +114,12 @@ def cases_for(scene_file: Path) -> list[EvalCase]:
     seen: dict[str, int] = {}
     for c in scene["cases"]:
         x, y = c["end_xy"]
+        gx, gy = c.get(goal_key, c["end_xy"])
         label = c["label"]
         slug = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_").lower()
         seen[slug] = seen.get(slug, 0) + 1
         case_id = f"{scene['scene_id']}_{slug}" + (f"_{seen[slug]}" if seen[slug] > 1 else "")
-        inputs = f"{TASK_BRIEF}\n\ngo to the {label} at ({x:.2f}, {y:.2f})"
+        inputs = f"{TASK_BRIEF}\n\ngo to the {label} at ({gx:.2f}, {gy:.2f})"
         out.append(
             EvalCase(
                 id=case_id,
