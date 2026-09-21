@@ -98,12 +98,13 @@ class HabitatNavEnvironment(HabitatEnvironment):
             raise RuntimeError(f"world state builder fails at the spawn: {e!r}") from e
 
 
-def world_state_check(stats: dict[str, Any]) -> None:
-    """Raise when the bridge never produced a world state: the text-only arms ran blind."""
-    if stats and stats.get("ticks", 0) == 0 and stats.get("errors", 0) > 0:
+def world_state_check(stats: dict[str, Any], min_ticks: int = 1) -> None:
+    """Raise when the bridge produced no world state (a builder fault, or no odometry at all):
+    the text-only arms ran blind and the case is an infrastructure error, not a miss."""
+    if stats and stats.get("ticks", 0) < min_ticks:
         raise RuntimeError(
-            f"no world state was published: {stats['errors']} builder errors, "
-            f"last {stats.get('last_error', '')}"
+            f"no world state was published: {stats.get('ticks', 0)} ticks, "
+            f"{stats.get('errors', 0)} builder errors, last {stats.get('last_error', '')!r}"
         )
 
 

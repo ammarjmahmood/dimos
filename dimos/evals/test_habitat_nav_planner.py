@@ -24,3 +24,7 @@ def test_a_case_with_no_world_state_is_an_error_not_a_miss() -> None:
         world_state_check(
             {"ticks": 0, "errors": 1200, "last_error": "IndexError: list index out of range"}
         )
+    with pytest.raises(RuntimeError, match="0 ticks"):
+        world_state_check(
+            {"ticks": 0, "errors": 0, "last_error": ""}
+        )  # no odometry ever reached the bridge
