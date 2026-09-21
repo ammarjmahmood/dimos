@@ -176,6 +176,14 @@ def test_standing_in_a_doorway_it_is_through_the_way_faced() -> None:
     assert [(o["bearing"], o["target_beyond"]) for o in inside] == [("ahead", False)]
 
 
+def test_a_wall_thinner_than_the_overlap_tolerance_does_not_crash_the_doorway_search() -> None:
+    # A 1 cm thick run of wall owns no span under the 2 cm overlap test; it used to raise IndexError
+    # and take the world-state thread down with it (big run, scenes 102343992, 103997940, 107733912).
+    walls = [("wall", (-5.0, 1.0, 5.0, 1.01)), ("wall", (-3.0, -3.0, -2.8, 1.0))]  # fmt: skip
+    way = way_to_target(walls, (0.0, 3.0, 0.5, 3.5), _pose(0, 0, 90))
+    assert way["state"] in ("clear", "blocked")
+
+
 def test_memory_marks_where_it_has_driven_and_tells_still_early() -> None:
     walls = [("wall", (-5.0, 1.0, -2.0, 1.2)), ("wall", (-1.0, 1.0, 1.0, 1.2)), ("wall", (2.0, 1.0, 6.0, 1.2))]  # fmt: skip
     target, mem = (-0.3, 3.0, 0.3, 3.5), Memory()

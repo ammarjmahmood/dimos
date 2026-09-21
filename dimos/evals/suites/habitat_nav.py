@@ -41,7 +41,10 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
+from typing import Any
 
+from dimos.agents.typesafe.demo_objects import load_scene_objects
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
 from dimos.evals.nav_metrics import (
@@ -53,6 +56,7 @@ from dimos.evals.nav_metrics import (
     write_metrics,
 )
 from dimos.evals.types import EvalCase, Outcome, Suite, recording
+from dimos.robot.raw_robot_bridge import dry_run_world_state
 
 TASK_BRIEF = (
     "You control a mobile robot in a furnished indoor scene. You know the robot's pose and the "
@@ -72,8 +76,41 @@ MODULE_ENV = {
 }
 
 
+STATS_DIR = (
+    Path(tempfile.gettempdir()) / "world_state_stats"
+)  # the bridge's tick counters, per case
+
+
+class HabitatNavEnvironment(HabitatEnvironment):
+    """Habitat plus a dry run of the world-state builder at the spawn before anything launches:
+    a builder that fails there fails the case in a second, not after a blind ten minutes."""
+
+    def preflight(self, agent: Any) -> None:
+        super().preflight(agent)
+        env = self.config.extra_env
+        objects = load_scene_objects(Path(env["DEMOOBJECTS__SCENE_JSON"]))
+        spawn = self.config.start_position_ros_override or (0.0, 0.0, 0.0)
+        try:
+            dry_run_world_state(
+                env["RAWROBOTBRIDGE__GOAL"], spawn, self.config.start_yaw_deg, objects
+            )
+        except Exception as e:
+            raise RuntimeError(f"world state builder fails at the spawn: {e!r}") from e
+
+
+def world_state_check(stats: dict[str, Any]) -> None:
+    """Raise when the bridge never produced a world state: the text-only arms ran blind."""
+    if stats and stats.get("ticks", 0) == 0 and stats.get("errors", 0) > 0:
+        raise RuntimeError(
+            f"no world state was published: {stats['errors']} builder errors, "
+            f"last {stats.get('last_error', '')}"
+        )
+
+
 def grade_nav(
-    end_xy: tuple[float, float], box: tuple[float, float, float, float]
+    end_xy: tuple[float, float],
+    box: tuple[float, float, float, float],
+    stats_path: Path | None = None,
 ) -> Callable[[Outcome], float]:
     def grade(o: Outcome) -> float:
         start = json.loads(o.artifacts["episode"].read_text()).get("task_start_ts", 0.0)
@@ -81,8 +118,13 @@ def grade_nav(
             poses = [p for p in read_poses(store) if p[0] >= start]
             cmds = [c for c in read_cmds(store) if c[0] >= start]
             m = score_navigation(poses, cmds, end_xy, box, declared_at=read_declared(store))
+        stats = json.loads(stats_path.read_text()) if stats_path and stats_path.exists() else {}
         write_metrics(
-            m, o.artifacts["recording"].parent / "nav_metrics.json", end_xy=end_xy, box=box
+            m,
+            o.artifacts["recording"].parent / "nav_metrics.json",
+            end_xy=end_xy,
+            box=box,
+            world_state=stats,
         )
         traced = [s.extra.request for s in o.trajectory.steps if s.extra]
         if traced:  # beside the trajectory too: <run>/<case>/raw/N-request.json
@@ -92,7 +134,9 @@ def grade_nav(
                 end_xy=end_xy,
                 box=box,
                 recording=str(o.artifacts["recording"].parent),
+                world_state=stats,
             )
+        world_state_check(stats)
         return m.score()
 
     return grade
@@ -124,7 +168,7 @@ def cases_for(scene_file: Path, goal_key: str = "end_xy") -> list[EvalCase]:
             EvalCase(
                 id=case_id,
                 inputs=inputs,
-                environment=HabitatEnvironment(
+                environment=HabitatNavEnvironment(
                     blueprint=BLUEPRINT,
                     scene_id=scene["scene_id"],
                     scene_dataset_config=str(DIMOS_PROJECT_ROOT / dataset) if dataset else None,
@@ -137,10 +181,11 @@ def cases_for(scene_file: Path, goal_key: str = "end_xy") -> list[EvalCase]:
                     extra_env={
                         "DEMOOBJECTS__SCENE_JSON": str(objects),
                         "RAWROBOTBRIDGE__GOAL": inputs,
+                        "RAWROBOTBRIDGE__STATS_PATH": str(STATS_DIR / f"{case_id}.json"),
                         **MODULE_ENV,
                     },
                 ),
-                grade=grade_nav((x, y), boxes[c["object_id"]]),
+                grade=grade_nav((x, y), boxes[c["object_id"]], STATS_DIR / f"{case_id}.json"),
                 timeout_s=TIMEOUT_S,
                 threshold=0.5,  # passed == reached
                 tags=frozenset(

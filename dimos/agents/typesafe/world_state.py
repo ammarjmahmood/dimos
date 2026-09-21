@@ -388,6 +388,8 @@ def doorways(
         spans = sorted(
             (w[ax], w[ax + 2]) for w in walls if min(hi, w[3 - ax]) - max(lo, w[1 - ax]) > 0.02
         )
+        if not spans:  # a wall thinner than the overlap tolerance owns no span
+            continue
         runs = [list(spans[0])]
         for a, b_ in spans[1:]:
             if a <= runs[-1][1] + 0.05:

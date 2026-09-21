@@ -172,3 +172,37 @@ def test_world_state_is_the_typesafe_document() -> None:
     assert state["robot"]["motion"] == "driving"
     assert state["robot"]["last_drive"] == {"x": "forward", "y": "none", "yaw": "none"}
     assert drive_words(0.0, -0.2, 0.5) == {"x": "none", "y": "right", "yaw": "turn_left"}
+
+
+def test_world_state_tick_reports_a_builder_fault_instead_of_dying() -> None:
+    from dimos.robot.raw_robot_bridge import world_state_tick
+
+    stats = {"ticks": 0, "errors": 0, "last_error": ""}
+
+    def bad() -> str:
+        raise IndexError("list index out of range")
+
+    payload = json.loads(world_state_tick(bad, stats))
+    assert payload["error"] == "world state unavailable" and "IndexError" in payload["detail"]
+    assert world_state_tick(lambda: '{"ok": 1}', stats) == '{"ok": 1}'
+    assert (stats["ticks"], stats["errors"]) == (1, 1)
+
+
+def test_dry_run_builds_the_first_tick_from_scene_objects() -> None:
+    from dimos.robot.raw_robot_bridge import dry_run_world_state
+
+    objects = [
+        (
+            "wall",
+            (0.0, 3.0, 1.0),
+            (10.0, 0.01, 2.5),
+        ),  # a 1 cm wall used to crash the doorway search
+        ("chair", (4.0, 1.0, 0.4), (0.6, 0.6, 0.8)),
+    ]
+    doc = json.loads(
+        dry_run_world_state("go to the chair at (4.00, 1.00)", (0.0, 0.0, 0.0), 0.0, objects)
+    )
+    assert doc["objects"][0]["label"] == "chair" and doc["way_to_target"]["state"] in (
+        "clear",
+        "blocked",
+    )

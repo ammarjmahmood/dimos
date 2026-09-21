@@ -68,6 +68,23 @@ def load_scene_objects(path: Path, exclude: str = "") -> list[Object]:
     ]
 
 
+def detections_message(objects: list[Object], now: float) -> Detection3DArray:
+    """The objects as one world-frame Detection3DArray, the way the module publishes them."""
+    dets = []
+    for label, center, size in objects:
+        d = Detection3D()
+        d.header = Header(now, "world")
+        d.results = [
+            ObjectHypothesisWithPose(hypothesis=ObjectHypothesis(class_id=label, score=0.95))
+        ]
+        d.results_length = 1
+        d.bbox = BoundingBox3D(center=Pose(position=center), size=Vector3(*size))
+        dets.append(d)
+    return Detection3DArray(
+        detections_length=len(dets), header=Header(now, "world"), detections=dets
+    )
+
+
 class DemoObjects(Module):
     config: DemoObjectsConfig
     detections_3d: Out[Detection3DArray]
@@ -99,20 +116,7 @@ class DemoObjects(Module):
         super().stop()
 
     def _message(self) -> Detection3DArray:
-        now = time.time()
-        dets = []
-        for label, center, size in self._objects:
-            d = Detection3D()
-            d.header = Header(now, "world")
-            d.results = [
-                ObjectHypothesisWithPose(hypothesis=ObjectHypothesis(class_id=label, score=0.95))
-            ]
-            d.results_length = 1
-            d.bbox = BoundingBox3D(center=Pose(position=center), size=Vector3(*size))
-            dets.append(d)
-        return Detection3DArray(
-            detections_length=len(dets), header=Header(now, "world"), detections=dets
-        )
+        return detections_message(self._objects, time.time())
 
     def _publish_loop(self) -> None:
         while not self._stop_event.is_set():

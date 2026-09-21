@@ -30,9 +30,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import functools
 import io
 import json
 import math
+from pathlib import Path
 import threading
 import time
 from typing import Any
@@ -43,6 +45,7 @@ from PIL import Image as PILImage
 import zenoh
 
 from dimos.agents.typesafe.agent import TASK
+from dimos.agents.typesafe.demo_objects import Object, detections_message
 from dimos.agents.typesafe.world_state import Memory, RobotState, build_world_state
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -64,6 +67,9 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 def zenoh_config(endpoint: str, *, listen: bool) -> zenoh.Config:
@@ -224,6 +230,49 @@ class RawRobotBridgeConfig(ModuleConfig):
     lidar_z_min: float = -0.2
     lidar_z_max: float = 0.8
     lidar_max_range: float = 5.0
+    stats_path: str = ""  # world-state tick and error counters as JSON, for the eval grader
+
+
+def world_state_tick(build: Callable[[], str], stats: dict[str, Any]) -> str:
+    """One world-state payload: the built document, or an error document when the builder
+    raises. Counts both; the publishing loop must never die on a bad tick."""
+    try:
+        payload = build()
+    except Exception as e:
+        stats["errors"] += 1
+        stats["last_error"] = f"{type(e).__name__}: {e}"
+        if stats["errors"] in (1, 10, 100) or stats["errors"] % 1000 == 0:
+            logger.exception("world state build failed", errors=stats["errors"])
+        return json.dumps(
+            {
+                "error": "world state unavailable",
+                "detail": stats["last_error"],
+                "errors": stats["errors"],
+            }
+        )
+    stats["ticks"] += 1
+    return payload
+
+
+def dry_run_world_state(
+    goal: str, spawn_xyz: tuple[float, float, float], yaw_deg: float, objects: list[Object]
+) -> str:
+    """Build the world state once, as the bridge would at its first tick, from the scene's
+    objects at the spawn with no scan. Raises whatever the builder raises."""
+    yaw = math.radians(yaw_deg)
+    pose = PoseStamped(
+        position=spawn_xyz, orientation=(0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2)), ts=0.0
+    )
+    return world_state_json(
+        goal,
+        pose,
+        detections_3d=detections_message(objects, 0.0),
+        lidar=None,
+        cmd=(0.0, 0.0, 0.0),
+        memory=Memory(),
+        now=0.0,
+        lidar_band=(0.1, 0.8, 5.0),
+    )
 
 
 class RawRobotBridge(Module):
@@ -254,6 +303,7 @@ class RawRobotBridge(Module):
         self._lock = threading.Lock()
         self._latest: dict[str, tuple[float, Any]] = {}
         self._memory = Memory()
+        self._stats: dict[str, Any] = {"ticks": 0, "errors": 0, "last_error": ""}
         self._topics = RawTopics(self.config.endpoint, self.config.prefix, listen=True)
         on = set(self.config.topics)
         q = self.config.jpeg_quality
@@ -289,7 +339,31 @@ class RawRobotBridge(Module):
             self.cmd_vel.publish(Twist())
             self._topics.close()
             self._topics = None
+            self._write_stats()
+            logger.info("world state", **self._stats)
         super().stop()
+
+    def _build(self, pose: PoseStamped) -> str:
+        return world_state_json(
+            self.config.goal,
+            pose,
+            detections_3d=self._fresh("detections_3d"),
+            lidar=self._fresh("lidar"),
+            cmd=self._deadman.current(),
+            memory=self._memory,
+            now=time.monotonic(),
+            lidar_band=(
+                self.config.lidar_z_min,
+                self.config.lidar_z_max,
+                self.config.lidar_max_range,
+            ),
+        )
+
+    def _write_stats(self) -> None:
+        if self.config.stats_path:
+            path = Path(self.config.stats_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._stats))
 
     def _put(self, key: str, payload: bytes | str, ts: float | None = None) -> None:
         if self._topics is not None:
@@ -322,25 +396,16 @@ class RawRobotBridge(Module):
         return None if item is None or time.monotonic() - item[0] > self.config.stale_s else item[1]
 
     def _world_state(self) -> None:
+        written = 0.0
         while not self._stop.wait(1.0 / self.config.world_state_hz):
             pose = self._fresh("odom")
             if pose is None:
                 continue
-            payload = world_state_json(
-                self.config.goal,
-                pose,
-                detections_3d=self._fresh("detections_3d"),
-                lidar=self._fresh("lidar"),
-                cmd=self._deadman.current(),
-                memory=self._memory,
-                now=time.monotonic(),
-                lidar_band=(
-                    self.config.lidar_z_min,
-                    self.config.lidar_z_max,
-                    self.config.lidar_max_range,
-                ),
-            )
+            payload = world_state_tick(functools.partial(self._build, pose), self._stats)
             self._put("world_state/json", payload, pose.ts)
+            if time.monotonic() - written > 2.0:
+                self._write_stats()
+                written = time.monotonic()
 
     def _drive(self) -> None:
         """Republish the held velocity until the deadman expires, then one zero."""
