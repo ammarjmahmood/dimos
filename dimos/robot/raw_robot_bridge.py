@@ -363,7 +363,9 @@ class RawRobotBridge(Module):
         if self.config.stats_path:
             path = Path(self.config.stats_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._stats))
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._stats))
+            tmp.replace(path)
 
     def _put(self, key: str, payload: bytes | str, ts: float | None = None) -> None:
         if self._topics is not None:
