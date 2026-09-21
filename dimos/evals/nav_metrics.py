@@ -36,9 +36,11 @@ from dimos.evals.constants import (
     NAV_FACING_TOL_DEG,
     NAV_JITTER_M,
     NAV_MIN_CMD_MPS,
+    NAV_RESAMPLE_M,
     NAV_SUCCESS_RADIUS_M,
     NAV_TURN_HYSTERESIS_DEG,
     NAV_WEIGHTS,
+    NAV_WEIGHTS_V2,
 )
 
 if TYPE_CHECKING:
@@ -79,9 +81,43 @@ class NavMetrics:
     turn_reversals_per_m: float
     finished_declared: bool
     declared_at_s: float | None  # seconds after the first pose
+    line_of_sight: bool | None = (
+        None  # from the final pose to the box over the walls; None = no walls given
+    )
+    efficiency: float | None = None  # geodesic / path_length, capped at 1; None without a geodesic
+    turning_rad_per_m: float = 0.0  # integral of |curvature| over the resampled path, per metre
+    reference_turning_rad_per_m: float | None = None
+    smoothness: float | None = (
+        None  # reference turning / run turning, capped at 1; None without a reference
+    )
+    spl: float = (
+        0.0  # success weighted by path length (Anderson et al. 2018), success = clean arrival
+    )
+
+    @property
+    def arrived(self) -> bool:
+        """Reached, and in sight of the object when the walls are known."""
+        return self.reached and self.line_of_sight is not False
 
     def score(self) -> float:
-        """0 unless reached; then arrival plus facing, straightness and bump credit."""
+        """v2: 0 unless arrived; then arrival, facing, efficiency, smoothness and bump credit.
+        Efficiency falls back to straightness without a geodesic; smoothness to full credit
+        without a reference route."""
+        if not self.arrived:
+            return 0.0
+        w = NAV_WEIGHTS_V2
+        efficiency = self.straightness if self.efficiency is None else self.efficiency
+        smoothness = 1.0 if self.smoothness is None else self.smoothness
+        return (
+            w["reached"]
+            + w["facing"] * float(self.facing)
+            + w["efficiency"] * efficiency
+            + w["smoothness"] * smoothness
+            + w["bumps"] * max(0.0, 1.0 - self.bumps / NAV_BUMPS_FOR_ZERO_CREDIT)
+        )
+
+    def score_v1(self) -> float:
+        """The grade before 2026-09-21: 0 unless reached; arrival, facing, straightness, bumps."""
         if not self.reached:
             return 0.0
         w = NAV_WEIGHTS
@@ -111,6 +147,66 @@ def distance_to_box(x: float, y: float, box: Box2D) -> float:
 
 def _wrap(a: float) -> float:
     return math.atan2(math.sin(a), math.cos(a))
+
+
+def resample(
+    xy: Sequence[tuple[float, float]], ds: float = NAV_RESAMPLE_M
+) -> list[tuple[float, float]]:
+    """Points every ``ds`` metres of arc length along the polyline."""
+    if not xy:
+        return []
+    out: list[tuple[float, float]] = [(float(xy[0][0]), float(xy[0][1]))]
+    acc = 0.0
+    for (x0, y0), (x1, y1) in pairwise(xy):
+        seg = math.hypot(x1 - x0, y1 - y0)
+        if seg < NAV_JITTER_M:
+            continue
+        while acc + seg >= ds:
+            f = (ds - acc) / seg
+            x0, y0 = x0 + f * (x1 - x0), y0 + f * (y1 - y0)
+            out.append((x0, y0))
+            seg -= ds - acc
+            acc = 0.0
+        acc += seg
+    return out
+
+
+def turning_per_m(xy: Sequence[tuple[float, float]], ds: float = NAV_RESAMPLE_M) -> float:
+    """Integral of |curvature| per metre: heading change between resampled steps over length."""
+    rs = resample(xy, ds)
+    if len(rs) < 3:
+        return 0.0
+    headings = [math.atan2(b[1] - a[1], b[0] - a[0]) for a, b in pairwise(rs)]
+    return sum(abs(_wrap(b - a)) for a, b in pairwise(headings)) / (ds * (len(rs) - 1))
+
+
+def _segment_hits_box(p: tuple[float, float], q: tuple[float, float], b: Box2D) -> bool:
+    t0, t1 = 0.0, 1.0
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    for pk, qk in ((-dx, p[0] - b[0]), (dx, b[2] - p[0]), (-dy, p[1] - b[1]), (dy, b[3] - p[1])):
+        if pk == 0:
+            if qk < 0:
+                return False
+        else:
+            t = qk / pk
+            if pk < 0:
+                t0 = max(t0, t)
+            else:
+                t1 = min(t1, t)
+            if t0 > t1:
+                return False
+    return True
+
+
+def line_of_sight(p: tuple[float, float], box: Box2D, walls: Sequence[Box2D]) -> bool:
+    """No wall box between ``p`` and the nearest point of ``box`` (stopping 3 cm short of its
+    face, since walls touch the objects they hold)."""
+    q = (min(max(p[0], box[0]), box[2]), min(max(p[1], box[1]), box[3]))
+    d = math.hypot(p[0] - q[0], p[1] - q[1])
+    if d < 1e-6:
+        return True
+    q = (p[0] + (q[0] - p[0]) * (1 - 0.03 / d), p[1] + (q[1] - p[1]) * (1 - 0.03 / d))
+    return not any(_segment_hits_box(p, q, w) for w in walls)
 
 
 def path_length(poses: Sequence[PoseSample], jitter_m: float = NAV_JITTER_M) -> float:
@@ -174,6 +270,9 @@ def score_navigation(
     params: NavParams = NavParams(),
     *,
     declared_at: float | None = None,
+    geodesic_m: float | None = None,
+    reference: Sequence[tuple[float, float]] | None = None,
+    walls: Sequence[Box2D] = (),
 ) -> NavMetrics:
     if not poses:
         raise LookupError("no poses recorded")
@@ -191,8 +290,26 @@ def score_navigation(
     facing_err = math.degrees(abs(_wrap(math.atan2(cy - fy, cx - fx) - fyaw)))
     length = path_length(poses, params.jitter_m)
     reversals, turning = turn_reversals(poses, params.turn_hysteresis_deg)
+    xy = [(x, y) for _, x, y, _ in poses]
+    reached = dist[-1] <= params.success_radius_m
+    sight = line_of_sight((fx, fy), target, walls) if walls else None
+    efficiency = min(1.0, geodesic_m / length) if geodesic_m and length >= params.jitter_m else None
+    run_turn = turning_per_m(xy)
+    ref_turn = turning_per_m([(float(p[0]), float(p[1])) for p in reference]) if reference else None
+    smoothness = (
+        None if ref_turn is None else (1.0 if run_turn <= 1e-9 else min(1.0, ref_turn / run_turn))
+    )
+    arrived = reached and sight is not False
     return NavMetrics(
-        reached=dist[-1] <= params.success_radius_m,
+        line_of_sight=sight,
+        efficiency=efficiency,
+        turning_rad_per_m=run_turn,
+        reference_turning_rad_per_m=ref_turn,
+        smoothness=smoothness,
+        spl=(efficiency if efficiency is not None else min(1.0, dist[0] / length))
+        if arrived and length >= params.jitter_m
+        else 0.0,
+        reached=reached,
         final_distance_m=dist[-1],
         min_distance_m=min(dist),
         time_to_object_s=(entered - t_start) if entered is not None else duration,
@@ -249,4 +366,5 @@ def read_declared(store: Store) -> float | None:
 
 
 def write_metrics(metrics: NavMetrics, path: Path, **extra: Any) -> None:
-    path.write_text(json.dumps({**asdict(metrics), **extra}, indent=2))
+    scores = {"score": metrics.score(), "score_v1": metrics.score_v1()}
+    path.write_text(json.dumps({**asdict(metrics), **scores, **extra}, indent=2))

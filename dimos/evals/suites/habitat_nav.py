@@ -111,13 +111,26 @@ def grade_nav(
     end_xy: tuple[float, float],
     box: tuple[float, float, float, float],
     stats_path: Path | None = None,
+    *,
+    geodesic_m: float | None = None,
+    reference: list[tuple[float, float]] | None = None,
+    walls: list[tuple[float, float, float, float]] | None = None,
 ) -> Callable[[Outcome], float]:
     def grade(o: Outcome) -> float:
         start = json.loads(o.artifacts["episode"].read_text()).get("task_start_ts", 0.0)
         with recording(o) as store:
             poses = [p for p in read_poses(store) if p[0] >= start]
             cmds = [c for c in read_cmds(store) if c[0] >= start]
-            m = score_navigation(poses, cmds, end_xy, box, declared_at=read_declared(store))
+            m = score_navigation(
+                poses,
+                cmds,
+                end_xy,
+                box,
+                declared_at=read_declared(store),
+                geodesic_m=geodesic_m,
+                reference=reference,
+                walls=walls or (),
+            )
         stats = json.loads(stats_path.read_text()) if stats_path and stats_path.exists() else {}
         write_metrics(
             m,
@@ -153,6 +166,7 @@ def cases_for(scene_file: Path, goal_key: str = "end_xy") -> list[EvalCase]:
             return []
     detections = json.loads(objects.read_text())["detections"]
     boxes = {d["id"]: box_of(d["center_xyz"], d["size_xyz"]) for d in detections}
+    walls = [boxes[d["id"]] for d in detections if d["label"] == "wall"]
     dataset = scene.get("scene_dataset_config")
     out = []
     seen: dict[str, int] = {}
@@ -185,7 +199,14 @@ def cases_for(scene_file: Path, goal_key: str = "end_xy") -> list[EvalCase]:
                         **MODULE_ENV,
                     },
                 ),
-                grade=grade_nav((x, y), boxes[c["object_id"]], STATS_DIR / f"{case_id}.json"),
+                grade=grade_nav(
+                    (x, y),
+                    boxes[c["object_id"]],
+                    STATS_DIR / f"{case_id}.json",
+                    geodesic_m=c.get("geodesic_m"),
+                    reference=[(p[0], p[1]) for p in c.get("reference_path") or []] or None,
+                    walls=walls,
+                ),
                 timeout_s=TIMEOUT_S,
                 threshold=0.5,  # passed == reached
                 tags=frozenset(

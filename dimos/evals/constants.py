@@ -107,3 +107,14 @@ NAV_JITTER_M = 0.005
 NAV_TURN_HYSTERESIS_DEG = 5.0
 NAV_BUMPS_FOR_ZERO_CREDIT = 5
 NAV_WEIGHTS: dict[str, float] = {"reached": 0.5, "facing": 0.2, "straightness": 0.15, "bumps": 0.15}
+# v2 (2026-09-21): arrival needs line of sight to the object; the path terms are efficiency
+# (geodesic / driven, the SPL ratio) and smoothness (the reference route's turning per metre over
+# the run's, capped at 1). v1 stays as score_v1 for comparison with earlier runs.
+NAV_WEIGHTS_V2: dict[str, float] = {
+    "reached": 0.4,
+    "facing": 0.1,
+    "efficiency": 0.25,
+    "smoothness": 0.15,
+    "bumps": 0.1,
+}
+NAV_RESAMPLE_M = 0.25  # arc-length step for turning per metre

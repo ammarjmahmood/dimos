@@ -113,3 +113,34 @@ def test_read_recording_streams() -> None:
         assert read_poses(store) == [(10.0, 1.0, 2.0, 0.0)]
         assert read_cmds(store) == [(10.0, 0.3, 0.0, 0.0)]
         assert read_declared(store) == 12.0
+
+
+def test_score_v2_rewards_the_geodesic_route_and_penalises_wandering() -> None:
+    poses = _straight(80)  # 4 m along +x, ends beside the box facing it
+    cmds = [(t, 0.5, 0.0, 0.0) for t, *_ in poses]
+    m = score_navigation(poses, cmds, END, BOX, geodesic_m=4.0, reference=[(0.0, 0.0), (4.0, 0.0)])
+    assert (
+        m.arrived
+        and m.efficiency == pytest.approx(1.0)
+        and m.smoothness == 1.0
+        and m.spl == pytest.approx(1.0)
+    )
+    assert m.score() == pytest.approx(1.0) and m.score_v1() == pytest.approx(1.0)
+    # The same arrival after a 4 m detour out and back: half the efficiency, the turns cost smoothness.
+    detour = [(i * 0.1, 0.0, i * 0.05, 0.0) for i in range(41)]  # 2 m up
+    detour += [(4.1 + i * 0.1, 0.0, 2.0 - i * 0.05, 0.0) for i in range(41)]  # and back
+    detour += [(8.2 + i * 0.1, i * 0.05, 0.0, 0.0) for i in range(81)]  # then the route
+    w = score_navigation(detour, cmds, END, BOX, geodesic_m=4.0, reference=[(0.0, 0.0), (4.0, 0.0)])
+    assert w.arrived and w.efficiency == pytest.approx(0.5, abs=0.02) and w.smoothness < 0.5
+    assert w.score() < m.score() - 0.15 and w.score_v1() > w.score()  # v1 barely noticed
+
+
+def test_score_v2_needs_line_of_sight_to_the_object() -> None:
+    poses = _straight(80)
+    cmds = [(t, 0.5, 0.0, 0.0) for t, *_ in poses]
+    wall = (4.4, -2.0, 4.5, 2.0)  # between the end point and the box
+    m = score_navigation(poses, cmds, END, BOX, geodesic_m=4.0, walls=[wall])
+    assert m.reached and m.line_of_sight is False and not m.arrived
+    assert m.score() == 0.0 and m.spl == 0.0 and m.score_v1() > 0.5
+    clear = score_navigation(poses, cmds, END, BOX, geodesic_m=4.0, walls=[(0.0, 3.0, 8.0, 3.2)])
+    assert clear.line_of_sight is True and clear.arrived
