@@ -16,6 +16,13 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 WORKDIR /app
 COPY . .
 RUN uv sync --no-dev
+# The no-dimOS agents' ROBOT.md says `pip install eclipse-zenoh`: true for the system Python too, and a
+# forgotten zenoh session must not hang a script until the tool-call cap (see zenoh_exit_hook.py).
+RUN uv pip install --python "$(readlink -f /usr/bin/python3)" --break-system-packages pip eclipse-zenoh \
+    && rm -f /usr/lib/python3*/EXTERNALLY-MANAGED && ln -sf "$(readlink -f /usr/bin/python3)" /usr/local/bin/python \
+    && printf '#!/bin/sh\nexec python3 -m pip "$@"\n' > /usr/local/bin/pip && chmod +x /usr/local/bin/pip \
+    && for py in python3 /app/.venv/bin/python; do d=$($py -c "import site; print(site.getsitepackages()[0])"); \
+       cp docker/eval/zenoh_exit_hook.py $d/ && echo "import zenoh_exit_hook" > $d/zenoh_exit_hook.pth; done
 # Habitat native: the same install.sh the host uses, micromamba already on PATH.
 RUN cd dimos/simulation/habitat/nix && ./install.sh
 # DimSim's Deno and Chromium at build time, not first run.
