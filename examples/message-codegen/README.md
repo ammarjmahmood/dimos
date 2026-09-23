@@ -1206,3 +1206,12 @@ PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/mess
 
 The demo saves `build/message-codegen/demo/evidence/mcp-observe.jpg`. It invokes
 MCP request handling directly and needs no model credentials or robot.
+
+Check keyboard commands and immediate key-release stopping without a display:
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_keyboard_cdr.py
+```
+
+Synthetic pygame events drive the real handlers; subscribers verify generated
+CDR velocity and gripper values. No hardware commands are sent.

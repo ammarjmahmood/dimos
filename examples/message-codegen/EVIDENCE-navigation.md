@@ -334,3 +334,19 @@ observe/server/image-boundary tests passed, including timeout and client-history
 conversion. Mypy passed for all three changed production files. Missing FastAPI
 and langchain-openai dependencies were installed locally at repository lockfile
 versions; manifests were unchanged.
+
+### Keyboard teleoperation outputs
+
+KeyboardTeleopModule now publishes generated TwistStamped and Float32 messages.
+Velocity commands have explicit ROS headers and nested twists. Tests decode the
+published CDR values before checking motion and key-release behavior.
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_keyboard_cdr.py
+```
+
+Observed: releasing W while holding A retained left velocity `0.05 m/s`; releasing
+A then produced all-zero velocity. Gripper bracket events produced `1.0`, then
+`0.0`, after CDR round trips. Synthetic pygame events require no window or robot.
+All eight keyboard tests and production-file mypy passed. Pygame 2.6.1 was
+installed locally at the lockfile version after the first run exposed its absence.
