@@ -1215,3 +1215,12 @@ PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/mess
 
 Synthetic pygame events drive the real handlers; subscribers verify generated
 CDR velocity and gripper values. No hardware commands are sent.
+
+Inspect the hosted operator's PNG map and compact odometry payload:
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_hosted_map.py
+```
+
+This writes `build/message-codegen/demo/evidence/hosted-map.png` from CDR inputs
+through local callbacks, with no hosted connection or robot.

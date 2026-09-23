@@ -350,3 +350,22 @@ A then produced all-zero velocity. Gripper bracket events produced `1.0`, then
 `0.0`, after CDR round trips. Synthetic pygame events require no window or robot.
 All eight keyboard tests and production-file mypy passed. Pygame 2.6.1 was
 installed locally at the lockfile version after the first run exposed its absence.
+
+### Hosted operator map compression
+
+MapCompressModule consumes generated OccupancyGrid and PoseStamped, using shared
+occupancy views, block reduction, quaternion angles, and ROS-time conversion.
+Malformed grid layout is caught inside the callback so a later valid map still
+publishes. The existing browser PNG/JSON payload contract is retained.
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_hosted_map.py
+```
+
+Observed: `build/message-codegen/demo/evidence/hosted-map.png` contains the expected
+64×64 occupancy palette, inspected directly, and generated odometry produces
+operator coordinates `(3.2, 3.2)` with yaw `1.0`. Callbacks run locally; no hosted
+network/browser acceptance is claimed. Nine tests and production-file mypy passed.
+Tests include palette, coarsening obstacle preservation, throttling, malformed and
+empty maps, oversized payload rejection, and invalid quaternion rejection. Test
+fixtures now construct and clean up real modules instead of skipping Module init.
