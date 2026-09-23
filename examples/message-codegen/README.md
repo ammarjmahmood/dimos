@@ -1197,3 +1197,12 @@ PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/mess
 
 The demo tags generated odometry and verifies that a retrieved CDR goal preserves
 position and orientation, with memory and navigation RPCs stubbed.
+
+Observe a synthetic camera over LCM/CDR and inspect its MCP image response:
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_mcp_observe.py
+```
+
+The demo saves `build/message-codegen/demo/evidence/mcp-observe.jpg`. It invokes
+MCP request handling directly and needs no model credentials or robot.

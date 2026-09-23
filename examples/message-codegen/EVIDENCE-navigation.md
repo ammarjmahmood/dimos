@@ -314,3 +314,23 @@ Memory and navigation RPCs were stubbed; no inference or robot motion occurred.
 Two focused tests passed for the tagged orientation round trip and semantic-map
 goal construction/rejection. Production mypy passed. Existing agent integration
 test message annotations were converted; those inference tests were not run.
+
+### Generated camera observation through MCP
+
+ObserveSkill consumes generated Image. MCP serializes that value explicitly as a
+base64 JPEG `image` content block with `mimeType`; the agent client converts it
+into an image URL content block when appending model history. Generated values
+need no agent-specific methods.
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_mcp_observe.py
+```
+
+Observed: a camera frame delivered over real LCM/CDR through ObserveSkill became
+`build/message-codegen/demo/evidence/mcp-observe.jpg`, a 160×120 red-left,
+green-right image inspected directly. MCP request handling was called directly;
+no HTTP MCP transport or external model inference is claimed. Eleven focused
+observe/server/image-boundary tests passed, including timeout and client-history
+conversion. Mypy passed for all three changed production files. Missing FastAPI
+and langchain-openai dependencies were installed locally at repository lockfile
+versions; manifests were unchanged.
