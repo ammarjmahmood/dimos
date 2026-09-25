@@ -31,35 +31,13 @@ skills. Graders read the simulator's object state, not the agent's reply.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from dimos.evals.environments.r1pro_scene import R1ProScene
-from dimos.evals.suites.lib.r1pro_tasks import Layout, Task, curriculum, grader
-from dimos.evals.types import EvalCase, Suite
+from dimos.evals.suites.lib.r1pro_tasks import curriculum, eval_case, load_layouts
+from dimos.evals.types import Suite
 
 LAYOUTS = Path(__file__).with_name("r1pro_open_space.json")
 
-
-def case(layout: Layout, task: Task, *, headless: bool = True) -> EvalCase:
-    return EvalCase(
-        id=task.id,
-        inputs=task.instruction,
-        environment=R1ProScene(
-            seed=layout.seed,
-            expected_objects=layout.expected_objects(),
-            reference_plan=list(task.plan),
-            headless=headless,
-        ),
-        grade=grader(task),
-        timeout_s=task.timeout_s,
-        threshold=1.0,
-        tags=frozenset({"r1pro", "mujoco", "manipulation", f"seed{layout.seed}", *task.tags}),
-    )
-
-
-def layouts() -> list[Layout]:
-    return [Layout.from_json(d) for d in json.loads(LAYOUTS.read_text())["layouts"]]
-
-
-SUITE: Suite = [case(layout, task) for layout in layouts() for task in curriculum(layout)]
+SUITE: Suite = [
+    eval_case(layout, task) for layout in load_layouts(LAYOUTS) for task in curriculum(layout)
+]

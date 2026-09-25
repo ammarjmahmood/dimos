@@ -18,14 +18,20 @@ from typing import Any
 
 import pytest
 
+from dimos.evals.suites import r1pro_apartment, r1pro_open_space
 from dimos.evals.suites.lib.r1pro_tasks import (
     Layout,
     full_task,
     grade_samples,
+    load_layouts,
     roles,
+    sim_speed,
     tray_task,
 )
-from dimos.evals.suites.r1pro_open_space import SUITE, layouts
+
+
+def layouts() -> list[Layout]:
+    return load_layouts(r1pro_open_space.LAYOUTS)
 
 
 @pytest.fixture
@@ -93,12 +99,23 @@ class World:
 
 
 def test_every_seed_has_the_full_curriculum() -> None:
-    assert len(SUITE) == 6 * len(layouts())
-    assert len({case.id for case in SUITE}) == len(SUITE)
+    suite = r1pro_open_space.SUITE
+    assert len(suite) == 6 * len(layouts())
+    assert len({case.id for case in suite}) == len(suite)
     for layout in layouts():
         r = roles(layout)
         assert len({r["Y"], r["Z"], r["W"]}) == 3 and layout.tray_platform not in r.values()
         assert r["D"] in ("low_bench", "display_table")
+
+
+def test_apartment_tasks_leave_the_tray_on_the_worktable() -> None:
+    suite = r1pro_apartment.SUITE
+    assert suite and all(case.id.startswith("apt_") for case in suite)
+    for layout in load_layouts(r1pro_apartment.LAYOUTS):
+        task = full_task(layout)
+        assert task.id.endswith("full_tray_loading")
+        assert not any(step["tool"] in ("pick_up_tray", "put_down_tray") for step in task.plan)
+        assert task.instruction.endswith("put them in it.")
 
 
 def test_full_task_done_as_asked_scores_one(layout: Layout) -> None:
@@ -164,3 +181,13 @@ def test_an_object_on_no_support_is_reported_dropped(layout: Layout) -> None:
     world.snap()
     grade = grade_samples(full_task(layout), world.samples)
     assert grade.details["dropped"] == [layout.objects[0].id]
+
+
+def test_sim_speed_reports_the_slowest_stretch() -> None:
+    samples = [{"t": float(t), "sim_time": float(t)} for t in range(0, 21)]
+    # From t=20 to t=40 physics advances only 6 s: 0.3x real time.
+    samples += [{"t": 20.0 + t, "sim_time": 20.0 + 0.3 * t} for t in range(1, 21)]
+    speed = sim_speed(samples)
+    assert speed["slowest"] == 0.3
+    assert speed["mean"] == round(26.0 / 40.0, 2)
+    assert sim_speed([{"t": 0.0, "sim_time": None}]) == {"mean": None, "slowest": None}

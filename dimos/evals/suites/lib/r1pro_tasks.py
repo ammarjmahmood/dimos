@@ -32,13 +32,19 @@ import math
 from pathlib import Path
 from typing import Any
 
-from dimos.evals.types import Grade, Outcome
+from dimos.evals.environments.r1pro_scene import R1ProScene
+from dimos.evals.types import EvalCase, Grade, Outcome
 
 Sample = dict[str, Any]  # one get_scene reply, plus the wall time ``t`` it was read
 ARMS = ("left", "right")
 # The carried tray clears only platforms below about 80 cm.
 TRAY_PLATFORMS = ("worktable", "low_bench", "display_table")
 NEAR_PLATFORM_M = 1.4  # base centre to platform centre after go_to docks beside it
+# The blueprint and simulator class of each scene, as dimos run knows them.
+SCENES = {
+    "open_space": ("r1pro-classical-open-space-sim", "R1ProOpenSpaceSim"),
+    "apartment": ("r1pro-classical-apartment-sim", "R1ProClassicalSim"),
+}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -69,6 +75,7 @@ class Layout:
     objects: tuple[SceneObject, ...]
     platforms: tuple[Platform, ...]
     tray_platform: str = "worktable"
+    scene: str = "open_space"  # or "apartment"
 
     def on(self, platform: str) -> SceneObject:
         return next(o for o in self.objects if o.platform == platform)
@@ -90,6 +97,7 @@ class Layout:
                 for p in data["platforms"]
             ),
             tray_platform=data.get("tray_platform", "worktable"),
+            scene=data.get("scene", "open_space"),
         )
 
 
@@ -229,8 +237,34 @@ def grade_samples(task: Task, samples: Sequence[Sample]) -> Grade:
         "dropped": _dropped(last),
         "samples": len(samples),
         "duration_s": round(float(last["t"]) - t0, 1),
+        "sim_speed": sim_speed(samples),
     }
     return Grade(score=passed / total if total else 0.0, details=details)
+
+
+def sim_speed(samples: Sequence[Sample], window_s: float = 20.0) -> dict[str, float | None]:
+    """Simulated seconds per wall second: over the run, and in its slowest ``window_s``.
+
+    The controllers run on wall time, so a slow stretch (0.3 means physics ran
+    at 30% of real time) can fail docking or tracking checks that pass at 1.0.
+    """
+    timed = [
+        (float(s["t"]), float(s["sim_time"])) for s in samples if s.get("sim_time") is not None
+    ]
+    if len(timed) < 2 or timed[-1][0] <= timed[0][0]:
+        return {"mean": None, "slowest": None}
+    mean = (timed[-1][1] - timed[0][1]) / (timed[-1][0] - timed[0][0])
+    slowest: float | None = None
+    j = 0
+    for i, (wall, sim) in enumerate(timed):
+        j = max(j, i + 1)
+        while j < len(timed) and timed[j][0] - wall < window_s:
+            j += 1
+        if j == len(timed):
+            break
+        rate = (timed[j][1] - sim) / (timed[j][0] - wall)
+        slowest = rate if slowest is None else min(slowest, rate)
+    return {"mean": round(mean, 2), "slowest": None if slowest is None else round(slowest, 2)}
 
 
 def grader(task: Task) -> Callable[[Outcome], Grade]:
@@ -264,11 +298,16 @@ def _step(tool: str, **arguments: str) -> dict[str, Any]:
     return {"tool": tool, "arguments": arguments}
 
 
+def say(platform: str) -> str:
+    """A platform as a person names it: "low bench", "kitchen counter"."""
+    return {"kitchen": "kitchen counter"}.get(platform, platform.replace("_", " "))
+
+
 def go_to_task(layout: Layout, platform: str) -> Task:
     target = layout.platform(platform)
     return Task(
         id=f"s{layout.seed}_go_to_{platform}",
-        instruction=f"Go to the {platform.replace('_', ' ')}.",
+        instruction=f"Go to the {say(platform)}.",
         plan=(_step("go_to", destination=platform),),
         milestones=(base_near(target),),
         final=(base_near(target),),
@@ -280,7 +319,7 @@ def go_to_task(layout: Layout, platform: str) -> Task:
 def pick_task(layout: Layout, platform: str, arm: str) -> Task:
     """Go to a platform and pick its object with one named hand; hold it."""
     obj = layout.on(platform)
-    where = platform.replace("_", " ")
+    where = say(platform)
     return Task(
         id=f"s{layout.seed}_pick_{obj.kind}_{arm}",
         instruction=f"Go to the {where} and pick up the {obj.name} with your {arm} hand.",
@@ -301,8 +340,8 @@ def move_task(layout: Layout, source: str, destination: str) -> Task:
     return Task(
         id=f"s{layout.seed}_move_{obj.kind}_to_{destination}",
         instruction=(
-            f"Take the {obj.name} from the {source.replace('_', ' ')} "
-            f"to the {destination.replace('_', ' ')} and put it down there."
+            f"Take the {obj.name} from the {say(source)} "
+            f"to the {say(destination)} and put it down there."
         ),
         plan=(
             _step("go_to", destination=source),
@@ -323,8 +362,8 @@ def occupied_hand_task(layout: Layout, first: str, second: str) -> Task:
     return Task(
         id=f"s{layout.seed}_occupied_right_hand",
         instruction=(
-            f"Pick up the {a.name} on the {first.replace('_', ' ')} with your right hand "
-            f"and bring it to the {second.replace('_', ' ')}. Then pick up the {b.name} "
+            f"Pick up the {a.name} on the {say(first)} with your right hand "
+            f"and bring it to the {say(second)}. Then pick up the {b.name} "
             "there with your right hand."
         ),
         plan=(
@@ -341,14 +380,31 @@ def occupied_hand_task(layout: Layout, first: str, second: str) -> Task:
     )
 
 
-def tray_task(layout: Layout, destination: str) -> Task:
-    """Put the worktable's object in the tray, then carry the tray to another platform."""
+def tray_task(layout: Layout, destination: str | None) -> Task:
+    """Put the tray table's object in the tray, then carry the tray to ``destination``.
+
+    With no destination (the apartment, where the tray fits only on the
+    worktable) the tray stays where it is.
+    """
     obj = layout.on(layout.tray_platform)
+    if destination is None:
+        return Task(
+            id=f"s{layout.seed}_{obj.kind}_into_tray",
+            instruction=f"Put the {obj.name} into the tray.",
+            plan=(
+                _step("pick_object", object=obj.id, arm="auto"),
+                _step("place_object", region="tray", arm="auto"),
+            ),
+            milestones=(held(obj), in_tray(obj)),
+            final=(in_tray(obj), tray_on(layout.tray_platform), hands_free()),
+            timeout_s=1200.0,
+            tags=frozenset({"pick", "place", "tray"}),
+        )
     return Task(
         id=f"s{layout.seed}_tray_to_{destination}",
         instruction=(
             f"Put the {obj.name} into the tray, then carry the tray to the "
-            f"{destination.replace('_', ' ')} and put it down there."
+            f"{say(destination)} and put it down there."
         ),
         plan=(
             _step("pick_object", object=obj.id, arm="auto"),
@@ -363,12 +419,17 @@ def tray_task(layout: Layout, destination: str) -> Task:
     )
 
 
-def roles(layout: Layout) -> dict[str, str]:
-    """Which platform plays which part in the long task, fixed by the seed.
+def roles(layout: Layout) -> dict[str, str | None]:
+    """Which platform plays which part in the long task.
 
     Y gives the left-hand object, Z the right-hand one, W is where the hands
-    swap, D is where the tray ends up (only platforms the carried tray clears).
+    swap, D is where the tray ends up (only platforms the carried tray clears;
+    None in the apartment, where the tray fits only on the worktable). In the
+    open space the seed rotates the parts over the four platforms without the
+    tray; the apartment loops dining table, kitchen, worktable.
     """
+    if layout.scene == "apartment":
+        return {"Y": "dining_table", "Z": "kitchen", "W": layout.tray_platform, "D": None}
     others = sorted(p.name for p in layout.platforms if p.name != layout.tray_platform)
     order = [others[(layout.seed + i) % len(others)] for i in range(len(others))]
     y, z, w = order[:3]
@@ -383,49 +444,46 @@ def full_task(layout: Layout) -> Task:
     never says to put that item down: the agent has to work it out.
     """
     r = roles(layout)
-    a, b, c = layout.on(r["Y"]), layout.on(r["Z"]), layout.on(r["W"])
-
-    def say(p: str) -> str:
-        return p.replace("_", " ")
+    y, z, w, d = str(r["Y"]), str(r["Z"]), str(r["W"]), r["D"]
+    a, b, c = layout.on(y), layout.on(z), layout.on(w)
 
     instruction = (
-        f"Go to the {say(r['Y'])} and pick up the {a.name} with your left hand. "
-        f"Then go to the {say(r['Z'])} and pick up the {b.name} with your right hand. "
-        f"Then go to the {say(r['W'])} and put down what is in your left hand there. "
+        f"Go to the {say(y)} and pick up the {a.name} with your left hand. "
+        f"Then go to the {say(z)} and pick up the {b.name} with your right hand. "
+        f"Then go to the {say(w)} and put down what is in your left hand there. "
         f"Pick up the {c.name} with your right hand, then pick up the {b.name} again "
-        "with your left hand. Bring both items to the tray and put them in it, then "
-        f"carry the tray to the {say(r['D'])} and put it down there."
+        "with your left hand. Bring both items to the tray and put them in it"
+        + (f", then carry the tray to the {say(d)} and put it down there." if d else ".")
     )
     plan = (
-        _step("go_to", destination=r["Y"]),
+        _step("go_to", destination=y),
         _step("pick_object", object=a.id, arm="left"),
-        _step("go_to", destination=r["Z"]),
+        _step("go_to", destination=z),
         _step("pick_object", object=b.id, arm="right"),
-        _step("go_to", destination=r["W"]),
-        _step("place_object", region=r["W"], arm="left"),
-        _step("place_object", region=r["W"], arm="right"),
+        _step("go_to", destination=w),
+        _step("place_object", region=w, arm="left"),
+        _step("place_object", region=w, arm="right"),
         _step("pick_object", object=c.id, arm="right"),
         _step("pick_object", object=b.id, arm="left"),
         _step("place_object", region="tray", arm="right"),
         _step("place_object", region="tray", arm="left"),
-        _step("pick_up_tray"),
-        _step("put_down_tray", region=r["D"]),
+        *((_step("pick_up_tray"), _step("put_down_tray", region=d)) if d else ()),
     )
+    tray_at = d or layout.tray_platform
     milestones = (
         held(a, "left"),
         held(b, "right"),
-        resting_on(a, r["W"]),
+        resting_on(a, w),
         released(b),
         held(c, "right"),
         held(b, "left"),
         in_tray(b, c, at_least=1),
         in_tray(b, c),
-        tray_held(),
-        tray_on(r["D"]),
+        *((tray_held(), tray_on(d)) if d else ()),
     )
-    final = (tray_on(r["D"]), in_tray(b, c), resting_on(a, r["W"]), hands_free())
+    final = (tray_on(tray_at), in_tray(b, c), resting_on(a, w), hands_free())
     return Task(
-        id=f"s{layout.seed}_full_tray_delivery",
+        id=f"s{layout.seed}_full_" + ("tray_delivery" if d else "tray_loading"),
         instruction=instruction,
         plan=plan,
         milestones=milestones,
@@ -438,11 +496,38 @@ def full_task(layout: Layout) -> Task:
 def curriculum(layout: Layout) -> list[Task]:
     """From one skill to the whole job, so a failure shows which piece broke."""
     r = roles(layout)
+    y, z, w = str(r["Y"]), str(r["Z"]), str(r["W"])
     return [
-        go_to_task(layout, r["Y"]),
-        pick_task(layout, r["Y"], "left"),
-        move_task(layout, r["Z"], r["W"]),
-        occupied_hand_task(layout, r["Z"], r["W"]),
+        go_to_task(layout, z if layout.scene == "apartment" else y),
+        pick_task(layout, y, "left"),
+        move_task(layout, z, w),
+        occupied_hand_task(layout, z, w),
         tray_task(layout, r["D"]),
         full_task(layout),
     ]
+
+
+def load_layouts(path: Path) -> list[Layout]:
+    return [Layout.from_json(d) for d in json.loads(path.read_text())["layouts"]]
+
+
+def eval_case(layout: Layout, task: Task, *, headless: bool = True) -> EvalCase:
+    """The task as a case in its seeded scene; apartment case IDs start with ``apt_``."""
+    blueprint, sim_module = SCENES[layout.scene]
+    return EvalCase(
+        id=("apt_" if layout.scene == "apartment" else "") + task.id,
+        inputs=task.instruction,
+        environment=R1ProScene(
+            blueprint=[blueprint],
+            sim_module=sim_module,
+            seed=layout.seed,
+            expected_objects=layout.expected_objects(),
+            reference_plan=list(task.plan),
+            headless=headless,
+        ),
+        grade=grader(task),
+        timeout_s=task.timeout_s,
+        tags=frozenset(
+            {"r1pro", "mujoco", "manipulation", layout.scene, f"seed{layout.seed}", *task.tags}
+        ),
+    )

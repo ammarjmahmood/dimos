@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Write the open-space layouts the R1 Pro suite's cases are phrased against.
+"""Write the layouts the R1 Pro suites' cases are phrased against.
 
-Building a scene takes about a second per seed and needs MuJoCo, so the suite
-reads this file instead of building scenes at import. Rerun it after changing
-the scene generator; the environment refuses a case whose seed drifted.
+Building a scene takes one (open space) to twelve (apartment) seconds per seed
+and needs MuJoCo, so the suites read these files instead of building scenes at
+import. Rerun after changing a scene generator; the environment refuses a case
+whose seed drifted.
 
     python -m dimos.evals.suites.lib.r1pro_layouts 5000 5001 5002
+    python -m dimos.evals.suites.lib.r1pro_layouts --scene apartment 5000 5001 5002
 """
 
 from __future__ import annotations
@@ -29,19 +31,33 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
+from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.robot.galaxea.r1pro.apartment_scene import distribute_apartment_objects
 from dimos.robot.galaxea.r1pro.classical_selection import color_name
 from dimos.robot.galaxea.r1pro.everyday_objects import sample_everyday_layout
 from dimos.robot.galaxea.r1pro.open_space_scene import OPEN_PLATFORMS, prepare_open_space_scene
-from dimos.robot.galaxea.r1pro.primitive_scene import bilateral_layout
+from dimos.robot.galaxea.r1pro.primitive_scene import bilateral_layout, prepare_primitive_scene
 
-OUTPUT = Path(__file__).parents[1] / "r1pro_open_space.json"
+OUTPUTS = {
+    "open_space": Path(__file__).parents[1] / "r1pro_open_space.json",
+    "apartment": Path(__file__).parents[1] / "r1pro_apartment.json",
+}
+# The house R1ProApartmentSim loads by default.
+APARTMENT_PACKAGE = DIMOS_PROJECT_ROOT / "dimos/data/scene_packages/hssd_102344115"
 
 
-def layout(seed: int) -> dict[str, Any]:
+def layout(seed: int, scene: str = "open_space") -> dict[str, Any]:
     """The objects of one seed as the sim builds it, with the default launch options."""
     sampled = bilateral_layout(sample_everyday_layout(seed, occupied=0))
     with tempfile.TemporaryDirectory() as folder:
-        _, placed, regions = prepare_open_space_scene(Path(folder) / "scene.xml", sampled)
+        path = Path(folder) / "scene.xml"
+        if scene == "apartment":
+            built, placed = prepare_primitive_scene(
+                path, sampled, "right", scene_package=APARTMENT_PACKAGE
+            )
+            placed, regions = distribute_apartment_objects(built, placed)
+        else:
+            _, placed, regions = prepare_open_space_scene(path, sampled)
     objects = []
     for i, obj in enumerate(placed.objects):
         # Platforms stand metres apart, so the nearest region centre is the support.
@@ -58,24 +74,37 @@ def layout(seed: int) -> dict[str, Any]:
                 "platform": platform,
             }
         )
+    platforms = (
+        [
+            {
+                "name": name,
+                "xy": [float(r.center[0]), float(r.center[1])],
+                "height_m": float(r.center[2]),
+            }
+            for name, r in regions.items()
+        ]
+        if scene == "apartment"
+        else [{"name": p.name, "xy": list(p.xy), "height_m": p.height} for p in OPEN_PLATFORMS]
+    )
     return {
         "seed": seed,
+        "scene": scene,
         "tray_platform": "worktable",
         "objects": objects,
-        "platforms": [
-            {"name": p.name, "xy": list(p.xy), "height_m": p.height} for p in OPEN_PLATFORMS
-        ],
+        "platforms": platforms,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("seeds", nargs="+", type=int)
-    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--scene", choices=sorted(OUTPUTS), default="open_space")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    data = {"scene": "open_space", "layouts": [layout(seed) for seed in args.seeds]}
-    args.output.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"wrote {len(args.seeds)} layouts to {args.output}")
+    output = args.output or OUTPUTS[args.scene]
+    data = {"scene": args.scene, "layouts": [layout(seed, args.scene) for seed in args.seeds]}
+    output.write_text(json.dumps(data, indent=2) + "\n")
+    print(f"wrote {len(args.seeds)} layouts to {output}")
 
 
 if __name__ == "__main__":
