@@ -512,6 +512,7 @@ dimos evals run dimos.evals.suites.r1pro_open_space --agent dimos.evals.agents.m
 dimos evals compare --latest 2
 ```
 
+Cases run headless; set `R1PRO_EVAL_VIEWER=1` to watch them in the MuJoCo window.
 Every launch serves MCP on the same port, so `R1ProScene` refuses to start
 while another dimos answers there; otherwise the case would drive that robot.
 

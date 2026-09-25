@@ -29,6 +29,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,8 @@ ARMS = ("left", "right")
 # The carried tray clears only platforms below about 80 cm.
 TRAY_PLATFORMS = ("worktable", "low_bench", "display_table")
 NEAR_PLATFORM_M = 1.4  # base centre to platform centre after go_to docks beside it
+# Set to 1 to watch cases in the MuJoCo window instead of running headless.
+VIEWER_ENV = "R1PRO_EVAL_VIEWER"
 # The blueprint and simulator class of each scene, as dimos run knows them.
 SCENES = {
     "open_space": ("r1pro-classical-open-space-sim", "R1ProOpenSpaceSim"),
@@ -511,9 +514,14 @@ def load_layouts(path: Path) -> list[Layout]:
     return [Layout.from_json(d) for d in json.loads(path.read_text())["layouts"]]
 
 
-def eval_case(layout: Layout, task: Task, *, headless: bool = True) -> EvalCase:
-    """The task as a case in its seeded scene; apartment case IDs start with ``apt_``."""
+def eval_case(layout: Layout, task: Task, *, headless: bool | None = None) -> EvalCase:
+    """The task as a case in its seeded scene; apartment case IDs start with ``apt_``.
+
+    ``headless`` None opens the MuJoCo window only when ``R1PRO_EVAL_VIEWER=1``.
+    """
     blueprint, sim_module = SCENES[layout.scene]
+    if headless is None:
+        headless = os.environ.get(VIEWER_ENV) != "1"
     return EvalCase(
         id=("apt_" if layout.scene == "apartment" else "") + task.id,
         inputs=task.instruction,
