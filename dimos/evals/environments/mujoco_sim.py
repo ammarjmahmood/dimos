@@ -40,6 +40,9 @@ logger = setup_logger()
 class MujocoEnvironmentConfig(SimConfig):
     # Run the simulator without its viewer window.
     headless: bool = True
+    # Class name of the blueprint's MujocoSimModule (or subclass) that the
+    # ``<CLASS>__FIELD`` launch overrides below are addressed to.
+    sim_module: str = "MujocoSimModule"
     # Free bodies whose world pose MujocoSimModule publishes on ``tf``, so graders
     # read ground-truth object positions from the recording.
     tracked_bodies: tuple[str, ...] = ()
@@ -75,11 +78,10 @@ class MujocoEnvironment(Sim):
             )
         proc.simulator = "mujoco"
         proc.extra_env.update(self.config.module_env)
-        proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] = json.dumps(self.config.headless)
+        sim = self.config.sim_module.upper()
+        proc.extra_env[f"{sim}__HEADLESS"] = json.dumps(self.config.headless)
         if self.config.tracked_bodies:
-            proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"] = json.dumps(
-                list(self.config.tracked_bodies)
-            )
+            proc.extra_env[f"{sim}__TRACKED_BODIES"] = json.dumps(list(self.config.tracked_bodies))
 
     def prepare_recording(self, recording: Store, path: Path, deadline: float) -> dict[str, Path]:
         self.wait_ready(recording, deadline=deadline)
