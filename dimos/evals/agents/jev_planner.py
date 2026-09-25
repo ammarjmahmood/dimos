@@ -253,8 +253,8 @@ def next_actions(
     options: dict[str, tuple[str, dict[str, Any], str]] = {}
     if tray["held"]:
         for p in (p for p in TRAY_PLATFORMS if p in surfaces):
-            options[f"go_to {p}"] = ("go_to", {"destination": p}, f"carry the tray to the {say[p]}")
-            options[f"put_down_tray {p}"] = (
+            options[f"go_to_{p}"] = ("go_to", {"destination": p}, f"carry the tray to the {say[p]}")
+            options[f"put_down_tray_on_{p}"] = (
                 "put_down_tray",
                 {"region": p},
                 f"set the tray down on the {say[p]}, freeing both hands",
@@ -262,7 +262,7 @@ def next_actions(
     else:
         for p in surfaces:
             if p != here:
-                options[f"go_to {p}"] = (
+                options[f"go_to_{p}"] = (
                     "go_to",
                     {"destination": p},
                     f"drive to the {say[p]}, keeping whatever the hands hold",
@@ -274,20 +274,20 @@ def next_actions(
             if held.get(arm):
                 item = _name(rows[held[arm]])
                 for p in surfaces:
-                    options[f"place {arm} {p}"] = (
+                    options[f"place_{arm}_on_{p}"] = (
                         "place_object",
                         {"region": p, "arm": arm},
                         f"put the {item} from the {arm} hand down on the {say[p]}",
                     )
                 if tray["station"] is not None:
-                    options[f"place {arm} tray"] = (
+                    options[f"place_{arm}_in_tray"] = (
                         "place_object",
                         {"region": "tray", "arm": arm},
                         f"put the {item} from the {arm} hand into the tray",
                     )
             else:
                 for row in loose:
-                    options[f"pick {row['id']} {arm}"] = (
+                    options[f"pick_{row['id']}_with_{arm}"] = (
                         "pick_object",
                         {"object": row["id"], "arm": arm},
                         f"pick up the {_name(row)} ({'in the tray' if row.get('inside') else 'on the ' + str(row['on'])}) "

@@ -59,11 +59,11 @@ def _scene(
 
 def test_a_full_hand_can_place_but_not_pick() -> None:
     options = next_actions(_scene(left="object_1"), SURFACES)
-    assert "place left low_bench" in options and "place left tray" in options
-    assert not any(key.startswith("pick ") and key.endswith(" left") for key in options)
-    assert "pick object_2 right" in options and "pick object_1 right" not in options
+    assert "place_left_on_low_bench" in options and "place_left_in_tray" in options
+    assert not any(key.startswith("pick_") and key.endswith("_with_left") for key in options)
+    assert "pick_object_2_with_right" in options and "pick_object_1_with_right" not in options
     assert "pick_up_tray" not in options  # a hand is full
-    assert "go_to worktable" not in options  # already here
+    assert "go_to_worktable" not in options  # already here
     assert options["finished"][0] == ""
 
 
@@ -71,10 +71,10 @@ def test_holding_the_tray_offers_only_tray_moves() -> None:
     options = next_actions(_scene(tray_held=True), SURFACES)
     # tall_table is too high for the carried tray; display_table is not in this scene.
     assert set(options) == {
-        "go_to worktable",
-        "go_to low_bench",
-        "put_down_tray worktable",
-        "put_down_tray low_bench",
+        "go_to_worktable",
+        "go_to_low_bench",
+        "put_down_tray_on_worktable",
+        "put_down_tray_on_low_bench",
         "finished",
     }
 
@@ -110,7 +110,7 @@ def test_run_asks_runs_and_stops_at_finished(
 ) -> None:
     monkeypatch.setenv(jev_planner.API_KEY_ENV, "test-key")
     scene = _scene()
-    replies = iter(["go_to low_bench", "finished"])
+    replies = iter(["go_to_low_bench", "finished"])
     asked: list[dict[str, Any]] = []
 
     def call_json(mcp: Any, tool: str, arguments: Any = None) -> dict[str, Any]:
@@ -142,6 +142,6 @@ def test_run_asks_runs_and_stops_at_finished(
     assert trajectory.extra.ended_by == "answer"
     assert [s.tool_calls[0].function_name for s in trajectory.steps if s.tool_calls] == ["go_to"]
     assert trajectory.final_metrics.total_prompt_tokens == 200
-    assert asked[1]["state"]["done_so_far"] == ["go_to low_bench: completed"]
-    assert "go_to low_bench" in asked[0]["questions"]["next_action"]["criteria"]
+    assert asked[1]["state"]["done_so_far"] == ["go_to_low_bench: completed"]
+    assert "go_to_low_bench" in asked[0]["questions"]["next_action"]["criteria"]
     assert json.loads((tmp_path / "raw" / "001-request.json").read_text())["body"] == asked[0]
