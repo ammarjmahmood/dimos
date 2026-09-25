@@ -123,7 +123,12 @@ def run(
     case_ids: list[str] = typer.Option(
         [], "--case", help="Run only this case ID; repeat for several, in suite order"
     ),
+    repeat: int = typer.Option(
+        1, min=1, help="Run every case N times, round by round; IDs get .r1 ... .rN"
+    ),
 ) -> None:
+    from dataclasses import replace
+
     from dimos.evals.runner import EvalRunner, summarize
 
     cases = importlib.import_module(suite).SUITE
@@ -132,6 +137,9 @@ def run(
         if unknown:
             raise typer.BadParameter(f"not in {suite}: {', '.join(unknown)}", param_hint="--case")
         cases = [c for c in cases if c.id in case_ids]
+    if repeat > 1:
+        # Whole rounds, so a slow drift over the session spreads over every case.
+        cases = [replace(c, id=f"{c.id}.r{k}") for k in range(1, repeat + 1) for c in cases]
     kwargs = agent_kwargs(set_)
     if allow is not None:
         if "allowed_tools" in kwargs:

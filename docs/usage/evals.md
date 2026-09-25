@@ -520,6 +520,10 @@ while another dimos answers there; otherwise the case would drive that robot.
 - **CLI**: `dimos evals run <dotted.suite> --agent <agent-module> [--set model=gpt-4o] [--tags nav] [--limit 5] [--case <id> ...]`
 - **Compare**: `dimos evals compare <run-dir> ... [--latest N]` prints one
   column per run and one row per case (pass/fail, score, milestones reached).
+- **Repeats**: `--repeat N` runs every case N times, round by round, with IDs
+  ending `.r1` to `.rN`; `compare` folds them into one row (`3/5 pass · 0.72`).
+  Use it wherever runs are not deterministic, such as grasps sampled by a
+  diffusion model or controllers running on wall time.
 - **Python**: `EvalRunner().run(SUITE, agent, tags=frozenset({"encoding"}))`
 - **pytest**: suites are importable lists. Use
   `@pytest.mark.parametrize("case", SUITE)` and assert on `passed`

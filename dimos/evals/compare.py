@@ -15,7 +15,9 @@
 """Put eval runs side by side: one column per run, one row per case.
 
 A cell reads ``PASS 1.00 10/10``: pass or fail, the score, and milestones
-reached out of total when the grader reported them.
+reached out of total when the grader reported them. Repeats of one case
+(``--repeat`` IDs ending ``.r1``, ``.r2`` ...) share a row that reads
+``3/5 pass · 0.72``: passes out of runs, and the mean score.
 """
 
 from __future__ import annotations
@@ -24,10 +26,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 # Agent options worth showing in a column title; the rest stay in manifest.json.
 LABEL_KWARGS = ("model", "provider", "modules", "thinking")
+_REPEAT = re.compile(r"\.r\d+$")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -78,15 +82,34 @@ def cell(result: dict[str, Any] | None) -> str:
     return f"{'PASS' if result['passed'] else 'fail'} {result['score']:.2f}{reached}"
 
 
+def repeats_cell(results: Sequence[dict[str, Any]]) -> str:
+    """Several runs of one case: passes out of runs, and the mean score."""
+    if not results:
+        return "-"
+    if len(results) == 1:
+        return cell(results[0])
+    passed = sum(bool(r["passed"]) and not r.get("error") for r in results)
+    mean = sum(float(r["score"]) for r in results) / len(results)
+    return f"{passed}/{len(results)} pass · {mean:.2f}"
+
+
 def table(runs: Sequence[Run]) -> str:
     """A markdown table of every case any run has, then per-run totals."""
-    cases = list(dict.fromkeys(case for run in runs for case in run.results))
+
+    def grouped(run: Run) -> dict[str, list[dict[str, Any]]]:
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for case_id, result in run.results.items():
+            groups.setdefault(_REPEAT.sub("", case_id), []).append(result)
+        return groups
+
+    groups = [grouped(run) for run in runs]
+    cases = list(dict.fromkeys(case for group in groups for case in group))
     lines = [
         "| case | " + " | ".join(run.label for run in runs) + " |",
         "|---|" + "---|" * len(runs),
     ]
     lines += [
-        f"| {case} | " + " | ".join(cell(run.results.get(case)) for run in runs) + " |"
+        f"| {case} | " + " | ".join(repeats_cell(group.get(case, [])) for group in groups) + " |"
         for case in cases
     ]
 
