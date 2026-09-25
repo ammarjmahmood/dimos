@@ -21,6 +21,7 @@ from collections.abc import Iterable
 import importlib
 import inspect
 import json
+from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -119,10 +120,18 @@ def run(
     ),
     tags: str = typer.Option("", help="Comma-separated tag filter"),
     limit: int = typer.Option(0, min=0, help="Run at most N cases"),
+    case_ids: list[str] = typer.Option(
+        [], "--case", help="Run only this case ID; repeat for several, in suite order"
+    ),
 ) -> None:
     from dimos.evals.runner import EvalRunner, summarize
 
     cases = importlib.import_module(suite).SUITE
+    if case_ids:
+        unknown = sorted(set(case_ids) - {c.id for c in cases})
+        if unknown:
+            raise typer.BadParameter(f"not in {suite}: {', '.join(unknown)}", param_hint="--case")
+        cases = [c for c in cases if c.id in case_ids]
     kwargs = agent_kwargs(set_)
     if allow is not None:
         if "allowed_tools" in kwargs:
@@ -153,6 +162,21 @@ def run(
         f"\n{s.n} cases | mean {s.mean_score:.2f} | pass {s.pass_rate:.0%} "
         f"| errors {s.errors} | {s.duration_s:.0f}s | {runner.run_dir}"
     )
+
+
+@app.command("compare")
+def compare(
+    runs: list[Path] = typer.Argument(None, help="Run directories, in column order"),
+    latest: int = typer.Option(0, min=0, help="Add the N newest runs from the default directory"),
+) -> None:
+    """Show several runs side by side, one column per run and one row per case."""
+    from dimos.evals.compare import latest_runs, load_run, table
+    from dimos.evals.runner import EvalRunnerConfig
+
+    paths = [*(runs or []), *(latest_runs(EvalRunnerConfig().out_dir, latest) if latest else [])]
+    if not paths:
+        raise typer.BadParameter("Name run directories or use --latest N")
+    typer.echo(table([load_run(path) for path in paths]))
 
 
 @app.command("list")

@@ -66,6 +66,7 @@ from dimos.evals.suites.dimsim_pointcloud_mapping import N_ROOMS, ROOMS, grade_r
 from dimos.evals.types import (
     EvalCase,
     EvalResult,
+    Grade,
     Metrics,
     Observation,
     ObservationResult,
@@ -696,6 +697,23 @@ def test_count_rooms_grader_scores_reply_and_coverage(tmp_path: Path) -> None:
     every = written(tmp_path / "every.db", rooms)
     assert score(every, str(N_ROOMS)) == 1.0
     assert score(written(tmp_path / "still.db", [(50.0, 50.0)]), str(N_ROOMS)) == 0.5
+
+
+def test_runner_saves_grade_details(tmp_path: Path) -> None:
+    env = FakeEnvironment(tmp_path / "recording.db", [])
+    (tmp_path / "recording.db").touch()
+    case = EvalCase(
+        id="c",
+        inputs="x",
+        environment=env,
+        grade=lambda o: Grade(score=0.5, details={"reached": ["first"]}),
+        threshold=0.5,
+    )
+    runner = EvalRunner(out_dir=tmp_path)
+    result = runner.run([case], FakeAgent(answer="ok"))[0]
+    assert result.passed and result.details == {"reached": ["first"]}
+    saved = json.loads((runner.run_dir / "results.jsonl").read_text())
+    assert saved["details"] == {"reached": ["first"]}
 
 
 def test_suites_and_agents_importable() -> None:

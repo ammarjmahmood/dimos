@@ -38,6 +38,7 @@ from dimos.evals.constants import DENIED
 from dimos.evals.types import (
     EvalCase,
     EvalResult,
+    Grade,
     Outcome,
     Suite,
     Trajectory,
@@ -196,9 +197,13 @@ class EvalRunner(Configurable):
                     agent_duration_s=agent_duration_s,
                     error=f"missing artifacts: {missing}",
                 )
-            score = case.grade(Outcome(trajectory=trajectory, artifacts=env.artifacts))
-            return self._result(
-                case, t0, trajectory, agent_duration_s=agent_duration_s, score=score
+            graded = case.grade(Outcome(trajectory=trajectory, artifacts=env.artifacts))
+            grade = graded if isinstance(graded, Grade) else Grade(score=float(graded))
+            return replace(
+                self._result(
+                    case, t0, trajectory, agent_duration_s=agent_duration_s, score=grade.score
+                ),
+                details=grade.details,
             )
         except Exception as e:
             return self._result(
