@@ -848,6 +848,16 @@ class MujocoEngine(SimulationEngine):
             self._stop_event.set()
 
     def _sim_loop(self) -> None:
+        # Worker processes send stderr to /dev/null, so an unhandled exception here
+        # would kill the physics thread without a trace. Log it where operators look.
+        try:
+            self._run_sim_loop()
+        except Exception:
+            logger.exception("sim loop crashed", cls=self.__class__.__name__)
+            with self._lock:
+                self._connected = False
+
+    def _run_sim_loop(self) -> None:
         logger.info("sim loop started", cls=self.__class__.__name__)
         cam_renderers: dict[str, _CameraRendererState] = {}
         try:
