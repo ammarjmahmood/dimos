@@ -16,7 +16,12 @@
 
 from __future__ import annotations
 
+import atexit
+from collections.abc import Sequence
+from contextlib import ExitStack
+from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import threading
 import time
@@ -26,8 +31,9 @@ from pydantic import Field
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter
 from dimos.evals.environments.lib.launch import default_mcp_url
-from dimos.evals.environments.lib.r1pro_actions import action_running, call_json
+from dimos.evals.environments.lib.r1pro_actions import WAIT_S, action_running, call_json, run_action
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment, MujocoEnvironmentConfig
+from dimos.evals.types import RunningEnvironment
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -35,6 +41,34 @@ if TYPE_CHECKING:
     from dimos.memory.store.base import Store
 
 logger = setup_logger()
+# After reset_scene, objects and the base must be back within these of their start.
+RESET_POSITION_M = 0.01
+RESET_YAW_RAD = 0.02
+
+
+@dataclass
+class _LiveSim:
+    """A simulator kept running between cases with the same launch."""
+
+    key: tuple[Any, ...]  # everything the launch depends on
+    resources: ExitStack  # stops the dimos process and closes its recording
+    recording: Store
+    path: Path  # the recording's memory.db
+    start: dict[str, Any]  # get_scene right after launch: what a reset must restore
+
+
+# One simulator at a time: every launch serves MCP on the same port.
+_live: _LiveSim | None = None
+
+
+def _stop_live() -> None:
+    global _live
+    live, _live = _live, None
+    if live is not None:
+        live.resources.close()
+
+
+atexit.register(_stop_live)
 
 
 class R1ProSceneConfig(MujocoEnvironmentConfig):
@@ -56,6 +90,11 @@ class R1ProSceneConfig(MujocoEnvironmentConfig):
     # scene_truth.jsonl, so the recording is only for replaying what happened.
     record_topics: str = "odom,color_image,camera_info"
     launch_timeout_s: float = 1800.0
+    # Keep the simulator running for the next case with the same launch (seed,
+    # blueprint, agent modules) and reset_scene between them instead of
+    # relaunching. A reset that does not bring every object, the tray and the
+    # base back to where they started falls back to a fresh launch.
+    reuse: bool = True
 
 
 class R1ProScene(MujocoEnvironment):
@@ -72,6 +111,7 @@ class R1ProScene(MujocoEnvironment):
         super().__init__(**kwargs)
         self._mcp: McpAdapter | None = None
         self._truth: Path | None = None
+        self._start: dict[str, Any] | None = None
         self._write_lock = threading.Lock()
         self._stop_sampling = threading.Event()
         self._sampler: threading.Thread | None = None
@@ -85,11 +125,48 @@ class R1ProScene(MujocoEnvironment):
         proc.extra_env[f"{self.config.sim_module.upper()}__SEED"] = str(self.config.seed)
         proc.global_args += ["--record-topics", self.config.record_topics]
 
+    def start(self, modules: Sequence[str]) -> RunningEnvironment:
+        global _live
+        reusable = self.config.reuse and not self.config.attach and not self.config.raw_bridge
+        key = (
+            tuple(self.config.blueprint),
+            tuple(modules),
+            tuple(self.config.disable),
+            self.config.sim_module,
+            self.config.seed,
+            self.config.headless,
+            self.config.record_topics,
+            tuple(sorted(self.config.module_env.items())),
+        )
+        live = _live
+        if reusable and live is not None and live.key == key and self._reset(live):
+            self._recording = live.recording
+            deadline = time.monotonic() + self.config.launch_timeout_s
+            artifacts = {"recording": live.path}
+            artifacts.update(self.prepare_recording(live.recording, live.path, deadline))
+            return RunningEnvironment(mcp_url=default_mcp_url(), streams=(), artifacts=artifacts)
+        _stop_live()
+        running = super().start(modules)
+        if reusable:
+            assert self._recording is not None and self._start is not None
+            # Take the process and the recording out of this case's cleanup.
+            _live = _LiveSim(
+                key=key,
+                resources=self._resources.pop_all(),
+                recording=self._recording,
+                path=Path(running.artifacts["recording"]),
+                start=self._start,
+            )
+        return running
+
     def prepare_recording(self, recording: Store, path: Path, deadline: float) -> dict[str, Path]:
         self._mcp = McpAdapter(default_mcp_url())
         scene = self._wait_scene(deadline)
         self._check_layout(scene)
-        folder = path.parent
+        self._start = scene
+        # A reused simulator serves several cases: each gets its own folder.
+        folder = path.parent / f"case-{time.time_ns()}"
+        folder.mkdir()
         plan = folder / "reference_plan.json"
         plan.write_text(json.dumps(self.config.reference_plan, indent=2))
         episode = folder / "r1pro_episode.json"
@@ -136,6 +213,34 @@ class R1ProScene(MujocoEnvironment):
             self._sampler = None
         self._mcp = None
         super().stop()
+
+    def _reset(self, live: _LiveSim) -> bool:
+        """reset_scene on the running simulator; False when it did not come back to its start."""
+        mcp = McpAdapter(default_mcp_url())
+        try:
+            if not mcp.wait_for_ready(timeout=2.0):
+                return self._reset_failed("the simulator stopped answering")
+            if action_running(call_json(mcp, "get_scene")):
+                # The previous agent left a skill moving: stop it before resetting.
+                call_json(mcp, "stop_action")
+                for _ in range(6):
+                    if call_json(mcp, "wait_for_action", {"seconds": WAIT_S})["state"] != "running":
+                        break
+            status = run_action(mcp, "reset_scene", {}, timeout_s=120.0)
+            if not status.get("success"):
+                return self._reset_failed(
+                    f"reset_scene {status.get('state')}: {status.get('error')}"
+                )
+            scene = call_json(mcp, "get_scene")
+            self._check_layout(scene)
+        except Exception as e:
+            return self._reset_failed(str(e))
+        moved = reset_differences(live.start, scene)
+        return self._reset_failed("; ".join(moved)) if moved else True
+
+    def _reset_failed(self, reason: str) -> bool:
+        logger.warning("R1 Pro reset not trusted; launching a fresh simulator", reason=reason)
+        return False
 
     def _wait_scene(self, deadline: float) -> dict[str, Any]:
         assert self._mcp is not None
@@ -200,3 +305,26 @@ class R1ProScene(MujocoEnvironment):
         }
         with self._write_lock, self._truth.open("a") as stream:
             stream.write(json.dumps(line) + "\n")
+
+
+def reset_differences(start: dict[str, Any], scene: dict[str, Any]) -> list[str]:
+    """What a reset left different from the scene right after launch; empty when nothing."""
+    wrong: list[str] = []
+    if scene.get("error"):
+        wrong.append(f"simulator error: {scene['error']}")
+    if any(scene["held_objects"].values()) or scene["tray"]["held"]:
+        wrong.append("a hand still holds something")
+    if scene["tray"]["station"] != start["tray"]["station"]:
+        wrong.append(f"tray on {scene['tray']['station']}, started on {start['tray']['station']}")
+    before = {row["id"]: row["position"] for row in start["objects"]}
+    for row in scene["objects"]:
+        if math.dist(row["position"], before.get(row["id"], [math.inf] * 3)) > RESET_POSITION_M:
+            wrong.append(f"{row['id']} not back at its start")
+    x0, y0, yaw0 = start["base_pose"][:3]
+    x, y, yaw = scene["base_pose"][:3]
+    if (
+        math.hypot(x - x0, y - y0) > RESET_POSITION_M
+        or abs(math.remainder(yaw - yaw0, math.tau)) > RESET_YAW_RAD
+    ):
+        wrong.append("base not back at its start")
+    return wrong

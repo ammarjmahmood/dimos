@@ -776,8 +776,12 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
     trace_dir.mkdir(parents=True)
 
     repointed: list[str] = []
+    cleared: list[bool] = []
     app = SimpleNamespace(
-        McpClient=SimpleNamespace(set_trace_dir=repointed.append), stop=lambda: None
+        McpClient=SimpleNamespace(
+            set_trace_dir=repointed.append, clear_history=lambda: cleared.append(True)
+        ),
+        stop=lambda: None,
     )
     monkeypatch.setattr("dimos.porcelain.dimos.Dimos.connect", lambda: app)
 
@@ -832,6 +836,7 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
             t.stop()
 
     assert repointed == [str(trace_dir)]
+    assert cleared == [True]  # each case starts a new conversation
     assert trajectory.extra.ended_by == ("answer" if goes_idle else "timeout")
     assert trajectory.final_answer == "I am at the bed"
     assert len(trajectory.steps) == 3 and trajectory.final_metrics.total_prompt_tokens == 10

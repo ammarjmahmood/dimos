@@ -106,6 +106,8 @@ class McpClientAdapter(Agent):
         try:
             mcp_client: Any = app.McpClient  # handle type depends on what's importable
             mcp_client.set_trace_dir(str(run_dir / "raw"))
+            # An environment may reuse one dimos across cases; each case is a new conversation.
+            mcp_client.clear_history()
         finally:
             app.stop()
 
