@@ -513,6 +513,9 @@ dimos evals compare --latest 2
 ```
 
 Cases run headless; set `R1PRO_EVAL_VIEWER=1` to watch them in the MuJoCo window.
+Cases with the same seed share one simulator: between them the environment calls
+`reset_scene` and checks that every object, the tray and the base are back where
+they started, relaunching if not. `reuse=False` launches a simulator per case.
 Every launch serves MCP on the same port, so `R1ProScene` refuses to start
 while another dimos answers there; otherwise the case would drive that robot.
 
