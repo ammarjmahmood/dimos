@@ -781,6 +781,42 @@ def test_two_things_in_one_photograph_are_two_answers(recording: SqliteStore, mo
     assert all(answer.box3d is not None for answer in answers)
 
 
+class FindsARow(StubBoxes):
+    """A photograph with six of the thing in it: a row of cones, a lot of cars."""
+
+    BOXES = [
+        ((2.0 + 10.0 * i, 20.0, 8.0 + 10.0 * i, 28.0), round(0.9 - 0.05 * i, 2)) for i in range(6)
+    ]
+
+    def all_many(self, images, text):  # type: ignore[no-untyped-def]
+        del text
+        self.passes += 1
+        self.calls += len(images)
+        return [list(self.BOXES) for _ in images]
+
+
+def test_every_box_in_a_photograph_is_an_answer_however_many(
+    recording: SqliteStore, monkeypatch
+) -> None:
+    """A cap of four boxes a frame silently dropped the fifth cone of a row."""
+    frames = [frame_at(ts, 0.9) for ts in (10.0, 10.25)]
+    monkeypatch.setattr("dimos.mapping.hyperspace.frames.hot_frames", lambda *a, **k: frames)
+    config = DetectConfig(world_frame=WORLD)
+    answers = list(
+        find(
+            recording,
+            recording,
+            "a square",
+            config=config,
+            frames=RecordingFrames(recording, config=config),
+            boxes=FindsARow((28.0, 20.0, 36.0, 28.0)),
+        )
+    )
+    assert [answer.score for answer in answers] == [score for _, score in FindsARow.BOXES]
+    assert len({answer.rank for answer in answers}) == 6, "each one its own rank"
+    assert all(answer.box3d is not None for answer in answers), "each one placed in 3D"
+
+
 def test_a_second_look_sharpens_the_place_instead_of_adding_a_box() -> None:
     """Two looks at one shelf are one place whose box is the average of the looks."""
     near = placed(1, 0.5, (1.0, 0.0, 0.0))

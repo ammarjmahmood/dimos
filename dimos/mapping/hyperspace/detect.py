@@ -85,10 +85,11 @@ class DetectConfig:
     # usually right, but an object can be half out of the frame at the moment it scores
     # highest, and the next look is free of that.
     attempts: int = 3
-    # Boxes to keep from one photograph. The detector returns every box over its
-    # threshold and a frame really can hold two of the thing asked for; past a handful
-    # they are the same shelf seen as several.
-    per_frame: int = 4
+    # Boxes to keep from one photograph; 0 keeps every one. The detector returns every
+    # box over its threshold and a frame can hold any number of the thing asked for --
+    # a row of cones, a lot of cars -- so a cap quietly drops real answers. Boxes that
+    # are the same thing seen twice meet again in `merge_duplicates`, in 3D.
+    per_frame: int = 0
     # Frames handed to the detector in one forward pass. One, because batching was
     # measured on this Mac and LOST: OWLv2 pads every frame to 960x960, so the cost is
     # per pixel and there is little per-call overhead to amortize, while the bigger
@@ -881,13 +882,20 @@ class _Try:
     # Other things the detector found in the same photograph. Two cones in one frame
     # are two answers, and the second one is nobody else's episode to report.
     beside: list[Detection] = field(default_factory=list)
+    # The rest of the boxes from the look that produced `flat`, reported with it when
+    # no look placed anything.
+    flat_beside: list[Detection] = field(default_factory=list)
 
     @property
     def settled(self) -> bool:
         return self.answer is not None
 
     def finish(self) -> list[Detection]:
-        return [self.answer or self.flat or self.detection, *self.beside]
+        if self.answer is not None:
+            return [self.answer, *self.beside]
+        if self.flat is not None:
+            return [self.flat, *self.flat_beside]
+        return [self.detection]
 
 
 def place_of(
@@ -1108,7 +1116,9 @@ def _attempt_rounds(
                 attempt_of.refusals += 1
                 attempt_of.detection.note = f"detector refused {attempt_of.refusals} frame(s)"
                 continue
-            for position, box in enumerate(found[: max(1, config.per_frame)]):
+            kept = found[: config.per_frame] if config.per_frame > 0 else found
+            attempts = []
+            for box in kept:
                 attempt = replace(
                     attempt_of.detection, ts=candidate.ts, camera_frame=candidate.frame, note=""
                 )
@@ -1116,14 +1126,25 @@ def _attempt_rounds(
                 if keep_images:
                     attempt.image = image
                 _place(attempt, candidate, image, frames, config)
-                if position == 0:
-                    # The strongest box is this episode's answer; the rest are other
-                    # things in the same photograph and get ranks of their own later.
-                    if attempt.box3d is not None:
-                        attempt_of.answer = attempt
-                    else:
-                        attempt_of.flat = attempt_of.flat or attempt
-                elif attempt.box3d is not None:
+                attempts.append(attempt)
+            # Every box over the threshold is an answer on the same footing: OWLv2 saying
+            # "cone" twice in one photograph is two cones, not a cone and an afterthought.
+            # The strongest one that PLACED carries the episode's rank, and any placed box
+            # settles the episode -- a weaker box that has depth behind it is a better
+            # answer than a stronger one that fell on glass.
+            placed = [attempt for attempt in attempts if attempt.box3d is not None]
+            if not placed:
+                if attempt_of.flat is None:
+                    # nothing placeable yet: every box of this look is kept, flat, in case
+                    # no later look places any of them either
+                    attempt_of.flat = attempts[0]
+                    attempt_of.flat_beside = attempts[1:]
+                    for attempt in attempt_of.flat_beside:
+                        attempt.rank = 0
+                continue
+            attempt_of.answer = placed[0]
+            for attempt in attempts:
+                if attempt is not placed[0]:
                     attempt.rank = 0
                     attempt_of.beside.append(attempt)
 
