@@ -36,6 +36,9 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
+# Fresh samples on both, plus a pose per tracked body, mean the sim is ready for the agent.
+_READY_STREAMS = ("color_image", "coordinator_joint_state")
+
 
 class MujocoEnvironmentConfig(SimConfig):
     # Run the simulator without its viewer window.
@@ -43,8 +46,6 @@ class MujocoEnvironmentConfig(SimConfig):
     # Free bodies whose world pose MujocoSimModule publishes on ``tf``, so graders
     # read ground-truth object positions from the recording.
     tracked_bodies: tuple[str, ...] = ()
-    # Streams that must carry fresh samples before the agent starts.
-    ready_streams: tuple[str, ...] = ("color_image", "coordinator_joint_state")
     # Joint speed below which the robot counts as at rest while settling.
     at_rest_rad_s: float = 0.02
     # Extra ``MODULE__FIELD`` environment overrides for the launched dimos, e.g.
@@ -94,7 +95,7 @@ class MujocoEnvironment(Sim):
             try:
                 ages = [
                     time.time() - getattr(recording.streams, name).last().data.ts
-                    for name in self.config.ready_streams
+                    for name in _READY_STREAMS
                     if name in recording.streams
                 ]
                 poses = {
@@ -103,12 +104,12 @@ class MujocoEnvironment(Sim):
                 }
             except (LookupError, AttributeError):
                 ages, poses = [], {}
-            if len(ages) == len(self.config.ready_streams) and all(age < 10.0 for age in ages):
+            if len(ages) == len(_READY_STREAMS) and all(age < 10.0 for age in ages):
                 self._initial_body_positions = {body: [t.x, t.y, t.z] for body, t in poses.items()}
                 return
             time.sleep(0.1)
         raise TimeoutError(
-            f"MuJoCo did not publish fresh {', '.join(self.config.ready_streams)}"
+            f"MuJoCo did not publish fresh {', '.join(_READY_STREAMS)}"
             + (
                 f" and poses for {', '.join(self.config.tracked_bodies)}"
                 if self.config.tracked_bodies

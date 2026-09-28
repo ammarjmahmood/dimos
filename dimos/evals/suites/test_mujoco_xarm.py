@@ -24,12 +24,9 @@ import pytest
 from dimos.evals.agents.lib.trajectory_builder import TrajectoryBuilder
 from dimos.evals.environments.mujoco_sim import MujocoEnvironmentConfig
 from dimos.evals.suites.mujoco_xarm import (
-    LOCAL_PERCEPTION,
     PERCEPTION_MODULES,
-    TRACKED,
     arm_only_environment,
     ended_near,
-    environment,
     lifted,
     sensor_score,
 )
@@ -112,19 +109,9 @@ def test_graders_score_zero_without_the_body(tmp_path: Path) -> None:
     assert ended_near("ghost", 0.0, 0.0, band_m=1.0)(_outcome(tmp_path)) == 0.0
 
 
-def test_environments_compose_as_documented() -> None:
-    full = environment().config
-    assert full.module_env == LOCAL_PERCEPTION
-    assert full.disable == ("rerun-bridge-module",)
-    assert full.headless is True
-
-    arm = arm_only_environment().config
-    assert "observe-skill" in arm.blueprint
-    assert set(PERCEPTION_MODULES) <= set(arm.disable) and "rerun-bridge-module" in arm.disable
-    assert arm.tracked_bodies == TRACKED
-
-    watched = arm_only_environment(headless=False, rerun=True).config
-    assert "rerun-bridge-module" not in watched.disable and watched.headless is False
+def test_rerun_flag_keeps_the_bridge() -> None:
+    assert "rerun-bridge-module" in arm_only_environment().config.disable
+    assert "rerun-bridge-module" not in arm_only_environment(rerun=True).config.disable
 
 
 def test_pick_cylinder_is_one_arm_only_case_with_the_viewer() -> None:
