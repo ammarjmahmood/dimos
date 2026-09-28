@@ -79,8 +79,97 @@ def report_indexes(memory: Any) -> None:
     typer.echo(f"indexes: {', '.join(rows)}")
 
 
+def ingest_config(
+    novelty: float, max_depth: float, depth2depth: str, keep_frames: bool
+) -> IngestConfig:
+    return IngestConfig(
+        gate=hs.KeyframeGateConfig(
+            max_angular_velocity=None,
+            **({} if novelty < 0 else {"novelty_threshold": novelty}),
+        ),
+        max_depth_m=max_depth,
+        depth2depth_model=depth2depth_model_of(depth2depth),
+        # The flat layout, always: it is the only one the frames-first query reads,
+        # and a fresh index has no old reader to keep happy.
+        flat=True,
+        keep_frames=keep_frames,
+    )
+
+
+def embed_into_mcap(
+    recording_path: Path,
+    source: Any,
+    specs: list[str],
+    *,
+    color: str,
+    depth: str,
+    color_info: str,
+    depth_info: str,
+    tf_stream: str,
+    hz: float,
+    max_seconds: float,
+    config: IngestConfig,
+    device: str,
+    index_name: str,
+    replace: bool,
+) -> None:
+    """Embed a ROS 2 mcap and append the result to it, in place.
+
+    What lands is the layout :mod:`dimos.mapping.hyperspace.mcap_format` describes:
+    ``/depth2depth``, ``/depth_thumbnails`` and one ``/siglip2_patches__m_<model>`` per
+    checkpoint. An mcap is only ever appended to, so an index that is already there
+    has to be removed first (``dtk mcap_edit --delete``); this never writes a second
+    copy beside it.
+    """
+    from dimos.mapping.hyperspace.mcap_sink import McapSink, hyperspace_topics_in
+
+    if index_name:
+        raise typer.BadParameter("--index-name has no meaning for an .mcap: topics are per model")
+    present = hyperspace_topics_in(recording_path)
+    if present:
+        how = "--replace cannot remove topics from an .mcap; " if replace else ""
+        typer.echo(
+            f"{recording_path.name} already holds {', '.join(present)}. Nothing was changed; "
+            f"{how}remove them with `dtk mcap_edit {recording_path} --delete TOPIC` first."
+        )
+        raise typer.Exit(0)
+    refuse_unless_readable(source, (color, depth, color_info, depth_info, tf_stream))
+    model = PatchEnsemble(specs, device=pick_device(device), towers="vision")
+    model.start()
+    typer.echo(f"embedding with {model.tags} on {pick_device(device)}, into {recording_path}")
+    sink = McapSink(recording_path)
+    started = time.monotonic()
+    try:
+        stats = ingest(
+            source,
+            source,
+            model,
+            color_stream=color,
+            depth_stream=depth,
+            color_info_stream=color_info,
+            depth_info_stream=depth_info,
+            tf_stream=tf_stream,
+            hz=hz,
+            max_seconds=max_seconds if max_seconds > 0 else 1e9,
+            config=config,
+            sink=sink,
+        )
+    finally:
+        sink.close()
+        source.stop()
+    took = time.monotonic() - started
+    kept = stats.get("kept", 0)
+    typer.echo(
+        f"embedded {kept} frames of {stats.get('images', 0)} in {took:.0f}s "
+        f"({kept / max(took, 1e-9):.1f} frames/s)"
+    )
+    typer.echo("wrote " + ", ".join(f"{topic}={n:,}" for topic, n in sorted(sink.written.items())))
+
+
 def main(
-    recording_path: Path = typer.Argument(..., help="the .db recording to index, in place"),
+    recording_path: Path = typer.Argument(
+        ..., help="the .db or ROS 2 .mcap recording to index, in place"
+    ),
     models: str = typer.Option(
         ",".join(DEFAULT_TRIO),
         "--models",
@@ -143,14 +232,32 @@ def main(
     color_info = pick_stream(source, color_info_stream or None, "camera_info")
     depth_info = pick_stream(source, depth_info_stream or None, "depth", "camera_info")
 
+    specs = [spec.strip() for spec in models.split(",") if spec.strip()]
+    if not specs:
+        raise typer.BadParameter("--models needs at least one checkpoint")
+    if recording_path.suffix == ".mcap" and memory_db is None:
+        embed_into_mcap(
+            recording_path,
+            source,
+            specs,
+            color=color,
+            depth=depth,
+            color_info=color_info,
+            depth_info=depth_info,
+            tf_stream=tf_stream,
+            hz=hz,
+            max_seconds=max_seconds,
+            config=ingest_config(novelty, max_depth, depth2depth, keep_frames),
+            device=device,
+            index_name=index_name,
+            replace=replace,
+        )
+        return
+
     memory_path = (memory_db or memory_db_for(recording_path)).expanduser()
     memory = source if memory_path == recording_path else open_store(memory_path, must_exist=False)
     if memory_path.suffix == ".db":
         hold_the_wal(memory)
-
-    specs = [spec.strip() for spec in models.split(",") if spec.strip()]
-    if not specs:
-        raise typer.BadParameter("--models needs at least one checkpoint")
     slug = index_name or pick_index(memory, specs)
     report_indexes(memory)
     typer.echo(f"streams: color={color} depth={depth} info={color_info}/{depth_info}")
@@ -186,18 +293,7 @@ def main(
         # number rather than a zero -- which read as "stop immediately" and embedded
         # exactly one frame before anyone noticed.
         max_seconds=max_seconds if max_seconds > 0 else 1e9,
-        config=IngestConfig(
-            gate=hs.KeyframeGateConfig(
-                max_angular_velocity=None,
-                **({} if novelty < 0 else {"novelty_threshold": novelty}),
-            ),
-            max_depth_m=max_depth,
-            depth2depth_model=depth2depth_model_of(depth2depth),
-            # The flat layout, always: it is the only one the frames-first query reads,
-            # and a fresh index has no old reader to keep happy.
-            flat=True,
-            keep_frames=keep_frames,
-        ),
+        config=ingest_config(novelty, max_depth, depth2depth, keep_frames),
         slug=slug,
     )
     took = time.monotonic() - started

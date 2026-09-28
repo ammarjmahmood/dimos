@@ -48,6 +48,7 @@ from dimos.memory.tf import StreamTF
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from dimos.mapping.hyperspace.mcap_sink import McapSink
     from dimos.memory.store.base import Store
 
 TIMELINE = "ts"
@@ -56,9 +57,9 @@ TIMELINE = "ts"
 def open_store(path: Path, *, must_exist: bool = True) -> Store:
     """Open a recording, picking the store from the file extension."""
     if path.suffix == ".mcap":
-        from dimos.memory.store.mcap import McapStore
+        from dimos.mapping.hyperspace.ros2_mcap import open_ros2_mcap
 
-        store = McapStore(path=str(path))
+        return open_ros2_mcap(path)
     elif path.suffix == ".db":
         from dimos.memory.store.sqlite import SqliteStore
 
@@ -88,6 +89,8 @@ def hold_the_wal(store: Store) -> None:
     left to :func:`fold_the_wal` at the end of the run, and to whatever watches
     the file size in between.
     """
+    if not hasattr(store, "_open_connection"):
+        return  # not sqlite: no write-ahead log to hold
     open_connection = store._open_connection  # type: ignore[attr-defined]
 
     def without_autocheckpoint() -> Any:
@@ -116,6 +119,8 @@ def fold_the_wal(store: Store) -> None:
     for the writer's transaction while the writer waits for the fold, and the
     pair sit there until one of them gives up -- which cost a pass, twice.
     """
+    if not hasattr(store, "_registry_conn"):
+        return  # not sqlite: no write-ahead log to fold
     started = time.monotonic()
     conn = store._registry_conn  # type: ignore[attr-defined]
     busy, copied, checkpointed = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
@@ -233,8 +238,12 @@ def ingest(
     max_seconds: float,
     config: IngestConfig,
     slug: str = "",
+    sink: McapSink | None = None,
 ) -> dict[str, int]:
-    """Run the live module's ingest over a recording. Returns its stats."""
+    """Run the live module's ingest over a recording. Returns its stats.
+
+    With *sink*, a ROS 2 mcap is the recording and what the ingest derives is
+    appended to it through the sink; ``memory`` is then the recording itself."""
     recorded_tf = StreamTF.from_store(recording, tf_stream)
 
     def lookup(target: str, source: str, ts: float) -> NDArray[np.float64] | None:
@@ -244,7 +253,13 @@ def ingest(
         return None if transform is None else transform_to_matrix(transform)
 
     ingestor = PatchIngestor(
-        memory, model, config, lookup=lookup, slug=slug, copy_tf=memory is not recording
+        memory,
+        model,
+        config,
+        lookup=lookup,
+        slug=slug,
+        copy_tf=memory is not recording,
+        sink=sink,
     )
     for name in (color_info_stream, depth_info_stream):
         first = next(iter(recording.streams[name].order_by(TIMELINE)), None)

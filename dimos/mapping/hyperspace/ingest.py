@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
+    from dimos.mapping.hyperspace.mcap_sink import McapSink
     from dimos.mapping.hyperspace.siglip_embedder import SigLIP2Patches
     from dimos.memory.store.base import Store
     from dimos.memory.stream import Stream
@@ -345,6 +346,11 @@ class IngestConfig:
     keep_frames: bool = False
 
 
+def millimetres(metres: NDArray[np.float32]) -> NDArray[np.uint16]:
+    """Depth in metres as uint16 millimetres, 0 where there is none."""
+    return np.clip(np.nan_to_num(metres * 1000.0, nan=0.0, posinf=0.0), 0, 65535).astype(np.uint16)
+
+
 def grids_of(model: Any, image: Image) -> list[tuple[NDArray[np.float32], tuple[int, int]]]:
     """One ``(grid, (rows, cols))`` per ensemble member, from an ensemble, a
     single SigLIP2Patches, or any object with ``embed_patches`` and
@@ -385,8 +391,12 @@ class PatchIngestor:
         lookup: Callable[[str, str, float], NDArray[np.float64] | None] | None = None,
         slug: str = "",
         copy_tf: bool = True,
+        sink: McapSink | None = None,
     ) -> None:
         self.store = store
+        # A ROS 2 mcap is written through this instead of through ``store``: depth,
+        # thumbnails and one patch message per frame per model, into the recording.
+        self.sink = sink
         self.model = model
         self.config = config
         # Ensemble bookkeeping, written with every keyframe so the query side
@@ -417,9 +427,16 @@ class PatchIngestor:
         self._cameras_written: set[str] = set()
         # One vec0 stream per model; the member list is only certain once it has run.
         self.patches_by_member: dict[str, Stream[Any]] = {}
-        self.tf_stream: Stream[TFMessage] = store.stream(TF_STREAM, TFMessage)
+        self._tf_stream: Stream[TFMessage] | None = None
         self.last_embedded = -np.inf
         self.stats = {"images": 0, "gated": 0, "embedded": 0, "kept": 0, "kept_without_depth": 0}
+
+    @property
+    def tf_stream(self) -> Stream[TFMessage]:
+        """Opened on first use: only a copy into a separate store writes tf at all."""
+        if self._tf_stream is None:
+            self._tf_stream = self.store.stream(TF_STREAM, TFMessage)
+        return self._tf_stream
 
     @property
     def keyframes(self) -> Stream[Any]:
@@ -624,6 +641,9 @@ class PatchIngestor:
         if depth is None or not self.config.depth2depth_model:
             return depth
         filled = self._fused_depth(rgb, depth)
+        if self.sink is not None:
+            self.sink.depth2depth(camera_frame, ts, millimetres(filled))
+            return filled
         self.filled.append(
             {
                 "camera_frame": camera_frame,
@@ -712,22 +732,27 @@ class PatchIngestor:
         elif self.config.thumbnails:
             stride = max(self.config.depth_thumbnail_stride, 1)
             thinned = depth[::stride, ::stride]
-            rows, cols = np.nonzero(np.isfinite(thinned) & (thinned > 0))
-            metres = thinned[rows, cols]
-            # Camera-frame points, millimetres as int16: the query needs no intrinsics
-            # to use them, and the world pose stays outside so a correction can move it.
-            us = (cols * stride + 0.5 - color.cx) / color.fx
-            vs = (rows * stride + 0.5 - color.cy) / color.fy
-            points = np.stack([us * metres, vs * metres, metres], axis=1) * 1000.0
-            self.thumbnails.append(
-                {
-                    "camera_frame": camera_frame,
-                    "ts": kept.ts,
-                    "points_mm": np.clip(points, -32768, 32767).astype(np.int16),
-                },
-                ts=kept.ts,
-                tags=tags,
-            )
+            if self.sink is not None:
+                # A 16UC1 image rather than points: zero where there is no depth, and
+                # the recording's own camera_info turns it back into points.
+                self.sink.thumbnail(camera_frame, kept.ts, millimetres(thinned))
+            else:
+                rows, cols = np.nonzero(np.isfinite(thinned) & (thinned > 0))
+                metres = thinned[rows, cols]
+                # Camera-frame points, millimetres as int16: the query needs no intrinsics
+                # to use them, and the world pose stays outside so a correction can move it.
+                us = (cols * stride + 0.5 - color.cx) / color.fx
+                vs = (rows * stride + 0.5 - color.cy) / color.fy
+                points = np.stack([us * metres, vs * metres, metres], axis=1) * 1000.0
+                self.thumbnails.append(
+                    {
+                        "camera_frame": camera_frame,
+                        "ts": kept.ts,
+                        "points_mm": np.clip(points, -32768, 32767).astype(np.int16),
+                    },
+                    ts=kept.ts,
+                    tags=tags,
+                )
 
         for position, (grid, shape) in enumerate(grids):
             member = self.members[position] if position < len(self.members) else f"member{position}"
@@ -741,6 +766,19 @@ class PatchIngestor:
             row_index, col_index = np.divmod(np.arange(rows_n * cols_n), cols_n)
             us = ((col_index + 0.5) * color.width / cols_n - color.cx) / color.fx
             vs = ((row_index + 0.5) * color.height / rows_n - color.cy) / color.fy
+            if self.sink is not None:
+                spec = self.member_specs[position] if position < len(self.member_specs) else member
+                self.sink.patches(
+                    member,
+                    spec,
+                    camera_frame,
+                    kept.ts,
+                    (rows_n, cols_n),
+                    np.stack([us, vs], axis=1),
+                    patch_depth,
+                    grid,
+                )
+                continue
             stream = self.patch_stream(member)
             member_tags = {**tags, "member": member}
             for index in range(len(grid)):
