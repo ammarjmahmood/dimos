@@ -77,7 +77,7 @@ def _outcome(
         )
     store.stop()
     return Outcome(
-        trajectory=TrajectoryBuilder("pick", name="test").build("done"),
+        trajectory=TrajectoryBuilder("pick", name="test").build("answer"),
         artifacts={"recording": db},
     )
 
