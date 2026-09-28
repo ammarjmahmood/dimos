@@ -251,13 +251,17 @@ def test_stale_feedback_or_commands_force_damping(connection, clock, fresh_feedb
 
 
 @pytest.mark.parametrize("handed_off, modes", [(False, []), (True, [[0] * 29])])
-def test_shutdown_only_sends_motor_disable_after_handoff(connection, handed_off, modes):
+def test_shutdown_only_sends_motor_disable_after_handoff(connection, mocker, handed_off, modes):
     publisher = _wire(connection, soft_start_seconds=0.0)
     connection._sport_mode_released = handed_off
+    close_publisher = mocker.patch.object(publisher, "Close")
+    close_subscriber = mocker.patch.object(connection._subscriber, "Close")
 
     connection.stop()
 
     assert publisher.modes == modes
+    close_publisher.assert_called_once_with()
+    close_subscriber.assert_called_once_with()
 
 
 def test_missing_first_feedback_is_reported_without_taking_control(connection, mocker):
