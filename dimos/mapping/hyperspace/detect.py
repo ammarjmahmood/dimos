@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -431,6 +432,27 @@ def box_from_points(
     )
 
 
+# /depth2depth in a ROS 2 mcap, read as a stream (see mcap_format)
+DEPTH2DEPTH_STREAM = "depth2depth"
+TF_STATIC_STREAM = "tf_static"
+# How much of an mcap's /tf one lazy read takes (see RecordingFrames.ensure_tf).
+TF_WINDOW_S = 2.0
+
+
+def resolve_stream(recording: Any, name: str, *keywords: str) -> str:
+    """*name* if the recording has it, else the shortest stream holding every keyword
+    ("color_image" before "color_image_camera_info"), else *name* unchanged."""
+    names = recording.list_streams()
+    if name in names:
+        return name
+    matches = [
+        candidate
+        for candidate in names
+        if all(word in candidate.lower() for word in keywords) and candidate != DEPTH2DEPTH_STREAM
+    ]
+    return min(matches, key=len) if matches else name
+
+
 class RecordingFrames:
     """The recording's own images, depth and transforms, read one moment at a time.
 
@@ -452,6 +474,15 @@ class RecordingFrames:
         config: DetectConfig | None = None,
     ) -> None:
         self.recording = recording
+        from dimos.mapping.hyperspace.resident import is_mcap
+
+        if is_mcap(recording):
+            # A ROS 2 mcap names its streams after its topics (realsense_color_image_...),
+            # so a default that is not there is looked for by what it is.
+            color_stream = resolve_stream(recording, color_stream, "color", "image")
+            depth_stream = resolve_stream(recording, depth_stream, "depth", "image")
+            color_info_stream = resolve_stream(recording, color_info_stream, "camera_info")
+            depth_info_stream = resolve_stream(recording, depth_info_stream, "depth", "camera_info")
         self.color_stream = color_stream
         self.depth_stream = depth_stream
         self.config = config or DetectConfig()
@@ -472,7 +503,15 @@ class RecordingFrames:
         self.tf = FlexTf()
         self._tf_stream = tf_stream
         self._tf_loaded = False
+        # A ROS 2 mcap keeps /tf in the same chunks as the images, so reading all of it
+        # decompresses nearly the whole recording: 10.7 s for 40 s of sf_office, minutes
+        # for a ride. A query needs poses at a few hundred moments at most, so an mcap's
+        # tf is read a window at a time around them (`ensure_tf`), and these are the
+        # windows already read. None: read it all at once, as a sqlite store is.
+        self._tf_windows: set[int] | None = set() if is_mcap(recording) else None
         filled = filled_stream_for("")
+        if filled not in recording.list_streams():
+            filled = DEPTH2DEPTH_STREAM  # the same depth, as a ROS 2 mcap carries it
         self._filled_stream = filled if filled in recording.list_streams() else None
         if self._filled_stream:
             logger.info(f"hyperspace: placing boxes off {filled}")
@@ -507,6 +546,13 @@ class RecordingFrames:
         return time.monotonic() - started
 
     def load_tf(self) -> None:
+        if self._tf_windows is not None:
+            # Windowed: only the latched static edges up front; `ensure_tf` does the rest.
+            if not self._tf_loaded and TF_STATIC_STREAM in self.recording.list_streams():
+                for observation in self.recording.stream(TF_STATIC_STREAM, TFMessage):
+                    self.tf.receive_tfmessage(observation.data)
+            self._tf_loaded = True
+            return
         if self._tf_loaded or self._tf_stream not in self.recording.list_streams():
             self._tf_loaded = True
             return
@@ -526,10 +572,46 @@ class RecordingFrames:
         nearest = min(found, key=lambda observation: abs(float(observation.ts) - ts))
         if abs(float(nearest.ts) - ts) > tolerance:
             return None
-        return _holes_as_zero(np.asarray(nearest.data["depth_mm"], dtype=np.float32) * 0.001)
+        data = nearest.data
+        millimetres = data["depth_mm"] if isinstance(data, dict) else decoded(data).as_numpy()
+        return _holes_as_zero(np.asarray(millimetres, dtype=np.float32) * 0.001)
+
+    def ensure_tf(self, stamps: Sequence[float]) -> None:
+        """Have the transforms around every one of *stamps*.
+
+        Interpolation takes the nearest transforms either side with no limit on the gap,
+        so a moment must never be looked up across a stretch that was not read: every
+        window within `TF_WINDOW_S / 2` of a stamp is read, whole and once.
+        """
+        self.load_tf()
+        if self._tf_windows is None or self._tf_stream not in self.recording.list_streams():
+            return
+        wanted: set[int] = set()
+        for ts in stamps:
+            first = math.floor((ts - TF_WINDOW_S / 2) / TF_WINDOW_S)
+            last = math.floor((ts + TF_WINDOW_S / 2) / TF_WINDOW_S)
+            wanted.update(range(first, last + 1))
+        wanted -= self._tf_windows
+        if not wanted:
+            return
+        stream = self.recording.stream(self._tf_stream, TFMessage)
+        # consecutive windows in one read
+        runs: list[list[int]] = []
+        for window in sorted(wanted):
+            if runs and runs[-1][-1] == window - 1:
+                runs[-1].append(window)
+            else:
+                runs.append([window])
+        for run in runs:
+            start = run[0] * TF_WINDOW_S
+            # just short of the next window, which owns its own first instant
+            end = (run[-1] + 1) * TF_WINDOW_S - 1e-6
+            for observation in stream.time_range(start, end):
+                self.tf.receive_tfmessage(observation.data)
+        self._tf_windows |= wanted
 
     def pose(self, camera_frame: str, ts: float, world_frame: str) -> NDArray[np.float64] | None:
-        self.load_tf()
+        self.ensure_tf([ts])
         poses, valid = self.tf.batch_get(world_frame, camera_frame, [ts])
         return poses[0] if valid[0] else None
 
@@ -592,7 +674,7 @@ class RecordingFrames:
         depth_intrinsics = self.intrinsics.get(depth_frame)
         if depth_intrinsics is None:
             return metres
-        self.load_tf()
+        self.ensure_tf([ts])
         poses, valid = self.tf.batch_get(camera_frame, depth_frame, [ts])
         if not valid[0]:
             return metres
@@ -1274,7 +1356,7 @@ def _agreed_candidates(
     settings = config.heat or heat.HeatConfig()
     # Every frame's pose in one call. Asking one at a time walked the transform tree
     # eight hundred times and cost more than the agreement it was feeding.
-    frames.load_tf()
+    frames.ensure_tf([frame.ts for frame in matched])
     found_poses, usable = frames.tf.batch_get(
         config.world_frame,
         [frame.frame for frame in matched],

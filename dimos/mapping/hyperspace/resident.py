@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -647,6 +648,8 @@ def since(store: Any, tag: str, stream: str, last_id: int) -> ResidentPatches | 
     a poll's worth of rows is small enough (about six microseconds each) that the fast
     path would be the slow one here.
     """
+    if is_mcap(store):
+        return None  # a finished recording: nothing lands after it has been read
     backend = store.stream(stream, dict)._source
     blobs, codec = backend.blob_store, backend.codec
     conn = store._registry_conn
@@ -727,6 +730,8 @@ def load(store: Any, tag: str, stream: str) -> ResidentPatches:
     the vector table; the rest comes from the same rows' payloads, which are cheap
     (about six microseconds each) next to the vectors.
     """
+    if is_mcap(store):
+        return load_mcap(store, tag, stream)
     # Reaching past the Stream for the backend and the connection. There is no public
     # way to read a whole vector table or to fetch a payload by id -- `Stream.filter` is
     # a python predicate over everything, which is worse than what this replaces -- and
@@ -766,6 +771,78 @@ def load(store: Any, tag: str, stream: str) -> ResidentPatches:
     return ResidentPatches(tag=tag, stream=stream, vectors=vectors, last_id=ids[-1], **placements)
 
 
+def is_mcap(store: Any) -> bool:
+    from dimos.memory.store.mcap import McapStore
+
+    return isinstance(store, McapStore)
+
+
+def load_mcap(store: Any, tag: str, stream: str) -> ResidentPatches:
+    """One model's patches out of a ROS 2 mcap: one message per frame, so the vectors
+    are a copy out of each message rather than a decode per patch.
+
+    The rows are allocated once from the first frame's grid times the frame count, so
+    the biggest model is never held twice while it loads.
+    """
+    started = time.monotonic()
+    frames = store.stream(stream, dict)
+    count = frames.count()
+    if not count:
+        raise ValueError(f"{stream!r} holds no patches")
+    names: dict[str, int] = {}
+    vectors: NDArray[Any] | None = None
+    at = 0
+    columns: dict[str, NDArray[Any]] = {}
+    for observation in frames:
+        frame = observation.data
+        cells = frame.rows * frame.cols
+        if vectors is None:
+            capacity = cells * count
+            _warn_if_it_will_not_fit(tag, capacity, frame.dim)
+            vectors = np.empty((capacity, frame.dim), dtype=HELD_AS)
+            columns = {
+                "frame_of": np.empty(capacity, np.int32),
+                "ts": np.empty(capacity, np.float64),
+                "cell": np.empty(capacity, np.int32),
+                "grid": np.empty((capacity, 2), np.int16),
+                "ray": np.empty((capacity, 2), np.float32),
+                "depth": np.empty(capacity, np.float32),
+            }
+        if at + cells > len(vectors):
+            # a frame with a bigger grid than the first: grow, rarely
+            grow = max(cells, len(vectors) // 4)
+            vectors = np.concatenate([vectors, np.empty((grow, vectors.shape[1]), HELD_AS)])
+            for name, column in columns.items():
+                columns[name] = np.concatenate(
+                    [column, np.empty((grow, *column.shape[1:]), column.dtype)]
+                )
+        rows = slice(at, at + cells)
+        vectors[rows] = frame.embeddings
+        if frame.frame_id not in names:
+            names[frame.frame_id] = len(names)
+        columns["frame_of"][rows] = names[frame.frame_id]
+        columns["ts"][rows] = frame.ts
+        columns["cell"][rows] = np.arange(cells)
+        columns["grid"][rows] = (frame.rows, frame.cols)
+        columns["ray"][rows] = frame.rays
+        columns["depth"][rows] = frame.depths
+        at += cells
+    assert vectors is not None
+    logger.info(
+        f"hyperspace: {tag} resident -- {at} x {vectors.shape[1]} "
+        f"({at * vectors.shape[1] * 4 / 1e6:.0f} MB) from {count} frames in "
+        f"{time.monotonic() - started:.1f}s"
+    )
+    return ResidentPatches(
+        tag=tag,
+        stream=stream,
+        vectors=vectors[:at],
+        camera_frames=[name for name, _ in sorted(names.items(), key=lambda kv: kv[1])],
+        last_id=count,
+        **{name: column[:at] for name, column in columns.items()},
+    )
+
+
 class ResidentIndex:
     """The models a process is holding, loaded once and asked many times.
 
@@ -775,6 +852,9 @@ class ResidentIndex:
 
     def __init__(self) -> None:
         self._held: dict[str, ResidentPatches] = {}
+        # Read ahead by `prefetch`, not yet placed: stream -> the thread reading it and
+        # what it read (or the error it met, raised again where the load would have).
+        self._reading: dict[str, tuple[threading.Thread, list[Any]]] = {}
         # Where the vectors are kept. "auto" is the accelerator this process can use,
         # "cpu" is the numpy path this used to be. Set before warming, because a member
         # is placed as it loads.
@@ -818,10 +898,47 @@ class ResidentIndex:
             )
         return held
 
+    def prefetch(self, store: Any, members: Sequence[tuple[str, str]]) -> None:
+        """Start reading these members into RAM, one thread each, and return at once.
+
+        Only for an mcap: reading one is plain file I/O on handles of its own, where a
+        sqlite store's connection belongs to the thread that opened it. The read overlaps
+        whatever the caller loads next -- the detector and the text towers are half a
+        minute -- and placing on the device still waits for them, so the order `warm`
+        chooses for the card is unchanged.
+        """
+        if not is_mcap(store):
+            return
+        for tag, stream in members:
+            if stream in self._held or stream in self._reading:
+                continue
+            box: list[Any] = []
+
+            def read(tag: str = tag, stream: str = stream, box: list[Any] = box) -> None:
+                try:
+                    box.append(load(store, tag, stream))
+                except Exception as error:  # raised again by `_loaded`
+                    box.append(error)
+
+            thread = threading.Thread(target=read, name=f"prefetch-{tag}", daemon=True)
+            thread.start()
+            self._reading[stream] = (thread, box)
+
+    def _loaded(self, store: Any, tag: str, stream: str) -> ResidentPatches:
+        """What `prefetch` read for this stream, waited for; otherwise a load now."""
+        reading = self._reading.pop(stream, None)
+        if reading is None:
+            return load(store, tag, stream)
+        thread, box = reading
+        thread.join()
+        if isinstance(box[0], BaseException):
+            raise box[0]
+        return box[0]
+
     def of(self, store: Any, tag: str, stream: str) -> ResidentPatches:
         held = self._held.get(stream)
         if held is None:
-            held = self._held[stream] = self._place(load(store, tag, stream))
+            held = self._held[stream] = self._place(self._loaded(store, tag, stream))
         return held
 
     def warm(self, store: Any, members: Sequence[tuple[str, str]]) -> float:
@@ -846,7 +963,7 @@ class ResidentIndex:
                 # Nothing held yet, and `load` refuses an empty stream, so wait for the
                 # first patches rather than treating "not written yet" as an error.
                 try:
-                    self._held[stream] = self._place(load(store, tag, stream))
+                    self._held[stream] = self._place(self._loaded(store, tag, stream))
                 except (ValueError, KeyError, TypeError):
                     continue
                 added += self._held[stream].rows

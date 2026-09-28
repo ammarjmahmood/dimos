@@ -159,6 +159,14 @@ def member_streams(store: Any) -> list[tuple[str, str]]:
         for name in store.list_streams()
         if name.startswith(prefix) and name != prefix
     ]
+    # A ROS 2 mcap names them by family instead (see mcap_format): the tag is what
+    # spec_of turns back into a checkpoint, so a PE model's keeps its "pe_".
+    for family, tag_prefix in (("siglip2_patches__m_", ""), ("pe_patches__m_", "pe_")):
+        found += [
+            (tag_prefix + name[len(family) :], name)
+            for name in store.list_streams()
+            if name.startswith(family) and name != family
+        ]
     return sorted(found)
 
 

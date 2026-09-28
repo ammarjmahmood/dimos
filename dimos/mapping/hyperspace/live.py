@@ -156,7 +156,9 @@ class LiveQuery:
         # other way round the index filled the card, the towers were pushed back to the
         # CPU, and the machine gave up the bigger of the two wins to keep the smaller.
         #
-        # The detector still goes first of all: it is the one that cannot spill.
+        # The detector still goes first of all: it is the one that cannot spill. An
+        # mcap's index is read into RAM meanwhile; only placing it waits its turn.
+        self.held.prefetch(self.store, self.members())
         self.loaded["detector"] = self.boxes.warm()
         self.loaded["recording"] = self.frames.warm()
 

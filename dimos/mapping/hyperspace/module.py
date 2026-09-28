@@ -473,6 +473,16 @@ class Hyperspace(MemoryModule):
     # sees them without having made the call.
     found: Out[FoundObjects]
 
+    @property
+    def store(self) -> Any:
+        """The recording. A ROS 2 ``.mcap`` is read in place, with what an ingest wrote
+        into it (``dimos map embed``); anything else is the sqlite store it always was."""
+        if self._store is None and str(self.config.db_path).endswith(".mcap"):
+            from dimos.mapping.hyperspace.ros2_mcap import open_ros2_mcap
+
+            self._store = self.register_disposable(open_ros2_mcap(self.config.db_path))
+        return super().store
+
     @rpc
     def start(self) -> None:
         # What every question needs: the store, and which checkpoints this recording was
