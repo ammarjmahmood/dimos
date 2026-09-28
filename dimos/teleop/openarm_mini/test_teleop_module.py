@@ -223,6 +223,19 @@ def test_config_rejects_invalid_or_duplicate_enabled_sides() -> None:
         OpenArmMiniTeleopModuleConfig(enabled_sides=("left", "left"))
 
 
+def test_sides_follow_configured_ports_when_enabled_sides_is_unset() -> None:
+    assert OpenArmMiniTeleopModuleConfig(port_right="right-port").sides() == ("right",)
+    assert OpenArmMiniTeleopModuleConfig(port_left="l", port_right="r").sides() == (
+        "left",
+        "right",
+    )
+    assert OpenArmMiniTeleopModuleConfig(port_left="l", enabled_sides=("left",)).sides() == (
+        "left",
+    )
+    with pytest.raises(ValueError, match="port_left and/or port_right"):
+        OpenArmMiniTeleopModuleConfig().sides()
+
+
 def test_config_rejects_non_positive_tick_period() -> None:
     with pytest.raises(ValueError, match="greater than 0"):
         OpenArmMiniTeleopModuleConfig(tick_period_s=0.0)
@@ -395,7 +408,9 @@ def test_tick_publishes_direct_joint_command(
     left_path, right_path = _write_calibrations(tmp_path)
     _patch_buses(monkeypatch, {"left": _FakeBus(_readings())})
 
-    with _connected_module(_configured_config(left_path, right_path)) as module:
+    with _connected_module(
+        _configured_config(left_path, right_path, enabled_sides=("left",))
+    ) as module:
         publish = mocker.patch.object(module.joint_command, "publish")
         module.tick()
 
@@ -413,7 +428,9 @@ def test_tick_suppresses_failed_read_and_recovers(
     left_bus = _FakeBus(_readings())
     _patch_buses(monkeypatch, {"left": left_bus})
 
-    with _connected_module(_configured_config(left_path, right_path)) as module:
+    with _connected_module(
+        _configured_config(left_path, right_path, enabled_sides=("left",))
+    ) as module:
         publish = mocker.patch.object(module.joint_command, "publish")
         mocker.patch.object(
             left_bus, "read_positions", side_effect=[RuntimeError("read"), _readings()]
@@ -433,7 +450,9 @@ def test_start_is_idempotent_and_stop_cleans_worker_and_bus(
     left_path, right_path = _write_calibrations(tmp_path)
     left_bus = _FakeBus(_readings())
     _patch_buses(monkeypatch, {"left": left_bus})
-    module = _module(_configured_config(left_path, right_path, tick_period_s=10.0))
+    module = _module(
+        _configured_config(left_path, right_path, tick_period_s=10.0, enabled_sides=("left",))
+    )
     starts: list[threading.Thread] = []
     original_start = threading.Thread.start
     mocker.patch.object(module, "tick")

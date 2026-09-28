@@ -65,36 +65,13 @@ def _trajectory_task(sides: tuple[OpenArmMiniSide, ...]) -> TaskConfig:
 
 
 # Leader joint N drives follower joint N through the coordinator's streamed
-# joint_command path. The follower is in-memory unless both CAN ports are set.
+# joint_command path. The leader ports given on the command line select the
+# sides; the follower is in-memory unless both CAN ports are set.
 teleop_openarm_mini = autoconnect(
-    OpenArmMiniTeleopModule.blueprint(enabled_sides=("left", "right")),
+    OpenArmMiniTeleopModule.blueprint(),
     OpenArmTeleopCoordinator.blueprint(
         instance_name="ControlCoordinator",
         tasks=[_trajectory_task(("left", "right"))],
-    ),
-    _OpenArmManipulationModule.blueprint(
-        model=openarm_bimanual_model_config(),
-        visualization={"backend": "viser"},
-    ),
-)
-
-teleop_openarm_mini_left = autoconnect(
-    OpenArmMiniTeleopModule.blueprint(enabled_sides=("left",)),
-    OpenArmTeleopCoordinator.blueprint(
-        instance_name="ControlCoordinator",
-        tasks=[_trajectory_task(("left",))],
-    ),
-    _OpenArmManipulationModule.blueprint(
-        model=openarm_bimanual_model_config(),
-        visualization={"backend": "viser"},
-    ),
-)
-
-teleop_openarm_mini_right = autoconnect(
-    OpenArmMiniTeleopModule.blueprint(enabled_sides=("right",)),
-    OpenArmTeleopCoordinator.blueprint(
-        instance_name="ControlCoordinator",
-        tasks=[_trajectory_task(("right",))],
     ),
     _OpenArmManipulationModule.blueprint(
         model=openarm_bimanual_model_config(),
@@ -107,17 +84,9 @@ teleop_openarm_mini_right = autoconnect(
 # the operator machine joins the robot's router (--robot-ip <robot>). The
 # robot stack owns the bus-wide Coordinator name, so the leader half is a
 # client that does not claim it.
-teleop_openarm_mini_leader = OpenArmMiniTeleopModule.blueprint(
-    enabled_sides=("left", "right")
-).global_config(zenoh_mode="client", serve_coordinator_rpc=False)
-
-teleop_openarm_mini_leader_left = OpenArmMiniTeleopModule.blueprint(
-    enabled_sides=("left",)
-).global_config(zenoh_mode="client", serve_coordinator_rpc=False)
-
-teleop_openarm_mini_leader_right = OpenArmMiniTeleopModule.blueprint(
-    enabled_sides=("right",)
-).global_config(zenoh_mode="client", serve_coordinator_rpc=False)
+teleop_openarm_mini_leader = OpenArmMiniTeleopModule.blueprint().global_config(
+    zenoh_mode="client", serve_coordinator_rpc=False
+)
 
 teleop_openarm_mini_follower = autoconnect(
     OpenArmTeleopCoordinator.blueprint(

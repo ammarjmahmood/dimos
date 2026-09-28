@@ -151,23 +151,24 @@ python -m dimos.teleop.openarm_mini.cli.setup_motor_id --help
 
 ## Viser bring-up (mock follower)
 
-Use the left-side blueprint to validate real OpenArm Mini leader motion before
-connecting any OpenArm follower hardware:
+`teleop-openarm-mini` runs the leader module, the OpenArm coordinator and
+Viser on one machine. The leader ports you pass select the sides: one port
+drives one arm and the other arm holds, both ports drive both arms.
 
 ```bash
-dimos run teleop-openarm-mini-left \
+dimos run teleop-openarm-mini \
   -o openarmminiteleopmodule.port_left=<left-feetech-port>
 ```
 
 Teleop defaults to the standard Feetech serial baudrate of `1000000`. Override
 `openarmminiteleopmodule.baudrate` only if your leader was
-configured differently.
+configured differently. To pin the sides regardless of the ports, pass
+`--enabled-sides '["left"]'`.
 
 The blueprint requires:
 
-- a real OpenArm Mini left leader connected to the configured left Feetech serial
-  port
-- a valid left calibration artifact
+- a real OpenArm Mini leader connected to each configured Feetech serial port
+- a valid calibration artifact for each configured side
 - Viser dependencies from `uv sync --extra manipulation` or `uv sync --extra all`
 
 Without CAN ports the follower is in-memory. The leader-derived `joint_command`
@@ -175,49 +176,28 @@ streams through the coordinator's `joint_trajectory` task into mock follower
 hardware, and `ManipulationModule` renders the follower-observed
 `coordinator_joint_state` in Viser. Leader joint N drives follower joint N with no
 reordering; each target is clamped to the OpenArm v2.0 joint limits on the sender
-side and rate-limited by the trajectory task on the follower side.
-
-Use `teleop-openarm-mini-right` for the right leader:
-
-```bash
-dimos run teleop-openarm-mini-right \
-  -o openarmminiteleopmodule.port_right=<right-feetech-port>
-```
-
-The blueprints publish the coordinator joint names `openarm_left_joint1` through
+side and rate-limited by the trajectory task on the follower side. The
+published coordinator joint names are `openarm_left_joint1` through
 `openarm_left_joint7` and `openarm_right_joint1` through `openarm_right_joint7`.
-
-## Dual-arm bring-up
-
-Use `teleop-openarm-mini` for bimanual leader teleop. It runs one bimanual
-`OpenArmMiniTeleopModule`, one coordinator, and one `ManipulationModule` with the
-bimanual OpenArm model:
-
-```bash
-dimos run teleop-openarm-mini \
-  -o openarmminiteleopmodule.port_left=<left-feetech-port> \
-  -o openarmminiteleopmodule.port_right=<right-feetech-port>
-```
 
 ## Driving the real OpenArm follower
 
-The same blueprints drive the physical bimanual OpenArm 2.0 when both CAN ports
-are supplied. Bring the CAN interfaces up first as described in
-[OpenArm Integration](/docs/capabilities/manipulation/openarm_integration.md),
-then add the coordinator ports:
+The same blueprint drives the physical bimanual OpenArm 2.0 when both CAN ports
+are supplied. Bring the CAN interfaces up first with `dimos hardware can setup
+<interface>`, then add the coordinator ports:
 
 ```bash
 dimos run teleop-openarm-mini \
   -o openarmminiteleopmodule.port_left=<left-feetech-port> \
   -o openarmminiteleopmodule.port_right=<right-feetech-port> \
-  --controlcoordinator.left-can-port can0 \
-  --controlcoordinator.right-can-port can1
+  --controlcoordinator.left-can-port can1 \
+  --controlcoordinator.right-can-port can2
 ```
 
-Both CAN ports are required for the physical adapter, including the single-side
-blueprints; the non-driven arm holds its position. Start with the leader posed
-near the follower so the first streamed target is a short move, and keep the
-follower workspace clear.
+Both CAN ports are required for the physical adapter, also when only one leader
+is connected; the non-driven arm holds its position. Start with each leader
+posed near its follower arm so the first streamed target is a short move, and
+keep the follower workspace clear.
 
 ## Leaders on a separate machine
 
@@ -241,15 +221,15 @@ nix run nixpkgs#zenoh -- --listen tcp/0.0.0.0:7447
 # robot computer: the follower, mock until CAN ports are given
 dimos run teleop-openarm-mini-follower --left-can-port can1 --right-can-port can2
 
-# operator laptop: the leaders
+# operator laptop: the leaders (one port drives one arm, two ports both)
 dimos run teleop-openarm-mini-leader --robot-ip <robot-ip> \
   -o openarmminiteleopmodule.port_left=<left-feetech-port> \
   -o openarmminiteleopmodule.port_right=<right-feetech-port>
 ```
 
 Start the router before the follower; a follower started earlier does not
-re-dial it. `teleop-openarm-mini-leader-left` and `-right` publish one side
-only; the follower's other arm holds. Confirm `/joint_command` arrives on the
+re-dial it. Pass only the leader port you have and the follower's other arm
+holds. Confirm `/joint_command` arrives on the
 robot with `dimos spy` before powering the follower. Viser is at port 8095 on
 the robot; pass `--visualization.host 127.0.0.1` to keep it local.
 

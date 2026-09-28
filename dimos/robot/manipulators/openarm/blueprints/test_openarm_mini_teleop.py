@@ -17,8 +17,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import pytest
-
 from dimos.control.coordinator import TaskConfig
 from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
@@ -35,6 +33,8 @@ from dimos.teleop.openarm_mini.teleop_module import (
     OpenArmMiniTeleopModule,
     OpenArmMiniTeleopModuleConfig,
 )
+
+_BOTH_ARMS = [*openarm_urdf_joints("left"), *openarm_urdf_joints("right")]
 
 
 def _module_kwargs(blueprint: Blueprint, module_type: type) -> dict[str, Any]:
@@ -55,99 +55,64 @@ def _teleop_config_after_cli_override(
     return OpenArmMiniTeleopModuleConfig(**module_kwargs)
 
 
-@pytest.mark.parametrize(
-    ("blueprint", "enabled_sides"),
-    [
-        pytest.param(mini_teleop.teleop_openarm_mini_left, ("left",), id="left"),
-        pytest.param(mini_teleop.teleop_openarm_mini_right, ("right",), id="right"),
-        pytest.param(mini_teleop.teleop_openarm_mini, ("left", "right"), id="dual"),
-    ],
-)
-def test_openarm_mini_blueprints_stream_leader_joints_into_trajectory_task(
-    blueprint: Blueprint,
-    enabled_sides: tuple[str, ...],
-) -> None:
+def _trajectory_task_of(blueprint: Blueprint) -> TaskConfig:
+    (task,) = _module_kwargs(blueprint, OpenArmTeleopCoordinator)["tasks"]
+    assert isinstance(task, TaskConfig)
+    return task
+
+
+def test_combined_blueprint_streams_leader_joints_into_one_trajectory_task() -> None:
+    blueprint = mini_teleop.teleop_openarm_mini
     assert _module_types(blueprint) == [
         OpenArmMiniTeleopModule,
         OpenArmTeleopCoordinator,
         _OpenArmManipulationModule,
     ]
-
-    teleop_config = OpenArmMiniTeleopModuleConfig(
-        **_module_kwargs(blueprint, OpenArmMiniTeleopModule)
-    )
-    assert teleop_config.enabled_sides == enabled_sides
-
+    assert _is_name_unique(blueprint, "joint_command")
     coordinator_kwargs = _module_kwargs(blueprint, OpenArmTeleopCoordinator)
     assert coordinator_kwargs["instance_name"] == "ControlCoordinator"
-    tasks = coordinator_kwargs["tasks"]
-    assert len(tasks) == 1
-    task = tasks[0]
-    assert isinstance(task, TaskConfig)
+    task = _trajectory_task_of(blueprint)
     assert task.name == JOINT_TRAJECTORY_TASK_NAME
     assert task.type == "trajectory"
-
-    expected_joints = [joint for side in enabled_sides for joint in openarm_urdf_joints(side)]
-    assert task.joint_names == expected_joints
-    assert list(task.params["velocity_limits"]) == expected_joints
-    for side in enabled_sides:
-        assert task.joint_names[task.joint_names.index(f"openarm_{side}_joint1") :][:7] == list(
-            teleop_config.target_joint_names(side)
-        )
-
-    manipulation_kwargs = _module_kwargs(blueprint, _OpenArmManipulationModule)
-    assert manipulation_kwargs["visualization"] == {"backend": "viser"}
+    assert task.joint_names == _BOTH_ARMS
+    assert list(task.params["velocity_limits"]) == _BOTH_ARMS
+    assert _module_kwargs(blueprint, _OpenArmManipulationModule)["visualization"] == {
+        "backend": "viser"
+    }
 
 
-def test_right_openarm_mini_cli_port_override_preserves_right_side_default() -> None:
-    config = _teleop_config_after_cli_override(
-        mini_teleop.teleop_openarm_mini_right,
+def test_leader_ports_select_the_sides() -> None:
+    right_only = _teleop_config_after_cli_override(
+        mini_teleop.teleop_openarm_mini_leader,
         ["--openarmminiteleopmodule.port-right=/dev/ttyACM0"],
     )
+    assert right_only.sides() == ("right",)
+    assert right_only.port_right == "/dev/ttyACM0"
+    assert right_only.connection_baudrate() == OPENARM_MINI_DEFAULT_BAUDRATE
 
-    assert config.enabled_sides == ("right",)
-    assert config.port_right == "/dev/ttyACM0"
-    assert config.connection_baudrate() == OPENARM_MINI_DEFAULT_BAUDRATE
-
-
-def test_dual_openarm_mini_cli_overrides_reach_leader_ports_and_can_ports() -> None:
-    parsed = BlueprintConfigParser(mini_teleop.teleop_openarm_mini).parse(
+    both = _teleop_config_after_cli_override(
+        mini_teleop.teleop_openarm_mini,
         [
             "--openarmminiteleopmodule.port-left=/dev/ttyACM0",
             "--openarmminiteleopmodule.port-right=/dev/ttyACM1",
-            "--controlcoordinator.left-can-port=can0",
-            "--controlcoordinator.right-can-port=can1",
         ],
-        environ={},
     )
+    assert both.sides() == ("left", "right")
 
-    teleop_kwargs = _module_kwargs(mini_teleop.teleop_openarm_mini, OpenArmMiniTeleopModule).copy()
-    teleop_kwargs.update(parsed.module_kwargs(OpenArmMiniTeleopModule.name))
-    config = OpenArmMiniTeleopModuleConfig(**teleop_kwargs)
-    assert config.enabled_sides == ("left", "right")
-    assert config.port_left == "/dev/ttyACM0"
-    assert config.port_right == "/dev/ttyACM1"
+    explicit = _teleop_config_after_cli_override(
+        mini_teleop.teleop_openarm_mini_leader,
+        [
+            "--openarmminiteleopmodule.port-left=/dev/ttyACM0",
+            "--openarmminiteleopmodule.port-right=/dev/ttyACM1",
+            '--openarmminiteleopmodule.enabled-sides=["left"]',
+        ],
+    )
+    assert explicit.sides() == ("left",)
 
-    coordinator_kwargs = parsed.module_kwargs("ControlCoordinator")
-    assert coordinator_kwargs["left_can_port"] == "can0"
-    assert coordinator_kwargs["right_can_port"] == "can1"
 
-
-@pytest.mark.parametrize(
-    ("blueprint", "enabled_sides"),
-    [
-        pytest.param(mini_teleop.teleop_openarm_mini_leader, ("left", "right"), id="dual"),
-        pytest.param(mini_teleop.teleop_openarm_mini_leader_left, ("left",), id="left"),
-        pytest.param(mini_teleop.teleop_openarm_mini_leader_right, ("right",), id="right"),
-    ],
-)
-def test_leader_blueprints_publish_joint_command_on_its_own_topic(
-    blueprint: Blueprint,
-    enabled_sides: tuple[str, ...],
-) -> None:
+def test_leader_blueprint_joins_the_robot_bus_as_a_client() -> None:
+    blueprint = mini_teleop.teleop_openarm_mini_leader
     assert _module_types(blueprint) == [OpenArmMiniTeleopModule]
-    config = OpenArmMiniTeleopModuleConfig(**_module_kwargs(blueprint, OpenArmMiniTeleopModule))
-    assert config.enabled_sides == enabled_sides
     assert _is_name_unique(blueprint, "joint_command")
     assert blueprint.global_config_overrides["serve_coordinator_rpc"] is False
     assert blueprint.global_config_overrides["zenoh_mode"] == "client"
@@ -157,9 +122,18 @@ def test_follower_blueprint_consumes_joint_command_for_both_arms() -> None:
     blueprint = mini_teleop.teleop_openarm_mini_follower
     assert _module_types(blueprint) == [OpenArmTeleopCoordinator, _OpenArmManipulationModule]
     assert _is_name_unique(blueprint, "joint_command")
-    (task,) = _module_kwargs(blueprint, OpenArmTeleopCoordinator)["tasks"]
-    assert task.joint_names == [*openarm_urdf_joints("left"), *openarm_urdf_joints("right")]
+    assert _trajectory_task_of(blueprint).joint_names == _BOTH_ARMS
     assert blueprint.global_config_overrides["zenoh_connect"] == mini_teleop.OPENARM_ROUTER
     assert mini_teleop.OPENARM_ROUTER == "tcp/127.0.0.1:7447"
     visualization = _module_kwargs(blueprint, _OpenArmManipulationModule)["visualization"]
     assert visualization.host == "0.0.0.0"
+
+
+def test_follower_accepts_can_port_overrides() -> None:
+    parsed = BlueprintConfigParser(mini_teleop.teleop_openarm_mini_follower).parse(
+        ["--controlcoordinator.left-can-port=can1", "--controlcoordinator.right-can-port=can2"],
+        environ={},
+    )
+    kwargs = parsed.module_kwargs("ControlCoordinator")
+    assert kwargs["left_can_port"] == "can1"
+    assert kwargs["right_can_port"] == "can2"

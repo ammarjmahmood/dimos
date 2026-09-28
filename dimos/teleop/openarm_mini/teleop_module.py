@@ -57,8 +57,6 @@ class OpenArmMiniTeleopModuleConfig(ModuleConfig):
     calibration utility.
     """
 
-    # Default to one side so running the concrete module directly only requires
-    # one leader calibration/port override. Dual-arm blueprints opt into both.
     backend: Literal["openarm_mini"] = "openarm_mini"
     tick_period_s: float = Field(default=0.02, gt=0.0)
     port_left: str = OPENARM_MINI_UNCONFIGURED_PORT
@@ -68,13 +66,16 @@ class OpenArmMiniTeleopModuleConfig(ModuleConfig):
     baudrate: int = Field(default=OPENARM_MINI_DEFAULT_BAUDRATE, gt=0)
     max_joint_jump_radians: float = 0.75
     authority_active: bool = True
-    enabled_sides: tuple[OpenArmMiniSide, ...] = Field(default=("left",), min_length=1)
+    # Unset: the sides whose serial port is configured drive the follower.
+    enabled_sides: Annotated[tuple[OpenArmMiniSide, ...], Field(min_length=1)] | None = None
     target_joint_names_by_side: Mapping[OpenArmMiniSide, OpenArmMiniTargetJointNames] | None = None
 
     @model_validator(mode="after")
     def _validate_openarm_mini_config(self) -> Self:
         """Validate OpenArm Mini-specific configuration."""
-        if len(set(self.enabled_sides)) != len(self.enabled_sides):
+        if self.enabled_sides is not None and len(set(self.enabled_sides)) != len(
+            self.enabled_sides
+        ):
             raise ValueError("enabled_sides must not contain duplicate sides")
         return self
 
@@ -99,7 +100,16 @@ class OpenArmMiniTeleopModuleConfig(ModuleConfig):
 
     def sides(self) -> tuple[OpenArmMiniSide, ...]:
         """Return the selected leader sides in runtime order."""
-        return self.enabled_sides
+        if self.enabled_sides is not None:
+            return self.enabled_sides
+        configured: list[OpenArmMiniSide] = []
+        if self.port_left:
+            configured.append("left")
+        if self.port_right:
+            configured.append("right")
+        if not configured:
+            raise ValueError("configure port_left and/or port_right (or enabled_sides)")
+        return tuple(configured)
 
     def target_joint_names(self, side: OpenArmMiniSide) -> tuple[str, ...]:
         """Return the follower joint names emitted for a leader side."""
