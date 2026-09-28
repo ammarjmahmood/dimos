@@ -174,7 +174,7 @@ impl RegionBounds {
     }
 
     /// Whether `other` lies entirely inside this cylinder.
-    fn covers(&self, other: &RegionBounds) -> bool {
+    pub fn covers(&self, other: &RegionBounds) -> bool {
         self.covers_xy(other) && self.z_min <= other.z_min && other.z_max <= self.z_max
     }
 
@@ -291,13 +291,17 @@ struct MapLoad {
 }
 
 impl MapLoad {
-    fn new(tiles: Vec<MapTile>) -> Self {
-        MapLoad {
+    fn new(tiles: Vec<MapTile>, keep: &[RegionBounds]) -> Self {
+        let mut load = MapLoad {
             tiles,
             next: 0,
             regions: Vec::new(),
             started: Instant::now(),
+        };
+        for &bounds in keep {
+            load.region_applied(bounds);
         }
+        load
     }
 
     fn remaining(&self) -> usize {
@@ -511,16 +515,18 @@ impl Planner {
     }
 
     /// Queue a partitioned full map as a tiled load, nearest `center` first,
-    /// replacing any pending tiles. Returns the tile count.
+    /// replacing any pending tiles. Tiles leave the `keep` regions as they
+    /// are, like live regions applied during the load. Returns the tile count.
     pub fn start_load(
         &mut self,
         part: CloudPartition,
         center: (f32, f32),
+        keep: &[RegionBounds],
         config: &Config,
     ) -> usize {
         let tiles = self.finish_partition(part, center, config);
         let count = tiles.len();
-        self.load = (count > 0).then(|| MapLoad::new(tiles));
+        self.load = (count > 0).then(|| MapLoad::new(tiles, keep));
         count
     }
 

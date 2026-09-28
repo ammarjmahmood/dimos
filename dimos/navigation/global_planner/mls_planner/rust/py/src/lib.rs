@@ -165,7 +165,7 @@ impl MLSPlanner {
         let planner = &mut self.planner;
         Ok(py.allow_threads(|| {
             let part = partition_cloud(&pts, config.full_map_tile_m, config.voxel_size);
-            planner.start_load(part, center, config)
+            planner.start_load(part, center, &[], config)
         }))
     }
 

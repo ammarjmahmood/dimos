@@ -38,7 +38,7 @@ fn queue_load(
     cfg: &Config,
 ) -> usize {
     let part = partition_cloud(points, cfg.full_map_tile_m, cfg.voxel_size);
-    p.start_load(part, center, cfg)
+    p.start_load(part, center, &[], cfg)
 }
 
 fn finish_load(p: &mut Planner, cfg: &Config) {
@@ -70,6 +70,30 @@ fn test_config() -> Config {
         viz_publish_hz: 2.0,
         worker_threads: 4,
     }
+}
+
+#[test]
+fn region_bounds_capped_clamps_ceiling_to_sensor_overhead() {
+    // A ceiling above sensor_z + max_overhead is pulled down to the cap.
+    let capped = RegionBounds::capped(0.0, 0.0, 1.0, -1.0, 5.0, 0.5, 2.0);
+    assert_eq!(capped.z_max, 2.5, "ceiling capped to sensor_z + overhead");
+    // A ceiling already below the cap is left untouched.
+    let low = RegionBounds::capped(0.0, 0.0, 1.0, -1.0, 1.0, 0.5, 2.0);
+    assert_eq!(low.z_max, 1.0, "cap never raises a lower ceiling");
+    assert_eq!(low.z_min, -1.0);
+    assert_eq!(low.radius, 1.0);
+}
+
+#[test]
+fn step_cells_floors_to_a_hard_bound() {
+    let mut cfg = test_config();
+    cfg.voxel_size = 0.08;
+    // 0.15 / 0.08 = 1.875 floors to 1: a 2-voxel (0.16m) step exceeds 0.15m.
+    cfg.step_threshold_m = 0.15;
+    assert_eq!(cfg.step_cells(), 1);
+    // 0.20 / 0.08 = 2.5 floors to 2, so 2-voxel steps are allowed.
+    cfg.step_threshold_m = 0.20;
+    assert_eq!(cfg.step_cells(), 2);
 }
 
 /// Floor slab with a wall down the middle, as world-frame point centers.
@@ -962,12 +986,10 @@ fn map_load_skips_only_tiles_inside_applied_regions() {
         bounds: cyl(x, 0.0, 1.0),
         points: Vec::new(),
     };
-    p.load = Some(MapLoad::new(vec![
-        tile(0.0),
-        tile(2.0),
-        tile(4.0),
-        tile(6.0),
-    ]));
+    p.load = Some(MapLoad::new(
+        vec![tile(0.0), tile(2.0), tile(4.0), tile(6.0)],
+        &[],
+    ));
     assert!(matches!(
         p.apply_next_tile(&cfg),
         LoadStep::Applied { remaining: 3 }
@@ -989,7 +1011,7 @@ fn map_load_skips_only_tiles_inside_applied_regions() {
 
 #[test]
 fn map_load_keeps_only_regions_no_other_covers() {
-    let mut load = MapLoad::new(Vec::new());
+    let mut load = MapLoad::new(Vec::new(), &[]);
     load.region_applied(cyl(0.0, 0.0, 2.0));
     load.region_applied(cyl(0.5, 0.0, 1.0));
     assert_eq!(load.regions.len(), 1, "a covered region is dropped");
@@ -1123,6 +1145,40 @@ fn tile_straddling_a_live_region_keeps_what_live_saw() {
         "a straddling tile deleted what the live region saw"
     );
     assert_eq!(surface_set(&p), surface_set(&clean));
+}
+
+/// A live region applied after the snapshot but before its load starts
+/// survives the load when passed as a keep region.
+#[test]
+fn keep_region_protects_a_live_update_from_before_the_load() {
+    let cfg = test_config();
+    let vs = cfg.voxel_size;
+    let snapshot = boxed_world();
+    let cleared = big_world();
+    let live = straddling_live();
+
+    let loaded = |keep: &[RegionBounds]| {
+        let mut p = Planner::new(cfg.worker_threads);
+        p.update_global_map(&snapshot, &cfg);
+        p.update_region(&slice(&cleared, &live, vs), &live, &cfg);
+        let part = partition_cloud(&snapshot, cfg.full_map_tile_m, cfg.voxel_size);
+        p.start_load(part, (0.5, 0.5), keep, &cfg);
+        finish_load(&mut p, &cfg);
+        voxel_set(&p)
+    };
+
+    let mut clean = Planner::new(cfg.worker_threads);
+    clean.update_global_map(&cleared, &cfg);
+    assert_eq!(
+        loaded(&[live]),
+        voxel_set(&clean),
+        "the load pasted the snapshot over a kept live region"
+    );
+    assert_ne!(
+        loaded(&[]),
+        voxel_set(&clean),
+        "without the keep region the snapshot must come back"
+    );
 }
 
 /// A tile a capped live region covers must not paste the snapshot back

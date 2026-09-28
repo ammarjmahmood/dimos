@@ -95,7 +95,8 @@ class RayTracingVoxelMap(NativeModule, mapping.GlobalPointcloud):
     global_map: Out[PointCloud2]
     local_map: Out[PointCloud2]
     local_map_fine: Out[PointCloud2]
-    # Support-gated snapshot of the whole map, emitted once after the seed.
+    # Support-gated snapshot of the whole map, emitted after the seed and on
+    # each later loaded map.
     full_map: Out[PointCloud2]
     region_bounds: Out[PoseStamped]
 

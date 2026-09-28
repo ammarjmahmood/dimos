@@ -24,7 +24,6 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-import numpy as np
 import typer
 
 from dimos.mapping.ray_tracing.utils.loaded_map import LOADED_MAP_STREAM
@@ -36,11 +35,10 @@ from dimos.memory.store.sqlite import SqliteStore
 from dimos.memory.tf import StreamTF
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.robot.unitree.go2 import nav_3d_config
 from dimos.utils.data import resolve_named_path
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
-
     from dimos.msgs.geometry_msgs.Transform import Transform
 
 TIMELINE = "ts"
@@ -69,15 +67,8 @@ def fix_error(fix: Transform, recorded: Transform) -> tuple[float, float]:
     return dyaw, (fix.translation - recorded.translation).length()
 
 
-def place_premap(premap: NDArray[np.float32], fix: Transform) -> NDArray[np.float32]:
-    """Premap points moved into the world frame by a ``world -> map`` fix."""
-    m = fix.to_matrix()
-    placed: NDArray[np.float32] = (premap @ m[:3, :3].T + m[:3, 3]).astype(np.float32)
-    return placed
-
-
 def _recorded_fix(store: SqliteStore, world_frame: str, map_frame: str) -> Transform | None:
-    """The first ``world -> map`` edge the live run published, if the recording has one."""
+    """The first world -> map edge the live run published, if the recording has one."""
     if "tf" not in store.list_streams():
         return None
     for obs in store.stream("tf", TFMessage).order_by("ts"):
@@ -132,17 +123,12 @@ def replay(
     tf = StreamTF.from_store(store)
     if tf is None:
         raise typer.BadParameter("the recording has no tf stream to register clouds from")
-    lidar = store.stream(lidar_stream, PointCloud2).order_by("ts")
-    if from_time is not None:
-        lidar = lidar.from_time(from_time)
-    if to_time is not None:
-        lidar = lidar.to_time(to_time)
+    lidar = store.stream(lidar_stream, PointCloud2).order_by("ts").range_time(from_time, to_time)
     ray = RayTraceMap(voxel_size=voxel_size)
     frames = lidar.transform(pose_from_tf(tf, world_frame)).transform(ray)
 
     relocalizer = LidarRelocalizer(premap.pointcloud, PRESETS[preset])
     recorded = _recorded_fix(store, world_frame, MAP_FRAME)
-    premap_pts = premap.points_f32()
 
     attempts: list[Attempt] = []
     fix: Transform | None = None
@@ -169,12 +155,12 @@ def replay(
             continue
         fix, fix_ts = fix_attempt.fix, obs.ts
         stop_at = obs.ts + after_s
-        log_loaded_map(place_premap(premap_pts, fix))
+        log_loaded_map(premap.transform(fix).points_f32())
         if recorded is not None:
             rr.log(
                 "world/recorded_map",
                 rr.Points3D(
-                    place_premap(premap_pts, recorded),
+                    premap.transform(recorded).points_f32(),
                     colors=[RECORDED_MAP_COLOR],
                     radii=PREMAP_POINT_RADIUS,
                 ),
@@ -190,9 +176,7 @@ def write_loaded_map(
     if stream.count() > 0:
         print(f"{LOADED_MAP_STREAM} already has {stream.count()} messages, leaving it")
         return False
-    placed = PointCloud2.from_numpy(
-        place_premap(premap.points_f32(), fix), frame_id=world_frame, timestamp=ts
-    )
+    placed = PointCloud2(pointcloud=premap.transform(fix).pointcloud, frame_id=world_frame, ts=ts)
     stream.append(placed, ts=ts)
     print(f"wrote {len(placed)} placed premap points to {LOADED_MAP_STREAM} at {ts:.3f}")
     return True
@@ -229,7 +213,9 @@ def main(
         "--min-local-points",
         help="Local map points below which an attempt is skipped",
     ),
-    voxel_size: float = typer.Option(0.08, "--voxel-size", help="Live map voxel size (m)"),
+    voxel_size: float = typer.Option(
+        nav_3d_config.voxel_size, "--voxel-size", help="Live map voxel size (m)"
+    ),
     after: float = typer.Option(
         10.0, "--after", help="Seconds of live map to keep logging after the fix, for the overlay"
     ),

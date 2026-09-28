@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use crate::mapper::{register, Mapper, Pose};
 use crate::voxel_ray_tracer::{partition_seed, Config, SeedPartition, SeedTile};
 use dimos_module::pointcloud::extract_xyz;
-use dimos_module::time::now;
 use dimos_module::{error_throttled, warn_throttled, Input, Module, Output, Tf, Transform};
 use lcm_msgs::geometry_msgs::{Point, Pose as PoseMsg, PoseStamped, Quaternion};
 use lcm_msgs::sensor_msgs::{PointCloud2, PointField};
@@ -25,7 +24,7 @@ use lcm_msgs::std_msgs::{Header, Time};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Messages queued to the worker in arrival order.
 enum Job {
@@ -168,6 +167,9 @@ struct State {
     // Stamp of the last applied clear mask, so a late one cannot erase voxels
     // a newer mask already accounted for.
     last_clear_mask_stamp: f64,
+    // Stamp of the last lidar frame folded in, which is what a full map
+    // snapshot is current as of.
+    last_frame_stamp: Time,
     seed: SeedState,
 }
 
@@ -193,6 +195,7 @@ impl Worker {
         let mut state = State {
             mapper: Mapper::new(self.config.clone()),
             last_clear_mask_stamp: 0.0,
+            last_frame_stamp: Time::default(),
             seed: SeedState::Idle,
         };
         loop {
@@ -298,6 +301,7 @@ impl Worker {
 
         let out_frame_id = self.config.world_frame.as_str();
         let stamp = msg.header.stamp;
+        state.last_frame_stamp = stamp.clone();
 
         // Bounds pair with local_map by stamp, so publish them on its cadence.
         if let Some(c) = region {
@@ -451,7 +455,6 @@ impl Worker {
             let tile_start = Instant::now();
             load.created += tokio::task::block_in_place(|| mapper.seed_tile(tile));
             let tile_ms = tile_start.elapsed().as_secs_f64() * 1e3;
-            debug!(tile = load.next, tile_ms, "seed tile applied");
             load.next += 1;
             load.max_tile_ms = load.max_tile_ms.max(tile_ms);
             load.sum_tile_ms += tile_ms;
@@ -485,11 +488,15 @@ impl Worker {
         self.publish_full_map(state).await;
     }
 
-    /// Publish the support-gated whole map as it stands now.
+    /// Publish the support-gated whole map, stamped with the last frame in it.
     async fn publish_full_map(&self, state: &State) {
         let mapper = &state.mapper;
         let full = tokio::task::block_in_place(|| mapper.full_points());
-        let cloud = points_to_cloud(&full, &self.config.world_frame, now());
+        let cloud = points_to_cloud(
+            &full,
+            &self.config.world_frame,
+            state.last_frame_stamp.clone(),
+        );
         publish_cloud(&self.full_map, &cloud).await;
     }
 }
@@ -681,7 +688,7 @@ mod tests {
         let created: usize = part.tiles.iter().map(|tile| mapper.seed_tile(tile)).sum();
         assert_eq!(created, 1);
 
-        let full = points_to_cloud(&mapper.full_points(), "odom", now());
+        let full = points_to_cloud(&mapper.full_points(), "odom", Time::default());
         assert!(cloud_points(&full).contains(&voxel_center(10, 3, 0)));
     }
 

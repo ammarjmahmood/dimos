@@ -20,7 +20,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from dimos.mapping.ray_tracing.utils.loaded_map import LOADED_MAP_STREAM
-from dimos.mapping.relocalization.lidar.replay import fix_error, place_premap, write_loaded_map
+from dimos.mapping.relocalization.lidar.replay import fix_error, write_loaded_map
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -31,12 +31,6 @@ def _fix(yaw_deg: float, x: float = 0.0, y: float = 0.0) -> Transform:
     m[:3, :3] = Rotation.from_euler("z", yaw_deg, degrees=True).as_matrix()
     m[0, 3], m[1, 3] = x, y
     return Transform.from_matrix(m, frame_id="odom", child_frame_id="map")
-
-
-def test_place_premap_applies_the_fix_to_every_point() -> None:
-    pts = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
-    placed = place_premap(pts, _fix(90.0, x=1.0))
-    np.testing.assert_allclose(placed, [[1, 1, 0], [0, 0, 0]], atol=1e-6)
 
 
 def test_fix_error_wraps_yaw_and_measures_translation() -> None:
@@ -57,7 +51,8 @@ def test_write_loaded_map_writes_once(tmp_path: Path) -> None:
         assert stream.count() == 1
         written = stream.first()
         assert written.data.frame_id == "odom"
-        np.testing.assert_allclose(written.data.points_f32(), place_premap(pts, fix), atol=1e-6)
+        assert written.ts == 5.0
+        np.testing.assert_allclose(written.data.points_f32(), [[1, 1, 0], [0, 0, 0]], atol=1e-6)
 
         assert write_loaded_map(store, premap, fix, 6.0, "odom") is False
         assert stream.count() == 1

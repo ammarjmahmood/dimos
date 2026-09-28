@@ -123,6 +123,20 @@ def test_seed_points_creates_only_absent_voxels() -> None:
     assert mapper.seed_points(cloud) == 0
 
 
+def test_full_map_drops_unsupported_voxels() -> None:
+    mapper = VoxelRayMapper(voxel_size=1.0, max_range=100.0, min_health=0, support_min=4)
+    coords = np.arange(5, dtype=np.float32) + 0.5
+    slab = np.array([(x, y, 0.5) for x in coords for y in coords], dtype=np.float32)
+    lone = np.array([[20.5, 20.5, 0.5]], dtype=np.float32)
+    mapper.seed_points(np.vstack([slab, lone]))
+
+    full = mapper.full_map()
+    assert full.shape[1] == 3
+    assert full.dtype == np.float32
+    assert any(np.allclose(p, [2.5, 2.5, 0.5]) for p in full)
+    assert not any(np.allclose(p, lone[0]) for p in full)
+
+
 def test_add_frame_world_registers_at_world_coordinates() -> None:
     mapper = make_mapper()
     points = np.array([[105.55, 200.05, 3.05]], dtype=np.float32)

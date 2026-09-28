@@ -45,6 +45,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
 from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
 from dimos.navigation.global_planner.mls_planner.mls_planner import MLSPlanner
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNativeConfig
 from dimos.navigation.global_planner.mls_planner.viz import graph_edges, graph_nodes, surface_points
 from dimos.navigation.global_planner.viz import (
     PATH_COLOR,
@@ -514,7 +515,9 @@ def main(
         help="Stream holding a map cloud to seed at its timestamp, placed by tf, when present",
     ),
     tile_m: float = typer.Option(
-        4.0, "--tile-m", help="Tile grid spacing (m) for loading the seeded map into the planner"
+        MLSPlannerNativeConfig.model_fields["full_map_tile_m"].default,
+        "--tile-m",
+        help="Tile grid spacing (m) for loading the seeded map into the planner",
     ),
     live: bool = typer.Option(
         False, "--live", help="Also spawn the rerun viewer when --out is set"

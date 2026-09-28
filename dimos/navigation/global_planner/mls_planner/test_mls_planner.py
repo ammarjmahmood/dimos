@@ -103,3 +103,18 @@ def test_full_rebuild_drops_a_pending_load() -> None:
     assert planner.start_full_map_load(flat_floor(), (0.0, 0.0)) > 1
     planner.update_global_map(flat_floor())
     assert planner.apply_full_map_tile() is None
+
+
+def test_full_map_load_counts_down_to_zero_then_none() -> None:
+    planner = make_planner()
+    counts = [planner.start_full_map_load(flat_floor(), (0.0, 0.0))]
+    while (remaining := planner.apply_full_map_tile()) is not None:
+        counts.append(remaining)
+    assert counts == list(range(counts[0], -1, -1))
+    assert counts[0] > 1
+
+    rebuilt = make_planner()
+    rebuilt.update_global_map(flat_floor())
+    np.testing.assert_array_equal(
+        np.unique(planner.surface_map(), axis=0), np.unique(rebuilt.surface_map(), axis=0)
+    )

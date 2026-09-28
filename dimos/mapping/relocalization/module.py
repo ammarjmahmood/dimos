@@ -149,8 +149,12 @@ class RelocalizationModule(Module):
             f"got {tf.frame_id!r} -> {tf.child_frame_id!r}"
         )
         logger.info(
-            f"relocalize {source}: TF {world!r} -> {map_frame!r} "
-            f"t={tf.translation} yaw={yaw_deg(tf):.1f}deg"
+            "relocalize fix",
+            source=source,
+            world=world,
+            map_frame=map_frame,
+            translation=str(tf.translation),
+            yaw_deg=round(yaw_deg(tf), 1),
         )
         self.fixes.on_next(tf)
         if not self._placed and self.config.relocalize_once:
