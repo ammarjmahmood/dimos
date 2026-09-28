@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from pydantic import ValidationError
 import pytest
 
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_safety import (
+from dimos.control.sonic.sonic_safety import (
     COMMAND_TIMEOUT_SECONDS,
     DAMPING_KD,
 )

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.control.components import make_humanoid_joints
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_safety import (
+from dimos.control.sonic.sonic_safety import (
     DAMPING_KD,
     FEEDBACK_TIMEOUT_SECONDS,
     JOINT_VELOCITY_LIMIT,
