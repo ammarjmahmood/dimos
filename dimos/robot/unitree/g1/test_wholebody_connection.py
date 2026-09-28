@@ -250,13 +250,14 @@ def test_stale_feedback_or_commands_force_damping(connection, clock, fresh_feedb
     assert connection.command_stream_status()["fault_reason"] == reason
 
 
-def test_shutdown_before_handoff_does_not_publish_motor_commands(connection):
+@pytest.mark.parametrize("handed_off, modes", [(False, []), (True, [[0] * 29])])
+def test_shutdown_only_sends_motor_disable_after_handoff(connection, handed_off, modes):
     publisher = _wire(connection, soft_start_seconds=0.0)
-    connection._sport_mode_released = False
+    connection._sport_mode_released = handed_off
 
     connection.stop()
 
-    assert publisher.frames == []
+    assert publisher.modes == modes
 
 
 def test_missing_first_feedback_is_reported_without_taking_control(connection, mocker):
