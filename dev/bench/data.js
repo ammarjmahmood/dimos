@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790617095527,
+  "lastUpdate": 1790623708578,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -680,6 +680,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "disk write",
             "value": 753.289,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6af76384c31757d09b739752cce7fd3fed92b941",
+          "message": "build(deps): bump the actions group across 1 directory with 4 updates (#4259)\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-28T20:24:23+01:00",
+          "tree_id": "044eae0e38d5ef6d8903878b47c415eebc8950fe",
+          "url": "https://github.com/dimensionalOS/dimos/commit/6af76384c31757d09b739752cce7fd3fed92b941"
+        },
+        "date": 1790623707634,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 10.59,
+            "unit": "s"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 23.019,
+            "unit": "s"
+          },
+          {
+            "name": "run cpu",
+            "value": 32.16,
+            "unit": "s"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 24.499,
+            "unit": "s"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 7.662,
+            "unit": "s"
+          },
+          {
+            "name": "peak memory",
+            "value": 2700.871,
+            "unit": "MB"
+          },
+          {
+            "name": "peak threads",
+            "value": 402,
+            "unit": "threads"
+          },
+          {
+            "name": "disk read",
+            "value": 29.078,
+            "unit": "MB"
+          },
+          {
+            "name": "disk write",
+            "value": 740.523,
             "unit": "MB"
           }
         ]
