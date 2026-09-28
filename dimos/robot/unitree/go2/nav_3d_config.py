@@ -15,7 +15,7 @@
 """The ray tracer and MLS planner settings every Go2 nav_3d blueprint shares."""
 
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMapConfig
-from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNativeConfig
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNativeConfig
 from dimos.robot.unitree.go2.constants import BASE_LINK_HEIGHT, ROBOT_HEIGHT
 
 voxel_size = 0.08

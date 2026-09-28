@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use crate::mapper::{register, Mapper, Pose};
 use crate::voxel_ray_tracer::{partition_seed, Config, SeedPartition, SeedTile};
+use dimos_module::pointcloud::extract_xyz;
 use dimos_module::time::now;
 use dimos_module::{error_throttled, warn_throttled, Input, Module, Output, Tf, Transform};
 use lcm_msgs::geometry_msgs::{Point, Pose as PoseMsg, PoseStamped, Quaternion};
@@ -266,7 +267,7 @@ impl Worker {
             return;
         };
         let points = match extract_xyz(&msg) {
-            Ok(p) => p,
+            Ok(p) => p.into_iter().map(|[x, y, z]| (x, y, z)).collect::<Vec<_>>(),
             Err(e) => {
                 warn_throttled!(
                     Duration::from_secs(1),
@@ -375,7 +376,7 @@ impl Worker {
             return;
         }
         let points = match extract_xyz(&msg) {
-            Ok(p) => p,
+            Ok(p) => p.into_iter().map(|[x, y, z]| (x, y, z)).collect::<Vec<_>>(),
             Err(e) => {
                 warn_throttled!(
                     Duration::from_secs(1),
@@ -502,7 +503,7 @@ fn prepare_seed(
     origin: (f32, f32, f32),
 ) -> Option<SeedPartition> {
     let mut points = match extract_xyz(msg) {
-        Ok(p) => p,
+        Ok(p) => p.into_iter().map(|[x, y, z]| (x, y, z)).collect::<Vec<_>>(),
         Err(e) => {
             warn!(error = %e, "Failed to get loaded map points, dropped a cloud.");
             return None;
@@ -538,72 +539,6 @@ fn tf_to_pose(t: &Transform) -> Pose {
             rotation.coords.w,
         ),
     }
-}
-
-struct ExtractError(&'static str);
-impl std::fmt::Display for ExtractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-fn extract_xyz(msg: &PointCloud2) -> Result<Vec<(f32, f32, f32)>, ExtractError> {
-    let mut x_off: Option<usize> = None;
-    let mut y_off: Option<usize> = None;
-    let mut z_off: Option<usize> = None;
-    for f in &msg.fields {
-        if f.datatype != PointField::FLOAT32 as u8 {
-            continue;
-        }
-        match f.name.as_str() {
-            "x" => x_off = Some(f.offset as usize),
-            "y" => y_off = Some(f.offset as usize),
-            "z" => z_off = Some(f.offset as usize),
-            _ => {}
-        }
-    }
-    let xo = x_off.ok_or(ExtractError("missing float32 x field"))?;
-    let yo = y_off.ok_or(ExtractError("missing float32 y field"))?;
-    let zo = z_off.ok_or(ExtractError("missing float32 z field"))?;
-
-    let n = (msg.width as usize) * (msg.height as usize);
-    let step = msg.point_step as usize;
-    if step == 0 {
-        return Err(ExtractError("point_step is 0"));
-    }
-    if msg.data.len() < n * step {
-        return Err(ExtractError(
-            "data buffer shorter than width*height*point_step",
-        ));
-    }
-    if xo + 4 > step || yo + 4 > step || zo + 4 > step {
-        return Err(ExtractError(
-            "xyz field offsets do not fit within point_step",
-        ));
-    }
-    if msg.is_bigendian {
-        return Err(ExtractError("big-endian point data not supported"));
-    }
-
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let base = i * step;
-        let x = read_f32_le(&msg.data, base + xo);
-        let y = read_f32_le(&msg.data, base + yo);
-        let z = read_f32_le(&msg.data, base + zo);
-        if x.is_finite() && y.is_finite() && z.is_finite() {
-            out.push((x, y, z));
-        }
-    }
-    Ok(out)
-}
-
-#[inline]
-fn read_f32_le(buf: &[u8], off: usize) -> f32 {
-    let bytes: [u8; 4] = buf[off..off + 4]
-        .try_into()
-        .expect("bounds checked by caller");
-    f32::from_le_bytes(bytes)
 }
 
 fn write_point(data: &mut Vec<u8>, n: &mut i32, x: f32, y: f32, z: f32) {
@@ -765,6 +700,7 @@ mod tests {
         let Ok(points) = extract_xyz(&cloud) else {
             panic!("clear mask cloud must decode");
         };
+        let points: Vec<(f32, f32, f32)> = points.into_iter().map(|[x, y, z]| (x, y, z)).collect();
         let keys: Vec<VoxelKey> = metric_voxel_keys(points, 1.0).collect();
 
         assert_eq!(keys, occupied);

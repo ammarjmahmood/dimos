@@ -20,7 +20,7 @@ dimos run unitree-go2-nav-3d-relocalization-replay --map-file=<premap stem>
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.hardware.sensors.lidar.pointlio.module import PointLio
 from dimos.mapping.relocalization.blueprints import RecordingPlayer
-from dimos.navigation.basic_path_follower.module import BasicPathFollower
+from dimos.navigation.trajectory_follower.basic.module import BasicPathFollower
 from dimos.robot.unitree.go2.blueprints.navigation.unitree_go2_nav_3d import (
     unitree_go2_nav_3d_relocalization,
 )
