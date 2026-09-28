@@ -38,11 +38,11 @@ PERCEPTION_MODULES = (
 
 SCENE = (
     "The table top is at z=0.12 m in the world frame and spans roughly x=0.30 to 0.60 m "
-    "ahead of the arm base. A red ball about 8 cm wide rests near x=0.40 m, y=0.08 m. A "
-    "cylinder about 7 cm wide and 12 cm tall stands near x=0.50 m, y=0. Look through the "
-    "wrist camera whenever you need to check where things are. The gripper starts pointing "
-    "straight down: for top-down moves omit roll/pitch/yaw in move_to_pose to keep the "
-    "current orientation, or pass roll=3.1416, pitch=0. roll=pitch=yaw=0 points the gripper up."
+    "ahead of the arm base. On it are a red ball about 8 cm wide and a cylinder about 7 cm "
+    "wide and 12 cm tall; find where they are by looking through the wrist camera. The "
+    "gripper starts pointing straight down: for top-down moves omit roll/pitch/yaw in "
+    "move_to_pose to keep the current orientation, or pass roll=3.1416, pitch=0. "
+    "roll=pitch=yaw=0 points the gripper up."
 )
 
 
