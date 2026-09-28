@@ -24,8 +24,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import typer
 
 from dimos.mapping.hyperspace.ingest import (
@@ -39,10 +40,14 @@ from dimos.mapping.hyperspace.ingest import (
     patch_stream_for,
     stream_names,
     thumbnail_stream_for,
+    transform_to_matrix,
 )
 from dimos.mapping.hyperspace.siglip_embedder import PatchEnsemble
+from dimos.memory.tf import StreamTF
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from dimos.memory.store.base import Store
 
 TIMELINE = "ts"
