@@ -19,7 +19,6 @@ import numpy as np
 import pytest
 
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
-from dimos.evals.environments import mujoco_sim
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 from dimos.memory.store.memory import MemoryStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -41,7 +40,7 @@ def _tf(ts: float, child: str, z: float) -> TFMessage:
 
 
 def test_launch_flags(monkeypatch):
-    monkeypatch.setattr(mujoco_sim, "_MACOS", False)
+    monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
     env = environment(tracked_bodies=("apple", "cup"))
     proc = DimosCliCall()
     env.configure_launch(proc)
@@ -54,36 +53,25 @@ def test_launch_flags(monkeypatch):
     ]
 
     proc = DimosCliCall()
-    environment(headless=False).configure_launch(proc)
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "false"
+    environment().configure_launch(proc)
     assert "MUJOCOSIMMODULE__TRACKED_BODIES" not in proc.extra_env
 
+    monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")  # a Linux shell asking for the viewer
     proc = DimosCliCall()
     environment(
-        module_env={
-            "OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe",
-            "MUJOCOSIMMODULE__HEADLESS": "false",  # the explicit headless field wins
-        }
+        module_env={"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}
     ).configure_launch(proc)
+    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "false"
     assert proc.extra_env["OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND"] == "yoloe"
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
-
-
-def test_macos_never_asks_for_a_viewer(monkeypatch):
-    monkeypatch.setattr(mujoco_sim, "_MACOS", True)
-    proc = DimosCliCall()
-    environment(headless=False).configure_launch(proc)
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
 
 
 def test_module_env_reaches_blueprint_parser(monkeypatch):
-    monkeypatch.setattr(mujoco_sim, "_MACOS", False)
+    monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
     from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
     from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
 
     proc = DimosCliCall()
     environment(
-        headless=False,
         tracked_bodies=("apple", "cup"),
         module_env={
             "OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "owlv2",
@@ -95,7 +83,7 @@ def test_module_env_reaches_blueprint_parser(monkeypatch):
     assert perception["detector_backend"] == "owlv2"
     assert perception["segmentation_backend"] == "yolo"
     sim = parsed.module_kwargs("mujocosimmodule")
-    assert sim["headless"] is False  # the environment beats the blueprint's pinned value
+    assert sim["headless"] is True  # the environment beats the blueprint's pinned value
     assert sim["tracked_bodies"] == ["apple", "cup"]
 
 
@@ -171,7 +159,7 @@ def test_launch_and_cleanup(tmp_path, mocker):
             "--disable",
             "rerun-bridge-module",
         ]
-        assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
+        assert "MUJOCOSIMMODULE__HEADLESS" in proc.extra_env
         ready.assert_called_once()
         episode = json.loads(result.artifacts["episode"].read_text())
         assert episode["backend"] == "mujoco"

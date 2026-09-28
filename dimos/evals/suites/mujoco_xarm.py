@@ -51,7 +51,6 @@ def environment() -> MujocoEnvironment:
         blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
         disable=PERCEPTION_MODULES,
         tracked_bodies=TRACKED,
-        headless=False,
     )
 
 

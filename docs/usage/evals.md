@@ -427,7 +427,8 @@ The metadata's `point_cloud_source` describes how Habitat scans are generated
 
 For MuJoCo, the blueprint brings its own `MujocoSimModule` and scene, so the
 environment only launches `dimos --simulation mujoco --record run <blueprint>
-<modules>` headless. Manipulation graders need ground-truth object poses:
+<modules>` headless; `MUJOCOSIMMODULE__HEADLESS=false` in the shell opens the viewer on
+Linux. Manipulation graders need ground-truth object poses:
 `tracked_bodies` names free bodies in the MJCF, and the simulator publishes
 `world -> <body>` on `tf` next to its camera frames. `first_body_transform` and
 `last_body_transform` read them back from the recording:

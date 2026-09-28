@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import json
-import sys
+import os
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -25,7 +25,6 @@ from pydantic import Field
 
 from dimos.evals.environments.lib.body_poses import last_body_transform
 from dimos.evals.environments.sim import Sim, SimConfig
-from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,9 +33,6 @@ if TYPE_CHECKING:
     from dimos.memory.store.base import Store
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
-logger = setup_logger()
-
-_MACOS = sys.platform == "darwin"  # MuJoCo's viewer needs mjpython there, which a worker is not
 
 _READY_STREAMS = ("color_image", "coordinator_joint_state")
 # What graders and readiness read; depth_image is float32, which the JPEG recorder rejects.
@@ -44,8 +40,6 @@ _RECORDED_TOPICS = ("color_image", "camera_info", "coordinator_joint_state", "tf
 
 
 class MujocoEnvironmentConfig(SimConfig):
-    # Run the simulator without its viewer window.
-    headless: bool = True
     # Free bodies whose world pose the simulator publishes on tf for the graders.
     tracked_bodies: tuple[str, ...] = ()
     # Joint speed below which the robot counts as at rest while settling.
@@ -64,14 +58,13 @@ class MujocoEnvironment(Sim):
         self._initial_body_positions: dict[str, list[float]] = {}
 
     def configure_launch(self, proc: DimosCliCall) -> None:
-        headless = self.config.headless
-        if not headless and _MACOS:
-            logger.warning("MuJoCo's viewer needs mjpython on macOS; running the sim headless")
-            headless = True
         proc.simulator = "mujoco"
         proc.global_args = ["--record-topics", ",".join(_RECORDED_TOPICS)]
         proc.extra_env.update(self.config.module_env)
-        proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] = json.dumps(headless)
+        # Headless unless the shell asks for the viewer (MUJOCOSIMMODULE__HEADLESS=false on Linux).
+        proc.extra_env.setdefault(
+            "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
+        )
         if self.config.tracked_bodies:
             proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"] = json.dumps(
                 list(self.config.tracked_bodies)
@@ -144,7 +137,6 @@ class MujocoEnvironment(Sim):
         return {
             "backend": "mujoco",
             "blueprint": list(self.config.blueprint),
-            "headless": self.config.headless,
             "tracked_bodies": list(self.config.tracked_bodies),
             "module_env": dict(self.config.module_env),
             "initial_body_positions": self._initial_body_positions,
