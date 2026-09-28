@@ -110,7 +110,6 @@ def test_ready_needs_fresh_streams_and_tracked_body_poses():
         )
         store.stream("tf", TFMessage).append(_tf(now, "apple", 0.17))
         env.wait_ready(store, deadline=time.monotonic() + 2.0)
-        assert env.episode_metadata()["initial_body_positions"] == {"apple": [0.4, 0.08, 0.17]}
 
 
 def test_settle_waits_for_joints_to_stop():
@@ -161,9 +160,7 @@ def test_launch_and_cleanup(tmp_path, mocker):
         ]
         assert "MUJOCOSIMMODULE__HEADLESS" in proc.extra_env
         ready.assert_called_once()
-        episode = json.loads(result.artifacts["episode"].read_text())
-        assert episode["backend"] == "mujoco"
-        assert episode["tracked_bodies"] == ["apple"]
+        assert set(result.artifacts) == {"recording"}
     finally:
         env.stop()
     proc.stop.assert_called_once()

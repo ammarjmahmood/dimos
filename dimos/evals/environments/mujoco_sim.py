@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import Field
 
@@ -53,10 +53,6 @@ class MujocoEnvironment(Sim):
 
     config: MujocoEnvironmentConfig
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._initial_body_positions: dict[str, list[float]] = {}
-
     def configure_launch(self, proc: DimosCliCall) -> None:
         proc.simulator = "mujoco"
         proc.global_args = ["--record-topics", ",".join(_RECORDED_TOPICS)]
@@ -72,9 +68,7 @@ class MujocoEnvironment(Sim):
 
     def prepare_recording(self, recording: Store, path: Path, deadline: float) -> dict[str, Path]:
         self.wait_ready(recording, deadline=deadline)
-        metadata = path.parent / "mujoco_episode.json"
-        metadata.write_text(json.dumps(self.episode_metadata(), indent=2))
-        return {"episode": metadata}
+        return {}
 
     def wait_ready(self, recording: Store, *, deadline: float) -> None:
         """Wait for fresh samples on every ready stream and a pose for every tracked body."""
@@ -86,14 +80,11 @@ class MujocoEnvironment(Sim):
                     for name in _READY_STREAMS
                     if name in recording.streams
                 ]
-                poses = {
-                    body: last_body_transform(recording, body).translation
-                    for body in self.config.tracked_bodies
-                }
+                for body in self.config.tracked_bodies:
+                    last_body_transform(recording, body)
             except (LookupError, AttributeError):
-                ages, poses = [], {}
+                ages = []
             if len(ages) == len(_READY_STREAMS) and all(age < 10.0 for age in ages):
-                self._initial_body_positions = {body: [t.x, t.y, t.z] for body, t in poses.items()}
                 return
             time.sleep(0.1)
         raise TimeoutError(
@@ -132,12 +123,3 @@ class MujocoEnvironment(Sim):
             elif now - rest_since >= self.config.at_rest_s:
                 return
             time.sleep(self.config.settle_poll_s)
-
-    def episode_metadata(self) -> dict[str, object]:
-        return {
-            "backend": "mujoco",
-            "blueprint": list(self.config.blueprint),
-            "tracked_bodies": list(self.config.tracked_bodies),
-            "module_env": dict(self.config.module_env),
-            "initial_body_positions": self._initial_body_positions,
-        }

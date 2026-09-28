@@ -21,9 +21,7 @@ planner skills and the wrist camera only, graded on the bodies' recorded poses.
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
 import math
-from pathlib import Path
 
 from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
@@ -56,24 +54,13 @@ def environment() -> MujocoEnvironment:
     )
 
 
-def _settled_z(outcome: Outcome, body: str) -> float | None:
-    """The body's height once the sim was ready, from the environment's episode metadata."""
-    episode = outcome.artifacts.get("episode")
-    if episode is None:
-        return None
-    position = json.loads(Path(episode).read_text()).get("initial_body_positions", {}).get(body)
-    return None if position is None else float(position[2])
-
-
 def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
-    """How far the body ended above where it rested, full credit at ``by_m``."""
+    """How far the body ended above where it started, full credit at ``by_m``."""
 
     def grade(outcome: Outcome) -> float:
         with recording(outcome) as store:
             try:
-                start = _settled_z(outcome, body)
-                if start is None:
-                    start = first_body_transform(store, body).translation.z
+                start = first_body_transform(store, body).translation.z
                 end = last_body_transform(store, body).translation.z
             except LookupError:
                 return 0.0
@@ -83,9 +70,10 @@ def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
 
 
 def stacked_on(
-    top: str, base: str, *, min_rise_m: float, band_m: float
+    top: str, base: str, *, rise_m: tuple[float, float], band_m: float
 ) -> Callable[[Outcome], float]:
-    """``top`` ended at least ``min_rise_m`` above ``base``: 1.0 centred, 0.0 at ``band_m`` off."""
+    """``top`` ended resting on ``base``: its centre ``rise_m`` above the base's, 1.0 centred and
+    0.0 at ``band_m`` off. A body held higher than the resting height scores 0.0."""
 
     def grade(outcome: Outcome) -> float:
         with recording(outcome) as store:
@@ -94,7 +82,7 @@ def stacked_on(
                 b = last_body_transform(store, base).translation
             except LookupError:
                 return 0.0
-        if t.z - b.z < min_rise_m:
+        if not rise_m[0] <= t.z - b.z <= rise_m[1]:
             return 0.0
         return ramp(math.hypot(t.x - b.x, t.y - b.y), band=band_m)
 
@@ -114,7 +102,8 @@ SUITE: Suite = [
         id="xarm_ball_on_cylinder",
         inputs=f"Pick up the red ball and place it on top of the cylinder. {SCENE}",
         environment=environment(),
-        grade=stacked_on("apple", "cup", min_rise_m=0.06, band_m=0.07),
+        # A 4 cm ball resting on the 6 cm-half-height cylinder sits 10 cm above its centre.
+        grade=stacked_on("apple", "cup", rise_m=(0.08, 0.12), band_m=0.07),
         timeout_s=900.0,
         threshold=0.5,  # within 3.5 cm of the cylinder's axis
         tags=frozenset({"mujoco", "manipulation", "pick", "place"}),

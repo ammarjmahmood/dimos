@@ -1003,15 +1003,16 @@ class MujocoSimModule(
                     child_frame_id=self._camera_link,
                     ts=ts,
                 ),
-                *self._body_transforms(ts),
+                *self._body_transforms(),
             )
         )
 
-    def _body_transforms(self, ts: float) -> list[Transform]:
+    def _body_transforms(self) -> list[Transform]:
         """World poses of ``tracked_bodies``; a name missing from the model is skipped after one warning."""
         engine = self._engine
         if engine is None or not self.config.tracked_bodies:
             return []
+        ts = time.time()  # read now, not at the camera frame's capture
         transforms: list[Transform] = []
         for name in self.config.tracked_bodies:
             pose = engine.get_body_pose(name)
