@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
+_MACOS = sys.platform == "darwin"  # MuJoCo's viewer needs mjpython there, which a worker is not
+
 _READY_STREAMS = ("color_image", "coordinator_joint_state")
 # What graders and readiness read; depth_image is float32, which the JPEG recorder rejects.
 _RECORDED_TOPICS = ("color_image", "camera_info", "coordinator_joint_state", "tf", "odom")
@@ -62,15 +64,14 @@ class MujocoEnvironment(Sim):
         self._initial_body_positions: dict[str, list[float]] = {}
 
     def configure_launch(self, proc: DimosCliCall) -> None:
-        if not self.config.headless and sys.platform == "darwin":
-            logger.warning(
-                "MuJoCo viewer needs mjpython on macOS: no window; the sim runs headless. "
-                "Keep rerun-bridge-module enabled to watch the camera and frames."
-            )
+        headless = self.config.headless
+        if not headless and _MACOS:
+            logger.warning("MuJoCo's viewer needs mjpython on macOS; running the sim headless")
+            headless = True
         proc.simulator = "mujoco"
         proc.global_args = ["--record-topics", ",".join(_RECORDED_TOPICS)]
         proc.extra_env.update(self.config.module_env)
-        proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] = json.dumps(self.config.headless)
+        proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] = json.dumps(headless)
         if self.config.tracked_bodies:
             proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"] = json.dumps(
                 list(self.config.tracked_bodies)

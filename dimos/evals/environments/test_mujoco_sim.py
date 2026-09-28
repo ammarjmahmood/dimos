@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
+from dimos.evals.environments import mujoco_sim
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 from dimos.memory.store.memory import MemoryStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -39,7 +40,8 @@ def _tf(ts: float, child: str, z: float) -> TFMessage:
     )
 
 
-def test_launch_flags():
+def test_launch_flags(monkeypatch):
+    monkeypatch.setattr(mujoco_sim, "_MACOS", False)
     env = environment(tracked_bodies=("apple", "cup"))
     proc = DimosCliCall()
     env.configure_launch(proc)
@@ -67,7 +69,15 @@ def test_launch_flags():
     assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
 
 
-def test_module_env_reaches_blueprint_parser():
+def test_macos_never_asks_for_a_viewer(monkeypatch):
+    monkeypatch.setattr(mujoco_sim, "_MACOS", True)
+    proc = DimosCliCall()
+    environment(headless=False).configure_launch(proc)
+    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
+
+
+def test_module_env_reaches_blueprint_parser(monkeypatch):
+    monkeypatch.setattr(mujoco_sim, "_MACOS", False)
     from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
     from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
 

@@ -598,15 +598,6 @@ class MujocoEngine(SimulationEngine):
         mujoco.mj_forward(self._model, self._data)
 
     def _sim_loop(self) -> None:
-        # Workers send stderr to /dev/null: log a crash instead of losing the physics thread.
-        try:
-            self._run_sim_loop()
-        except Exception:
-            logger.exception("sim loop crashed", cls=self.__class__.__name__)
-            with self._lock:
-                self._connected = False
-
-    def _run_sim_loop(self) -> None:
         logger.info("sim loop started", cls=self.__class__.__name__)
         dt = 1.0 / self._control_frequency
 
@@ -632,7 +623,7 @@ class MujocoEngine(SimulationEngine):
                     logger.error("on_before_step failed", error=str(exc))
             self._apply_control()
             mujoco.mj_step(self._model, self._data)
-            if sync_viewer and m_viewer is not None:
+            if sync_viewer:
                 m_viewer.sync()
             self._update_joint_state()
             if self._on_after_step is not None:
@@ -648,25 +639,13 @@ class MujocoEngine(SimulationEngine):
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        m_viewer = None
-        if not self._headless:
-            try:
-                m_viewer = viewer.launch_passive(
-                    self._model, self._data, show_left_ui=False, show_right_ui=False
-                )
-            except RuntimeError as exc:
-                # macOS: the passive viewer needs mjpython, which a worker is not.
-                logger.error(
-                    "MuJoCo viewer unavailable; stepping headless",
-                    cls=self.__class__.__name__,
-                    error=str(exc),
-                )
-                self._headless = True
-        if m_viewer is None:
+        if self._headless:
             while not self._stop_event.is_set():
                 _step_once(sync_viewer=False)
         else:
-            with m_viewer:
+            with viewer.launch_passive(
+                self._model, self._data, show_left_ui=False, show_right_ui=False
+            ) as m_viewer:
                 while m_viewer.is_running() and not self._stop_event.is_set():
                     _step_once(sync_viewer=True)
 
