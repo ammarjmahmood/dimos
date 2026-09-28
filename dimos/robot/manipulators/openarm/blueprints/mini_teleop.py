@@ -16,9 +16,12 @@
 
 from __future__ import annotations
 
+import os
+
 from dimos.control.coordinator import TaskConfig
 from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.robot.manipulators.openarm.blueprints.teleop import (
     OpenArmTeleopCoordinator,
     _OpenArmManipulationModule,
@@ -34,6 +37,9 @@ from dimos.teleop.openarm_mini.teleop_module import OpenArmMiniTeleopModule
 # above the WebXR IK profile; a rejected leader jump (0.75 rad) still plays
 # out over a quarter second instead of stepping the PD loop.
 _OPENARM_ARM_VELOCITY_PROFILE_RAD_S = (3.0, 3.0, 3.0, 3.0, 6.0, 6.0, 6.0)
+
+# The robot's zenoh router. Named, not scouted: the operator machine dials it.
+OPENARM_ROUTER = os.environ.get("DIMOS_OPENARM_ROUTER", "tcp/127.0.0.1:7447")
 
 
 def _trajectory_task(sides: tuple[OpenArmMiniSide, ...]) -> TaskConfig:
@@ -98,20 +104,20 @@ teleop_openarm_mini_right = autoconnect(
 
 # Split deployment: leaders on an operator machine, follower on the robot.
 # Both sides name the stream joint_command, so it rides one zenoh topic once
-# the operator machine joins the robot's bus (a zenoh router on the robot,
-# --zenoh-mode client --robot-ip <robot> here). The robot stack owns the
-# bus-wide Coordinator name, so the leader half does not claim it.
+# the operator machine joins the robot's router (--robot-ip <robot>). The
+# robot stack owns the bus-wide Coordinator name, so the leader half is a
+# client that does not claim it.
 teleop_openarm_mini_leader = OpenArmMiniTeleopModule.blueprint(
     enabled_sides=("left", "right")
-).global_config(serve_coordinator_rpc=False)
+).global_config(zenoh_mode="client", serve_coordinator_rpc=False)
 
 teleop_openarm_mini_leader_left = OpenArmMiniTeleopModule.blueprint(
     enabled_sides=("left",)
-).global_config(serve_coordinator_rpc=False)
+).global_config(zenoh_mode="client", serve_coordinator_rpc=False)
 
 teleop_openarm_mini_leader_right = OpenArmMiniTeleopModule.blueprint(
     enabled_sides=("right",)
-).global_config(serve_coordinator_rpc=False)
+).global_config(zenoh_mode="client", serve_coordinator_rpc=False)
 
 teleop_openarm_mini_follower = autoconnect(
     OpenArmTeleopCoordinator.blueprint(
@@ -120,6 +126,6 @@ teleop_openarm_mini_follower = autoconnect(
     ),
     _OpenArmManipulationModule.blueprint(
         model=openarm_bimanual_model_config(),
-        visualization={"backend": "viser"},
+        visualization=ViserVisualizationConfig(host="0.0.0.0"),
     ),
-)
+).global_config(zenoh_connect=OPENARM_ROUTER)
