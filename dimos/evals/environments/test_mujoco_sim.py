@@ -46,6 +46,10 @@ def test_launch_flags():
     assert proc.simulator == "mujoco"
     assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
     assert json.loads(proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"]) == ["apple", "cup"]
+    assert proc.global_args == [
+        "--record-topics",
+        "color_image,camera_info,coordinator_joint_state,tf,odom",
+    ]
 
     proc = DimosCliCall()
     environment(headless=False).configure_launch(proc)
@@ -148,7 +152,7 @@ def test_launch_and_cleanup(tmp_path, mocker):
     try:
         result = env.start(("speak-skill",))
         assert proc.simulator == "mujoco"
-        assert proc.global_args == ["--record"]
+        assert proc.global_args[0] == "--record-topics" and proc.global_args[-1] == "--record"
         assert proc.demo_args == [
             "run",
             "xarm-perception-sim",

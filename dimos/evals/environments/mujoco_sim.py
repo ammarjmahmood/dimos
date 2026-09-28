@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 _READY_STREAMS = ("color_image", "coordinator_joint_state")
+# What graders and readiness read; depth_image is float32, which the JPEG recorder rejects.
+_RECORDED_TOPICS = ("color_image", "camera_info", "coordinator_joint_state", "tf", "odom")
 
 
 class MujocoEnvironmentConfig(SimConfig):
@@ -66,6 +68,7 @@ class MujocoEnvironment(Sim):
                 "Keep rerun-bridge-module enabled to watch the camera and frames."
             )
         proc.simulator = "mujoco"
+        proc.global_args = ["--record-topics", ",".join(_RECORDED_TOPICS)]
         proc.extra_env.update(self.config.module_env)
         proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] = json.dumps(self.config.headless)
         if self.config.tracked_bodies:
