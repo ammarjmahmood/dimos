@@ -116,7 +116,6 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         self._stop_event = threading.Event()
         self._publisher: threading.Thread | None = None
 
-    # ---- inputs ------------------------------------------------------------------
     def trigger(self) -> Observable[object]:
         pose: Observable[object] = self.odom.observable().pipe(
             ops.merge(self.odometry.observable().pipe(ops.map(self._pose_of)))
@@ -137,7 +136,6 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             return None
         return msg if time.time() - msg.ts <= self.config.stale_s else None
 
-    # ---- generic hooks -------------------------------------------------------------
     def state(self, trigger: object) -> WorldState | None:
         goal = self._goal
         if goal is None:
@@ -177,7 +175,6 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         )
         self._steer(state, drive)  # type: ignore[arg-type]
 
-    # ---- lifecycle -----------------------------------------------------------------
     @rpc
     def start(self) -> None:
         self._latest: dict[str, LatestReader[Any]] = {
@@ -229,7 +226,6 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
     def current_goal(self) -> str | None:
         return self._goal
 
-    # ---- steering ------------------------------------------------------------------
     def _say(self, text: str) -> None:
         if text != self._last_said:
             self._last_said = text

@@ -76,7 +76,6 @@ class TypeSafeAgent(Module):
         self._busy = threading.Lock()
         self._seq = 0
 
-    # ---- subclass surface ----------------------------------------------------
     def trigger(self) -> Observable[object]:
         """The input stream whose updates drive inference."""
         raise NotImplementedError
@@ -91,7 +90,6 @@ class TypeSafeAgent(Module):
     def on_answers(self, state: object, answers: Answers) -> None:
         """Side effects on a fresh answer set; answers are already published by type."""
 
-    # ---- lifecycle -------------------------------------------------------------
     @rpc
     def start(self) -> None:
         super().start()

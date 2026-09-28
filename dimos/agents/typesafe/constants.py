@@ -13,13 +13,13 @@
 # limitations under the License.
 """TypeSafe agent constants, by section."""
 
-# --- API -------------------------------------------------------------------
+# API
 DEFAULT_MODEL = "jev-latest"
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
 BASE_URL_ENV = "TYPESAFE_BASE_URL"
 REQUEST_TIMEOUT_S = 10.0
 
-# --- Perception / world state --------------------------------------------
+# Perception / world state
 MAX_OBJECTS = 20  # closest first; the model reads words, not a scene graph
 DISTANCE_WORDS = ((0.5, "touching"), (1.5, "near"), (4.0, "mid"), (float("inf"), "far"))
 SECTOR_NAMES = (
@@ -38,7 +38,7 @@ IMAGE_SIZE = (1280, 720)  # for 2D detections
 LIDAR_BAND = (-0.2, 0.8, 5.0)  # z_min, z_max, max_range (m) relative to the robot
 STALE_S = 2.0  # inputs older than this are ignored
 
-# --- Navigation ------------------------------------------------------------
+# Navigation
 NAV_MAX_HZ = 2.0  # pose updates arrive faster than the model should be asked
 LINEAR_SPEED = 0.5  # m/s
 ANGULAR_SPEED = 0.8  # rad/s
