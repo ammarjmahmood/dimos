@@ -65,12 +65,16 @@ def test_launch_flags():
 
 def test_module_env_reaches_blueprint_parser():
     from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
-    from dimos.evals.suites.mujoco_xarm import LOCAL_PERCEPTION
     from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
 
     proc = DimosCliCall()
     environment(
-        headless=False, tracked_bodies=("apple", "cup"), module_env=LOCAL_PERCEPTION
+        headless=False,
+        tracked_bodies=("apple", "cup"),
+        module_env={
+            "OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "owlv2",
+            "OBJECTSCENEREGISTRATIONMODULE__SEGMENTATION_BACKEND": "yolo",
+        },
     ).configure_launch(proc)
     parsed = BlueprintConfigParser(xarm_perception_sim).parse(environ=proc.extra_env)
     perception = parsed.module_kwargs("objectsceneregistrationmodule")

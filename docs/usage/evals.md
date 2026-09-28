@@ -462,9 +462,8 @@ and `coordinator_joint_state` plus a pose for every tracked body, and settling w
 Floating-base robots still settle on `odom`. `module_env` passes extra
 `MODULE__FIELD` overrides to the launched dimos, which beat blueprint-pinned
 values, so a case can retune a module without a new blueprint.
-`dimos.evals.suites.mujoco_xarm` is the xArm7 table scene: an observation
-smoke, a lift and a move; `mujoco_xarm_pick_cylinder` is its one-question
-form with the viewer open.
+`dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
+modules disabled: pick up the cylinder, then put the red ball on top of it.
 
 ## Running
 
