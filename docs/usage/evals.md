@@ -434,7 +434,7 @@ Linux. Manipulation graders need ground-truth object poses:
 `last_body_transform` read them back from the recording:
 
 ```python session=evals ansi=false no-result
-from dimos.evals.environments.lib.body_poses import first_body_transform, last_body_transform
+from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 
 

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import Field
 
-from dimos.evals.environments.lib.body_poses import last_body_transform
+from dimos.evals.environments.lib.recorded_poses import last_body_transform
 from dimos.evals.environments.sim import Sim, SimConfig
 
 if TYPE_CHECKING:
