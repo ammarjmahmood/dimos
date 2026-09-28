@@ -36,30 +36,22 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-# Fresh samples on both, plus a pose per tracked body, mean the sim is ready for the agent.
 _READY_STREAMS = ("color_image", "coordinator_joint_state")
 
 
 class MujocoEnvironmentConfig(SimConfig):
     # Run the simulator without its viewer window.
     headless: bool = True
-    # Free bodies whose world pose MujocoSimModule publishes on ``tf``, so graders
-    # read ground-truth object positions from the recording.
+    # Free bodies whose world pose the simulator publishes on tf for the graders.
     tracked_bodies: tuple[str, ...] = ()
     # Joint speed below which the robot counts as at rest while settling.
     at_rest_rad_s: float = 0.02
-    # Extra ``MODULE__FIELD`` environment overrides for the launched dimos, e.g.
-    # ``{"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}``. They beat
-    # blueprint-pinned values, so a case can retune a module without a new blueprint.
+    # Extra MODULE__FIELD overrides for the launched dimos; they beat blueprint values.
     module_env: dict[str, str] = Field(default_factory=dict)
 
 
 class MujocoEnvironment(Sim):
-    """Run agent evaluations in a MuJoCo scene composed by the caller's blueprint.
-
-    A fixed-base arm has no odometry: readiness and settling use the
-    coordinator's joint state, and graders read tracked body poses from ``tf``.
-    """
+    """Run agent evaluations in a MuJoCo scene, with ground-truth object poses recorded on tf."""
 
     config: MujocoEnvironmentConfig
 
@@ -69,7 +61,6 @@ class MujocoEnvironment(Sim):
 
     def configure_launch(self, proc: DimosCliCall) -> None:
         if not self.config.headless and sys.platform == "darwin":
-            # MuJoCo's passive viewer needs mjpython on macOS; the engine steps headless.
             logger.warning(
                 "MuJoCo viewer needs mjpython on macOS: no window; the sim runs headless. "
                 "Keep rerun-bridge-module enabled to watch the camera and frames."

@@ -252,8 +252,7 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     spawn_yaw: float | None = None
     reset_joint_positions: list[float] | None = None
     headless: bool = False
-    # Free bodies whose world pose is published on ``tf`` (``world -> <body>``)
-    # next to the camera frames, so a recording holds ground-truth object poses.
+    # Free bodies whose world pose is published on tf as world -> <body>.
     tracked_bodies: list[str] = Field(default_factory=list)
     dof: int = 7
 

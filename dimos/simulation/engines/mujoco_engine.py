@@ -598,8 +598,7 @@ class MujocoEngine(SimulationEngine):
         mujoco.mj_forward(self._model, self._data)
 
     def _sim_loop(self) -> None:
-        # Worker processes send stderr to /dev/null, so an unhandled exception here
-        # would kill the physics thread without a trace. Log it where operators look.
+        # Workers send stderr to /dev/null: log a crash instead of losing the physics thread.
         try:
             self._run_sim_loop()
         except Exception:
@@ -656,8 +655,7 @@ class MujocoEngine(SimulationEngine):
                     self._model, self._data, show_left_ui=False, show_right_ui=False
                 )
             except RuntimeError as exc:
-                # On macOS the passive viewer needs mjpython, which a worker process
-                # is not. Keep the physics alive instead of dying silently here.
+                # macOS: the passive viewer needs mjpython, which a worker is not.
                 logger.error(
                     "MuJoCo viewer unavailable; stepping headless",
                     cls=self.__class__.__name__,

@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): two picks.
-
-The agent has the planner skills and the wrist camera, no object detection; the
-prompts say where things stand. Ground truth comes from the simulator:
-``MujocoEnvironment(tracked_bodies=...)`` publishes ``world -> <body>`` on ``tf``
-and the graders read each body's first and last recorded pose.
+"""xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): two picks,
+planner skills and the wrist camera only, graded on the bodies' recorded poses.
 
     dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi
 """
@@ -34,7 +30,6 @@ from dimos.evals.types import EvalCase, Outcome, Suite, recording
 
 TRACKED = ("apple", "cup")
 
-# Detector, segmenter, grasp ranking and the pick pipeline.
 PERCEPTION_MODULES = (
     "object-scene-registration-module",
     "pick-and-place-module",
@@ -52,7 +47,6 @@ SCENE = (
 
 
 def environment() -> MujocoEnvironment:
-    # MuJoCo window on Linux; on macOS the sim is headless and Rerun is the view.
     return MujocoEnvironment(
         blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
         disable=PERCEPTION_MODULES,
@@ -79,8 +73,7 @@ def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
 def stacked_on(
     top: str, base: str, *, min_rise_m: float, band_m: float
 ) -> Callable[[Outcome], float]:
-    """``top`` ended at least ``min_rise_m`` above ``base`` and centred on it: 1.0 when
-    aligned, 0.0 at ``band_m`` off centre or when it is not above."""
+    """``top`` ended at least ``min_rise_m`` above ``base``: 1.0 centred, 0.0 at ``band_m`` off."""
 
     def grade(outcome: Outcome) -> float:
         with recording(outcome) as store:
@@ -109,7 +102,6 @@ SUITE: Suite = [
         id="xarm_ball_on_cylinder",
         inputs=f"Pick up the red ball and place it on top of the cylinder. {SCENE}",
         environment=environment(),
-        # Resting on the 12 cm cylinder puts the 8 cm ball's centre ~10 cm above the cup's.
         grade=stacked_on("apple", "cup", min_rise_m=0.06, band_m=0.07),
         timeout_s=900.0,
         threshold=0.5,  # within 3.5 cm of the cylinder's axis
