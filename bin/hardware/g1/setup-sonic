@@ -99,7 +99,7 @@ import sys
 import onnxruntime as ort
 
 from dimos.cli.dimos import cli_main
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_onnx_runtime import prepare_sonic_onnx_runtime
+from dimos.control.sonic.sonic_onnx_runtime import prepare_sonic_onnx_runtime
 from dimos.core.o3dpickle import register_picklers
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_sonic_wbc import unitree_g1_sonic_wbc
 
@@ -114,7 +114,7 @@ print(f"PASS  ONNX Runtime {ort.__version__}: {ort.get_available_providers()}")
 print("PASS  DimOS CLI and SONIC controller blueprint imports")
 PY
 
-"$SONIC_VENV/bin/python" -m dimos.control.tasks.g1_sonic_wbc_task.models
+"$SONIC_VENV/bin/python" -m dimos.control.sonic.models
 
 cat <<EOF
 

@@ -15,14 +15,14 @@
 import numpy as np
 import pytest
 
+from dimos.control.sonic.sonic_pipeline import DEFAULT_ANGLES_DDS
+from dimos.control.sonic.sonic_safety import damping_commands
 from dimos.control.task import CoordinatorState, JointStateSnapshot
 from dimos.control.tasks.g1_sonic_wbc_task.coordinator import SonicCoordinator
 from dimos.control.tasks.g1_sonic_wbc_task.g1_sonic_wbc_task import (
     G1SonicWBCTask,
     G1SonicWBCTaskConfig,
 )
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_pipeline import DEFAULT_ANGLES_DDS
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_safety import damping_commands
 from dimos.core.global_config import global_config
 from dimos.hardware.whole_body.spec import IMUState
 from dimos.msgs.std_msgs.String import String

@@ -45,6 +45,19 @@ from numpy.typing import NDArray
 from pydantic import Field
 
 from dimos.control.hardware_interface import ConnectedWholeBody
+from dimos.control.sonic.sonic_pipeline import (
+    DEFAULT_ANGLES_DDS,
+    LOCOMOTION_MODES,
+    NUM_JOINTS,
+    SonicPipeline,
+)
+from dimos.control.sonic.sonic_safety import (
+    JOINT_VELOCITY_LIMIT,
+    SonicSafetyError,
+    check_joint_velocities,
+    damping_commands,
+)
+from dimos.control.sonic.streamed_motion import StreamedMotion
 from dimos.control.task import (
     BaseControlTask,
     ControlMode,
@@ -52,19 +65,6 @@ from dimos.control.task import (
     JointCommandOutput,
     ResourceClaim,
 )
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_pipeline import (
-    DEFAULT_ANGLES_DDS,
-    LOCOMOTION_MODES,
-    NUM_JOINTS,
-    SonicPipeline,
-)
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_safety import (
-    JOINT_VELOCITY_LIMIT,
-    SonicSafetyError,
-    check_joint_velocities,
-    damping_commands,
-)
-from dimos.control.tasks.g1_sonic_wbc_task.streamed_motion import StreamedMotion
 from dimos.protocol.service.spec import BaseConfig
 from dimos.utils.logging_config import setup_logger
 

@@ -40,14 +40,14 @@ from yourdfpy import URDF  # type: ignore[import-untyped]
 
 from dimos.control.components import HardwareComponent, HardwareType, make_humanoid_joints
 from dimos.control.coordinator import TaskConfig
-from dimos.control.tasks.g1_sonic_wbc_task.coordinator import SonicCoordinator
-from dimos.control.tasks.g1_sonic_wbc_task.models import sonic_model_directory
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_pipeline import (
+from dimos.control.sonic.models import sonic_model_directory
+from dimos.control.sonic.sonic_pipeline import (
     DEFAULT_ANGLES_DDS,
     SONIC_KD,
     SONIC_KP,
 )
-from dimos.control.tasks.g1_sonic_wbc_task.sonic_safety import COMMAND_TIMEOUT_SECONDS
+from dimos.control.sonic.sonic_safety import COMMAND_TIMEOUT_SECONDS
+from dimos.control.tasks.g1_sonic_wbc_task.coordinator import SonicCoordinator
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.whole_body.spec import WholeBodyConfig
