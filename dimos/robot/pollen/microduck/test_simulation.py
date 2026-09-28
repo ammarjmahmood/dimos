@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
 import math
 from pathlib import Path
 import pickle
@@ -20,6 +21,7 @@ from typing import Any
 import mujoco
 import numpy as np
 import pytest
+import rerun as rr
 
 from dimos.control.task import CoordinatorState, JointStateSnapshot
 from dimos.control.tasks.microduck_policy_task.microduck_policy_task import (
@@ -29,13 +31,17 @@ from dimos.control.tasks.microduck_policy_task.microduck_policy_task import (
 from dimos.hardware.whole_body.spec import IMUState
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.robot.assets.source import RobotDescriptionSource
 import dimos.robot.pollen.microduck.blueprints.simulation as microduck_blueprint
 from dimos.robot.pollen.microduck.config import (
     MICRODUCK_HOME,
     MICRODUCK_JOINT_SUFFIXES,
     MICRODUCK_JOINTS,
+    MICRODUCK_POLICY_DIR,
     MICRODUCK_ROBOT_MJCF,
+    MICRODUCK_SCENE,
     MICRODUCK_SIM_SPEC,
+    MICRODUCK_TIMESTEP,
 )
 from dimos.robot.pollen.microduck.rerun import (
     MICRODUCK_RERUN_JOINTS,
@@ -52,7 +58,6 @@ from dimos.simulation.engines.robot_sim_binding import (
 )
 from dimos.simulation.scene_assets.spec import SceneMeshAlignment, ScenePackage
 from dimos.simulation.utils.xml_parser import build_joint_mappings
-from dimos.utils.data import get_data
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 from dimos.visualization.rerun.websocket_server import RerunWebSocketServer
 from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
@@ -74,6 +79,8 @@ def test_blueprint_uses_headless_mujoco_with_rerun_and_routes_viewer_teleop() ->
         atom for atom in microduck_sim.active_blueprints if atom.module is MujocoSimModule
     )
     assert simulator.kwargs["headless"] is True
+    assert simulator.kwargs["robot_mjcf"] == MICRODUCK_SCENE
+    assert simulator.kwargs["timestep"] == MICRODUCK_TIMESTEP
 
     bridge = next(
         atom for atom in microduck_sim.active_blueprints if atom.module is RerunBridgeModule
@@ -118,10 +125,21 @@ def test_scene_package_uses_standard_mujoco_composition(
     assert adapter_address == MICRODUCK_ROBOT_MJCF
 
 
+def test_asset_paths_stay_lazy_across_blueprint_worker_serialization(mocker):
+    resolve = mocker.patch.object(
+        RobotDescriptionSource, "checkout_path", side_effect=AssertionError("unexpected download")
+    )
+
+    backend, address = microduck_blueprint._microduck_mujoco_backend(None)
+    kwargs = pickle.loads(pickle.dumps(backend.active_blueprints[0].kwargs))
+
+    assert kwargs["robot_mjcf"] == MICRODUCK_SCENE
+    assert address == MICRODUCK_SCENE
+    resolve.assert_not_called()
+
+
 @pytest.mark.mujoco
 def test_rerun_model_uses_official_meshes_and_animates_joints() -> None:
-    import rerun as rr
-
     static = microduck_static_robot(rr)
     meshes = [entity for _, entity in static if type(entity).__name__ == "Mesh3D"]
     assert len(meshes) == 70
@@ -141,15 +159,38 @@ def test_rerun_model_uses_official_meshes_and_animates_joints() -> None:
     assert yawed_quaternion != home_quaternion
 
 
+@pytest.fixture(scope="module")
+def official_model() -> Iterator[mujoco.MjModel]:
+    backend, _ = microduck_blueprint._microduck_mujoco_backend(None)
+    module = MujocoSimModule(**backend.active_blueprints[0].kwargs)
+    try:
+        yield module._compose_model()
+    finally:
+        module.stop()
+
+
+@pytest.fixture
+def official_task() -> Iterator[MicroDuckPolicyTask]:
+    task = MicroDuckPolicyTask(
+        "microduck_policy", MicroDuckPolicyTaskConfig(policy_dir=MICRODUCK_POLICY_DIR)
+    )
+    task.start()
+    try:
+        yield task
+    finally:
+        task.stop()
+
+
 @pytest.mark.mujoco
-def test_official_scene_has_exact_policy_binding_and_physics_step() -> None:
-    scene = Path(get_data("microduck/scene.xml"))
-    model = mujoco.MjModel.from_xml_path(str(scene))
+def test_official_scene_has_exact_policy_binding_and_physics_step(
+    official_model: mujoco.MjModel,
+) -> None:
+    model = official_model
 
     binding = resolve_robot_sim_binding(
         model,
         MICRODUCK_SIM_SPEC,
-        build_joint_mappings(scene, model),
+        build_joint_mappings(None, model),
     )
 
     assert model.opt.timestep == pytest.approx(0.005)
@@ -159,14 +200,16 @@ def test_official_scene_has_exact_policy_binding_and_physics_step() -> None:
     assert binding.imu_accel_slice is not None
     assert (
         tuple(
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id) or "").removeprefix("/")
             for joint_id in binding.joint_ids
         )
         == MICRODUCK_JOINT_SUFFIXES
     )
     assert (
         tuple(
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id)
+            (
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id) or ""
+            ).removeprefix("/")
             for actuator_id in binding.actuator_ids
         )
         == MICRODUCK_JOINT_SUFFIXES
@@ -220,15 +263,8 @@ def _mujoco_state(data: mujoco.MjData, binding: RobotSimBinding, t_now: float) -
 
 
 @pytest.mark.mujoco
-def test_bundled_policy_set_runs_every_public_motion_with_finite_targets() -> None:
-    task = MicroDuckPolicyTask(
-        "microduck_policy",
-        MicroDuckPolicyTaskConfig(
-            policy_dir=Path(get_data("microduck/policies")),
-            joint_names=list(MICRODUCK_JOINTS),
-        ),
-    )
-    task.start()
+def test_upstream_policy_set_runs_every_public_motion_with_finite_targets(official_task) -> None:
+    task = official_task
     state = _policy_state()
 
     stand = task.compute(state)
@@ -257,29 +293,22 @@ def test_bundled_policy_set_runs_every_public_motion_with_finite_targets() -> No
 
 
 @pytest.mark.mujoco
-def test_headless_closed_loop_is_finite_for_sixty_simulated_seconds() -> None:
-    scene = Path(get_data("microduck/scene.xml"))
-    model = mujoco.MjModel.from_xml_path(str(scene))
+def test_headless_closed_loop_is_finite_for_sixty_simulated_seconds(
+    official_model, official_task
+) -> None:
+    model = official_model
     data = mujoco.MjData(model)
     binding = resolve_robot_sim_binding(
         model,
         MICRODUCK_SIM_SPEC,
-        build_joint_mappings(scene, model),
+        build_joint_mappings(None, model),
     )
     assert binding.root_qpos_adr is not None
     for address, position in zip(binding.joint_qpos_adrs, MICRODUCK_HOME, strict=True):
         data.qpos[address] = position
-    data.qpos[binding.root_qpos_adr + 2] = 0.125
     mujoco.mj_forward(model, data)
 
-    task = MicroDuckPolicyTask(
-        "microduck_policy",
-        MicroDuckPolicyTaskConfig(
-            policy_dir=Path(get_data("microduck/policies")),
-            joint_names=list(MICRODUCK_JOINTS),
-        ),
-    )
-    task.start()
+    task = official_task
     twist = Twist()
     twist.linear.x = 0.2
     actuator_ids = np.asarray(binding.actuator_ids, dtype=np.int32)

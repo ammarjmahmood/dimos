@@ -18,11 +18,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
 from dimos.utils.data import get_data
+
+if TYPE_CHECKING:
+    import mujoco
+    from numpy.typing import ArrayLike
+    from rerun import Archetype, Mesh3D, Transform3D
+
+    from dimos.msgs.sensor_msgs.JointState import JointState
 
 
 def default_mjcf_joint_name_mapper(name: str) -> str:
@@ -60,14 +68,14 @@ class MjcfRobotRerun:
         self.initial_joint_positions = dict(initial_joint_positions or {})
         self.visual_geom_group = visual_geom_group
 
-        self._mujoco: Any | None = None
-        self._model: Any | None = None
-        self._data: Any | None = None
+        self._mujoco: ModuleType | None = None
+        self._model: mujoco.MjModel | None = None
+        self._data: mujoco.MjData | None = None
         self._body_ids: tuple[int, ...] = ()
         self._body_paths: dict[int, str] = {}
         self._joint_qpos_addresses: dict[str, int] = {}
 
-    def static(self, rr: Any) -> list[tuple[str, Any]]:
+    def static(self, rr: ModuleType) -> list[tuple[str, Archetype]]:
         """Return static visual meshes attached to the MJCF body hierarchy."""
 
         self._load()
@@ -75,7 +83,7 @@ class MjcfRobotRerun:
         assert self._mujoco is not None
 
         model = self._model
-        entities: list[tuple[str, Any]] = []
+        entities: list[tuple[str, Archetype]] = []
         body_ids = set(self._body_ids)
 
         for geom_id in range(model.ngeom):
@@ -117,9 +125,10 @@ class MjcfRobotRerun:
 
         return entities
 
-    def joint_state(self, msg: Any) -> list[tuple[str, Any]]:
-        """Convert a JointState-like message into local MJCF body transforms."""
+    def joint_state(self, msg: JointState) -> list[tuple[str, Archetype]]:
+        """Convert a JointState message into local MJCF body transforms."""
 
+        # Rerun is optional until visualization is actually used.
         import rerun as rr
 
         self._load()
@@ -134,7 +143,7 @@ class MjcfRobotRerun:
                 self._data.qpos[address] = float(position)
 
         self._mujoco.mj_forward(self._model, self._data)
-        entities: list[tuple[str, Any]] = []
+        entities: list[tuple[str, Archetype]] = []
         for body_id in self._body_ids:
             parent_id = int(self._model.body_parentid[body_id])
             parent_rotation = np.asarray(self._data.xmat[parent_id], dtype=float).reshape(3, 3)
@@ -158,6 +167,7 @@ class MjcfRobotRerun:
         if self._model is not None:
             return
 
+        # MuJoCo is optional until an MJCF visualization is actually used.
         import mujoco
 
         model = mujoco.MjModel.from_xml_path(str(_resolve_mjcf_path(self.mjcf_path)))
@@ -223,7 +233,7 @@ class MjcfRobotRerun:
         self._joint_qpos_addresses = joint_qpos_addresses
 
     @staticmethod
-    def _is_descendant(model: Any, body_id: int, root_body_id: int) -> bool:
+    def _is_descendant(model: mujoco.MjModel, body_id: int, root_body_id: int) -> bool:
         current = body_id
         while current != 0:
             if current == root_body_id:
@@ -231,7 +241,7 @@ class MjcfRobotRerun:
             current = int(model.body_parentid[current])
         return False
 
-    def _mesh_archetype(self, rr: Any, mesh_id: int, geom_id: int) -> Any:
+    def _mesh_archetype(self, rr: ModuleType, mesh_id: int, geom_id: int) -> Mesh3D:
         assert self._model is not None
         model = self._model
         vertex_address = int(model.mesh_vertadr[mesh_id])
@@ -244,28 +254,31 @@ class MjcfRobotRerun:
         rgba = model.mat_rgba[material_id] if material_id >= 0 else model.geom_rgba[geom_id]
         color = np.clip(np.rint(np.asarray(rgba) * 255.0), 0, 255).astype(np.uint8)
 
-        return rr.Mesh3D(
-            vertex_positions=np.asarray(
-                model.mesh_vert[vertex_address : vertex_address + vertex_count],
-                dtype=np.float32,
-            ),
-            triangle_indices=np.asarray(
-                model.mesh_face[face_address : face_address + face_count],
-                dtype=np.uint32,
-            ),
-            vertex_normals=(
-                np.asarray(
-                    model.mesh_normal[normal_address : normal_address + normal_count],
+        return cast(
+            "Mesh3D",
+            rr.Mesh3D(
+                vertex_positions=np.asarray(
+                    model.mesh_vert[vertex_address : vertex_address + vertex_count],
                     dtype=np.float32,
-                )
-                if normal_count == vertex_count
-                else None
+                ),
+                triangle_indices=np.asarray(
+                    model.mesh_face[face_address : face_address + face_count],
+                    dtype=np.uint32,
+                ),
+                vertex_normals=(
+                    np.asarray(
+                        model.mesh_normal[normal_address : normal_address + normal_count],
+                        dtype=np.float32,
+                    )
+                    if normal_count == vertex_count
+                    else None
+                ),
+                albedo_factor=color.tolist(),
             ),
-            albedo_factor=color.tolist(),
         )
 
     @staticmethod
-    def _xyzw(quaternion_wxyz: Any) -> list[float]:
+    def _xyzw(quaternion_wxyz: ArrayLike) -> list[float]:
         quaternion = np.asarray(quaternion_wxyz, dtype=float)
         return [
             float(quaternion[1]),
@@ -274,8 +287,13 @@ class MjcfRobotRerun:
             float(quaternion[0]),
         ]
 
-    def _transform(self, rr: Any, translation: Any, quaternion_wxyz: Any) -> Any:
-        return rr.Transform3D(
-            translation=np.asarray(translation, dtype=float).tolist(),
-            rotation=rr.Quaternion(xyzw=self._xyzw(quaternion_wxyz)),
+    def _transform(
+        self, rr: ModuleType, translation: ArrayLike, quaternion_wxyz: ArrayLike
+    ) -> Transform3D:
+        return cast(
+            "Transform3D",
+            rr.Transform3D(
+                translation=np.asarray(translation, dtype=float).tolist(),
+                rotation=rr.Quaternion(xyzw=self._xyzw(quaternion_wxyz)),
+            ),
         )

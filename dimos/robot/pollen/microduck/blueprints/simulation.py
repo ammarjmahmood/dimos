@@ -23,7 +23,8 @@ from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.stream import Out
-from dimos.core.transport import LCMTransport, pSHMTransport
+from dimos.core.transport import pSHMTransport
+from dimos.core.transport_factory import make_transport
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -38,6 +39,7 @@ from dimos.robot.pollen.microduck.config import (
     MICRODUCK_ROBOT_MJCF,
     MICRODUCK_SCENE,
     MICRODUCK_SIM_SPEC,
+    MICRODUCK_TIMESTEP,
     make_microduck_sim_hardware,
 )
 from dimos.robot.pollen.microduck.rerun import (
@@ -79,6 +81,8 @@ def _microduck_mujoco_backend(
         "enable_depth": True,
         "enable_pointcloud": False,
         "robot_sim_spec": MICRODUCK_SIM_SPEC,
+        "robot_id": "",
+        "timestep": MICRODUCK_TIMESTEP,
         "imu_gyro_sensor_names": ["imu_ang_vel", "angular-velocity"],
         "imu_accel_sensor_names": ["imu_accel"],
     }
@@ -86,8 +90,7 @@ def _microduck_mujoco_backend(
     if package is None:
         return (
             MujocoSimModule.blueprint(
-                address=MICRODUCK_SCENE,
-                spawn_z=0.125,
+                robot_mjcf=MICRODUCK_SCENE,
                 **common,
             ),
             MICRODUCK_SCENE,
@@ -100,9 +103,7 @@ def _microduck_mujoco_backend(
             scene_xml=package.mujoco_scene_path,
             robot_mjcf=MICRODUCK_ROBOT_MJCF,
             robot_meshdir=MICRODUCK_MESHDIR,
-            robot_id="",
             scene_entities=package.entities,
-            timestep=0.005,
             **common,
         ),
         MICRODUCK_ROBOT_MJCF,
@@ -161,14 +162,14 @@ microduck_sim = (
     )
     .transports(
         {
-            ("cmd_vel", Twist): LCMTransport("/microduck/cmd_vel", Twist),
-            ("microduck_joints", JointState): LCMTransport("/microduck/joints", JointState),
-            ("imu", Imu): LCMTransport("/microduck/imu", Imu),
-            ("odom", PoseStamped): LCMTransport("/microduck/odom", PoseStamped),
+            ("cmd_vel", Twist): make_transport("/microduck/cmd_vel", Twist),
+            ("microduck_joints", JointState): make_transport("/microduck/joints", JointState),
+            ("imu", Imu): make_transport("/microduck/imu", Imu),
+            ("odom", PoseStamped): make_transport("/microduck/odom", PoseStamped),
             ("color_image", Image): pSHMTransport("/microduck/color_image"),
             ("depth_image", Image): pSHMTransport("/microduck/depth_image"),
-            ("camera_info", CameraInfo): LCMTransport("/microduck/camera_info", CameraInfo),
-            ("depth_camera_info", CameraInfo): LCMTransport(
+            ("camera_info", CameraInfo): make_transport("/microduck/camera_info", CameraInfo),
+            ("depth_camera_info", CameraInfo): make_transport(
                 "/microduck/depth_camera_info", CameraInfo
             ),
         }

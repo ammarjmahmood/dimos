@@ -25,8 +25,8 @@ from pathlib import Path
 
 from dimos.control.components import HardwareComponent, HardwareType
 from dimos.hardware.spec import JointLimits
+from dimos.robot.assets.source import RobotDescriptionSource
 from dimos.simulation.engines.robot_sim_binding import RobotSimSpec
-from dimos.utils.data import LfsPath
 
 MICRODUCK_HARDWARE_ID = "microduck"
 
@@ -102,11 +102,19 @@ MICRODUCK_POSITION_UPPER: tuple[float, ...] = (
     1.5707963267948903,
 )
 
-MICRODUCK_ASSET = LfsPath("microduck")
+MICRODUCK_SOURCE = RobotDescriptionSource(
+    "https://github.com/pollen-robotics/microduck_rl.git",
+    "29e887ecfbf5d37144759e5a9f8a176dfb83d547",
+)
+MICRODUCK_ASSET = MICRODUCK_SOURCE / "src/mjlab_microduck/robot/microduck"
 MICRODUCK_SCENE = MICRODUCK_ASSET / "scene.xml"
 MICRODUCK_ROBOT_MJCF = MICRODUCK_ASSET / "robot_groundcontact.xml"
 MICRODUCK_MESHDIR = MICRODUCK_ASSET / "assets"
-MICRODUCK_POLICY_DIR = MICRODUCK_ASSET / "policies"
+MICRODUCK_POLICY_DIR = RobotDescriptionSource(
+    "https://huggingface.co/pollen-robotics/microduck-policies",
+    "088524a64e2557dc453256b6071dbb9d23888802",
+).path()
+MICRODUCK_TIMESTEP = 0.005
 
 MICRODUCK_SIM_SPEC = RobotSimSpec(
     robot_id=MICRODUCK_HARDWARE_ID,

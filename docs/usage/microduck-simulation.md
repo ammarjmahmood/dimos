@@ -29,6 +29,11 @@ Install the required extras:
 uv sync --extra cpu --extra sim --extra visualization
 ```
 
+The first run fetches the official MJCF/meshes and ONNX policies at the pinned
+revisions in `config.py`, using dimOS's Git asset cache. Install and initialize
+Git LFS (`git lfs install`) to download the policy weights. Runs reuse the cache;
+no asset bundle is vendored in this repository.
+
 Start the basic simulation:
 
 ```sh skip
@@ -56,14 +61,14 @@ Stop a foreground run with Ctrl-C, or stop any registered run with:
 uv run dimos stop
 ```
 
-MuJoCo is always headless in this blueprint. `--viewer` controls DimOS
+MuJoCo is always headless in this blueprint. `--viewer` controls dimOS
 visualization, not MuJoCo's native window. A selected scene package is composed
 into the same physics model and its cooked GLB is logged to Rerun. The first
 office launch can be slower while its assets are extracted and compiled.
 
 ## Drive and inspect
 
-Focus the DimOS Rerun viewer and use W/S for forward/reverse, Q/E for strafe,
+Focus the dimOS Rerun viewer and use W/S for forward/reverse, Q/E for strafe,
 A/D for yaw, and Space to stop. Viewer commands and other velocity producers
 share `/microduck/cmd_vel`:
 
@@ -206,11 +211,12 @@ Every ONNX policy has one float32 `[1, 61]` input and one `[1, 14]` output:
 Exact joint order, HOME values, `RobotSimSpec`, and asset paths live in
 [`dimos/robot/pollen/microduck/config.py`](/dimos/robot/pollen/microduck/config.py).
 They are policy ABI and must not be reordered or tuned independently. Model
-names, action scales, durations, and one-shot encodings come from the bundled
-manifest rather than a second hardcoded table.
+metadata comes from the pinned upstream manifest. Gaze uses dimOS's Pinocchio
+helper and the same MJCF geometry as the simulator.
 
 Startup must fail on missing assets, invalid manifests, wrong tensor shapes,
 missing MJCF bindings, or failed warm-up. Missing initial state emits no target.
 A runtime inference error or non-finite observation/action disarms the task and
-records `last_error`. E-stop clears all pending motion within one coordinator
-tick and requires explicit re-arming.
+records `last_error`. E-stop clears policy intents and requires explicit
+re-arming. Disarming suppresses new targets; the simulator's position actuators
+retain their last target rather than disabling torque.

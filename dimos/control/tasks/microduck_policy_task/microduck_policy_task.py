@@ -16,17 +16,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-import json
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 import math
 from pathlib import Path
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol, TypedDict, cast
 
 import numpy as np
 from numpy.typing import NDArray
 import onnxruntime as ort  # type: ignore[import-untyped]
+from pydantic import BaseModel, Field, model_validator
+from typing_extensions import Self
 
 from dimos.control.hardware_interface import ConnectedWholeBody
 from dimos.control.task import (
@@ -39,17 +40,21 @@ from dimos.control.task import (
 from dimos.control.tasks.microduck_policy_task.head_kinematics import (
     HEAD_COMMAND_LOWER,
     HEAD_COMMAND_UPPER,
-    look_at as solve_look_at,
+    HeadKinematics,
 )
 from dimos.protocol.service.spec import BaseConfig
 from dimos.robot.pollen.microduck.config import (
     MICRODUCK_HOME,
+    MICRODUCK_JOINTS,
     MICRODUCK_POSITION_LOWER,
     MICRODUCK_POSITION_UPPER,
+    MICRODUCK_ROBOT_MJCF,
 )
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
+    from dimos.control.coordinator import TaskConfig
+    from dimos.control.hardware_interface import ConnectedHardware
     from dimos.msgs.geometry_msgs.Twist import Twist
 
 logger = setup_logger()
@@ -75,7 +80,61 @@ _TWIST_LIMITS = np.asarray((0.4, 0.3, 1.0), dtype=np.float32)
 _BODY_LOWER = np.asarray((-0.025, -0.26, -0.26), dtype=np.float32)
 _BODY_UPPER = np.asarray((0.010, 0.26, 0.26), dtype=np.float32)
 
-SessionFactory = Callable[[Path, list[str]], Any]
+
+class TensorMetadata(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def shape(self) -> Sequence[int | str | None]: ...
+
+    @property
+    def type(self) -> str: ...
+
+
+class PolicySession(Protocol):
+    def get_inputs(self) -> Sequence[TensorMetadata]: ...
+    def get_outputs(self) -> Sequence[TensorMetadata]: ...
+    def run(
+        self, output_names: list[str], input_feed: dict[str, NDArray[np.float32]]
+    ) -> Sequence[NDArray[np.float32]]: ...
+
+
+SessionFactory = Callable[[Path, list[str]], PolicySession]
+PositiveFinite = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+NonnegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+SmoothingFactor = Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
+
+
+class IntentResult(TypedDict):
+    accepted: bool
+    reason: str | None
+
+
+class LookResult(IntentResult):
+    clamped: bool
+    head: dict[str, float]
+
+
+class SkillInfo(TypedDict):
+    name: str
+    duration_s: float
+    chainable: bool
+    required_mode: Literal["walk"]
+
+
+class TaskStatus(TypedDict):
+    active: bool
+    armed: bool
+    estopped: bool
+    busy: bool
+    current_policy: str | None
+    posture: str
+    active_skill: str | None
+    available_skills: list[str]
+    applied_twist: dict[str, float]
+    command_age_s: float | None
+    last_error: str | None
 
 
 def _preferred_onnx_providers() -> list[str]:
@@ -93,37 +152,84 @@ def _preferred_onnx_providers() -> list[str]:
     return providers
 
 
-def _default_session_factory(path: Path, providers: list[str]) -> ort.InferenceSession:
-    return ort.InferenceSession(str(path), providers=providers)
+def _default_session_factory(path: Path, providers: list[str]) -> PolicySession:
+    return cast("PolicySession", ort.InferenceSession(str(path), providers=providers))
+
+
+class PolicyCommand(BaseModel):
+    encoding: Literal["phase", "posture_flag"] | None = None
+    period_s: PositiveFinite = 4.0
+    end_phase: SmoothingFactor = 0.7
+
+
+class PolicyDefinition(BaseModel):
+    file: str = Field(pattern=r"^[a-zA-Z0-9_-]+\.onnx$")
+    name: str | None = None
+    kind: Literal["perpetual", "scripted", "episodic"]
+    mode: Literal["walk", "roller"] = "walk"
+    duration_s: NonnegativeFinite = 0.0
+    chainable: bool = Field(default=False, alias="chain")
+    action_scale: PositiveFinite | None = None
+    command: PolicyCommand = Field(default_factory=PolicyCommand)
+    unwind_s: PositiveFinite = 1.0
+
+    @property
+    def key(self) -> str:
+        stem = Path(self.file).stem
+        return self.name or _POLICY_NAME_ALIASES.get(stem, stem)
+
+
+class PolicyRobot(BaseModel):
+    model: Literal["microduck"]
+    control_hz: Literal[50]
+
+
+class PolicyManifest(BaseModel):
+    schema_version: Literal[2]
+    model_api: Literal[1]
+    obs_len: Literal[61]
+    action_len: Literal[14]
+    robot: PolicyRobot
+    policies: list[PolicyDefinition]
+
+    @model_validator(mode="after")
+    def validate_walking_set(self) -> Self:
+        policies = [policy for policy in self.policies if policy.mode == "walk"]
+        names = [policy.key for policy in policies]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate walking policy")
+        missing = sorted(_REQUIRED_POLICIES - set(names))
+        extra = sorted(set(names) - _REQUIRED_POLICIES)
+        if missing or extra:
+            raise ValueError(f"walking policy set mismatch; missing={missing}, extra={extra}")
+        if any(policy.kind == "episodic" and policy.duration_s <= 0 for policy in policies):
+            raise ValueError("episodic policy duration_s must be positive")
+        return self
 
 
 @dataclass(frozen=True)
-class PolicyDefinition:
-    name: str
-    path: Path
-    kind: str
-    duration_s: float = 0.0
-    chainable: bool = False
-    action_scale: float | None = None
-    command: Mapping[str, Any] = field(default_factory=dict)
+class LoadedPolicy:
+    definition: PolicyDefinition
+    session: PolicySession
+    input_name: str
+    output_name: str
 
 
-@dataclass
-class MicroDuckPolicyTaskConfig:
+class MicroDuckPolicyTaskConfig(BaseConfig):
     policy_dir: str | Path
-    joint_names: list[str]
+    head_mjcf: str | Path = MICRODUCK_ROBOT_MJCF
     hardware_id: str = "microduck"
     priority: int = 50
     auto_arm: bool = True
-    timeout: float = 0.5
-    standing_threshold: float = 0.05
-    command_alpha: float = 0.2
-    head_alpha: float = 0.2
-    body_alpha: float = 0.2
-    walking_action_scale: float = 0.9
-    standing_action_scale: float = 1.0
-    head_target_alpha: float = 0.5
-    leg_target_alpha: float = 0.7
+    timeout: PositiveFinite = 0.5
+    standing_threshold: NonnegativeFinite = 0.05
+    command_alpha: SmoothingFactor = 0.2
+    head_alpha: SmoothingFactor = 0.2
+    body_alpha: SmoothingFactor = 0.2
+    walking_action_scale: PositiveFinite = 0.9
+    standing_action_scale: PositiveFinite = 1.0
+    head_target_alpha: SmoothingFactor = 0.5
+    leg_target_alpha: SmoothingFactor = 0.7
     session_factory: SessionFactory = _default_session_factory
 
 
@@ -131,38 +237,21 @@ class MicroDuckPolicyTask(BaseControlTask):
     """Run all walking-mode MicroDuck policies in one shared state machine."""
 
     def __init__(self, name: str, config: MicroDuckPolicyTaskConfig) -> None:
-        if len(config.joint_names) != ACTION_LEN:
-            raise ValueError(
-                f"MicroDuckPolicyTask {name!r} requires {ACTION_LEN} joints, "
-                f"got {len(config.joint_names)}"
-            )
-        if config.timeout <= 0.0:
-            raise ValueError("MicroDuck velocity timeout must be positive")
-        for field_name in ("command_alpha", "head_alpha", "body_alpha"):
-            value = float(getattr(config, field_name))
-            if not 0.0 < value <= 1.0:
-                raise ValueError(f"{field_name} must be in (0, 1]")
-
         self._name = name
         self._config = config
-        self._joint_names = list(config.joint_names)
-        self._joint_set = frozenset(config.joint_names)
+        self._joint_names = list(MICRODUCK_JOINTS)
+        self._joint_set = frozenset(MICRODUCK_JOINTS)
+        self._head_kinematics: HeadKinematics | None = None
         self._home = np.asarray(MICRODUCK_HOME, dtype=np.float32)
         self._position_lower = np.asarray(MICRODUCK_POSITION_LOWER, dtype=np.float32)
         self._position_upper = np.asarray(MICRODUCK_POSITION_UPPER, dtype=np.float32)
         self._lock = threading.RLock()
 
-        self._definitions, self._sessions, self._io_names = self._load_policy_set(
-            Path(config.policy_dir)
-        )
-        self._sitstand_rise_s = self._manifest_number("sitstand", "unwind_s", fallback=1.0)
-        ground_command = self._definitions["ground_pick"].command
-        self._ground_period_s = self._finite_positive(
-            ground_command.get("period_s", 4.0), "ground_pick command.period_s"
-        )
-        self._ground_end_phase = self._finite_positive(
-            ground_command.get("end_phase", 0.7), "ground_pick command.end_phase"
-        )
+        self._policies = self._load_policy_set(Path(str(config.policy_dir)))
+        self._sitstand_rise_s = self._policies["sitstand"].definition.unwind_s
+        ground_command = self._policies["ground_pick"].definition.command
+        self._ground_period_s = ground_command.period_s
+        self._ground_end_phase = ground_command.end_phase
 
         self._active = False
         self._armed = False
@@ -187,116 +276,32 @@ class MicroDuckPolicyTask(BaseControlTask):
         self._skill_chain_window = 0.0
         self._ground_phase: float | None = None
 
-    def _load_policy_set(
-        self, policy_dir: Path
-    ) -> tuple[dict[str, PolicyDefinition], dict[str, Any], dict[str, tuple[str, str]]]:
-        manifest_path = policy_dir / "manifest.json"
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise ValueError(f"Failed to read MicroDuck manifest {manifest_path}: {exc}") from exc
-        if not isinstance(manifest, dict):
-            raise ValueError(f"{manifest_path}: root must be an object")
-
-        expected = {
-            "schema_version": 2,
-            "model_api": 1,
-            "obs_len": OBS_LEN,
-            "action_len": ACTION_LEN,
-        }
-        for key, wanted in expected.items():
-            got = manifest.get(key)
-            if got != wanted:
-                raise ValueError(f"{manifest_path}: {key} is {got!r}, expected {wanted!r}")
-        robot = manifest.get("robot")
-        if not isinstance(robot, dict):
-            raise ValueError(f"{manifest_path}: robot must be an object")
-        robot_expected: dict[str, Any] = {"model": "microduck", "control_hz": CONTROL_HZ}
-        for key, wanted in robot_expected.items():
-            got = robot.get(key)
-            if got != wanted:
-                raise ValueError(f"{manifest_path}: robot.{key} is {got!r}, expected {wanted!r}")
-        entries = manifest.get("policies")
-        if not isinstance(entries, list):
-            raise ValueError(f"{manifest_path}: policies must be a list")
-
-        definitions: dict[str, PolicyDefinition] = {}
-        entry_data: dict[str, Mapping[str, Any]] = {}
-        for raw in entries:
-            if not isinstance(raw, dict):
-                raise ValueError(f"{manifest_path}: each policy must be an object")
-            if raw.get("mode") == "roller":
-                continue
-            filename = raw.get("file")
-            if not isinstance(filename, str) or not filename.endswith(".onnx"):
-                raise ValueError(f"{manifest_path}: invalid policy file {filename!r}")
-            stem = Path(filename).stem
-            explicit_name = raw.get("name")
-            if explicit_name is not None and not isinstance(explicit_name, str):
-                raise ValueError(f"{manifest_path}: name for {filename} must be a string")
-            policy_name = explicit_name or _POLICY_NAME_ALIASES.get(stem, stem)
-            if policy_name in definitions:
-                raise ValueError(f"{manifest_path}: duplicate walking policy {policy_name!r}")
-            kind = raw.get("kind", "episodic")
-            if kind not in ("perpetual", "scripted", "episodic"):
-                raise ValueError(f"{manifest_path}: invalid kind {kind!r} for {filename}")
-            duration = float(raw.get("duration_s", 0.0))
-            if not math.isfinite(duration) or duration < 0.0:
-                raise ValueError(f"{manifest_path}: invalid duration_s for {filename}")
-            scale_raw = raw.get("action_scale")
-            scale = None if scale_raw is None else float(scale_raw)
-            if scale is not None and (not math.isfinite(scale) or scale <= 0.0):
-                raise ValueError(f"{manifest_path}: invalid action_scale for {filename}")
-            command = raw.get("command", {})
-            if not isinstance(command, dict):
-                raise ValueError(f"{manifest_path}: command for {filename} must be an object")
-            definitions[policy_name] = PolicyDefinition(
-                name=policy_name,
-                path=policy_dir / filename,
-                kind=kind,
-                duration_s=duration,
-                chainable=bool(raw.get("chain", False)),
-                action_scale=scale,
-                command=command,
-            )
-            entry_data[policy_name] = raw
-
-        missing = sorted(_REQUIRED_POLICIES - definitions.keys())
-        extra = sorted(definitions.keys() - _REQUIRED_POLICIES)
-        if missing or extra:
-            raise ValueError(
-                f"{manifest_path}: walking policy set mismatch; missing={missing}, extra={extra}"
-            )
-
-        # Keep the fields not represented by PolicyDefinition for manifest-derived
-        # sit/rise timing without turning the entire schema into runtime state.
-        self._manifest_entries = entry_data
+    def _load_policy_set(self, policy_dir: Path) -> dict[str, LoadedPolicy]:
+        manifest = PolicyManifest.model_validate_json(
+            (policy_dir / "manifest.json").read_text(encoding="utf-8")
+        )
         providers = _preferred_onnx_providers()
-        sessions: dict[str, Any] = {}
-        io_names: dict[str, tuple[str, str]] = {}
-        for policy_name, definition in definitions.items():
-            if not definition.path.is_file():
-                raise FileNotFoundError(f"MicroDuck policy is missing: {definition.path}")
-            try:
-                session = self._config.session_factory(definition.path, providers)
-                input_name, output_name = self._validate_and_warm_session(session, definition.path)
-            except Exception as exc:
-                raise ValueError(
-                    f"Failed to load MicroDuck policy {definition.path}: {exc}"
-                ) from exc
-            sessions[policy_name] = session
-            io_names[policy_name] = (input_name, output_name)
+        policies: dict[str, LoadedPolicy] = {}
+        for definition in manifest.policies:
+            if definition.mode == "roller":
+                continue
+            path = policy_dir / definition.file
+            if not path.is_file():
+                raise FileNotFoundError(f"MicroDuck policy is missing: {path}")
+            session = self._config.session_factory(path, providers)
+            input_name, output_name = self._validate_and_warm_session(session, path)
+            policies[definition.key] = LoadedPolicy(definition, session, input_name, output_name)
         logger.info(
             "MicroDuck policy set loaded",
             task=self._name,
             policy_dir=str(policy_dir),
-            policies=sorted(sessions),
+            policies=sorted(policies),
             requested_providers=providers,
         )
-        return definitions, sessions, io_names
+        return policies
 
     @staticmethod
-    def _validate_and_warm_session(session: Any, path: Path) -> tuple[str, str]:
+    def _validate_and_warm_session(session: PolicySession, path: Path) -> tuple[str, str]:
         inputs = session.get_inputs()
         outputs = session.get_outputs()
         if len(inputs) != 1 or len(outputs) != 1:
@@ -311,7 +316,7 @@ class MicroDuckPolicyTask(BaseControlTask):
                 f"{path}: output shape is {output_meta.shape}, expected [1, {ACTION_LEN}]"
             )
         for label, meta in (("input", input_meta), ("output", output_meta)):
-            if getattr(meta, "type", "tensor(float)") != "tensor(float)":
+            if meta.type != "tensor(float)":
                 raise ValueError(f"{path}: {label} type is {meta.type}, expected tensor(float)")
         zero = np.zeros((1, OBS_LEN), dtype=np.float32)
         raw = session.run([output_meta.name], {input_meta.name: zero})[0]
@@ -321,19 +326,6 @@ class MicroDuckPolicyTask(BaseControlTask):
                 f"{path}: warm-up result must be finite [1, {ACTION_LEN}], got {action.shape}"
             )
         return str(input_meta.name), str(output_meta.name)
-
-    def _manifest_number(self, policy: str, field_name: str, *, fallback: float) -> float:
-        return self._finite_positive(
-            self._manifest_entries[policy].get(field_name, fallback),
-            f"{policy}.{field_name}",
-        )
-
-    @staticmethod
-    def _finite_positive(raw: Any, label: str) -> float:
-        value = float(raw)
-        if not math.isfinite(value) or value <= 0.0:
-            raise ValueError(f"{label} must be finite and positive, got {raw!r}")
-        return value
 
     def claim(self) -> ResourceClaim:
         return ResourceClaim(
@@ -384,9 +376,9 @@ class MicroDuckPolicyTask(BaseControlTask):
                 return None
 
             try:
-                input_name, output_name = self._io_names[policy_name]
-                raw = self._sessions[policy_name].run(
-                    [output_name], {input_name: observation.reshape(1, OBS_LEN)}
+                policy = self._policies[policy_name]
+                raw = policy.session.run(
+                    [policy.output_name], {policy.input_name: observation.reshape(1, OBS_LEN)}
                 )[0]
                 action = np.asarray(raw, dtype=np.float32)
                 if action.shape != (1, ACTION_LEN):
@@ -522,7 +514,7 @@ class MicroDuckPolicyTask(BaseControlTask):
         )
 
     def _action_scale(self, policy_name: str, effective_twist: NDArray[np.float32]) -> float:
-        override = self._definitions[policy_name].action_scale
+        override = self._policies[policy_name].definition.action_scale
         if override is not None:
             return override
         if policy_name in ("stand", "sitstand"):
@@ -556,7 +548,7 @@ class MicroDuckPolicyTask(BaseControlTask):
 
     def _expire_windows(self) -> None:
         if self._active_skill is not None and self._skill_remaining <= 0.0:
-            definition = self._definitions[self._active_skill]
+            definition = self._policies[self._active_skill].definition
             if definition.chainable and self._skill_chain_window > 0.0:
                 self._skill_remaining = definition.duration_s
                 self._skill_chain_window = 0.0
@@ -627,7 +619,7 @@ class MicroDuckPolicyTask(BaseControlTask):
             self._armed = False
             self._clear_transient_state(clear_intents=True)
 
-    def arm(self) -> dict[str, Any]:
+    def arm(self) -> IntentResult:
         """Idempotently enable policy output with a zero velocity command."""
 
         with self._lock:
@@ -642,7 +634,7 @@ class MicroDuckPolicyTask(BaseControlTask):
             self._armed = True
             return self._intent(True)
 
-    def disarm(self) -> dict[str, Any]:
+    def disarm(self) -> IntentResult:
         """Idempotently stop output and clear pending movements."""
 
         with self._lock:
@@ -650,7 +642,7 @@ class MicroDuckPolicyTask(BaseControlTask):
             self._clear_transient_state(clear_intents=True)
             return self._intent(True)
 
-    def stop_motion(self) -> dict[str, Any]:
+    def stop_motion(self) -> IntentResult:
         """Immediately clear requested and smoothed velocity, preserving one-shots."""
 
         with self._lock:
@@ -665,7 +657,7 @@ class MicroDuckPolicyTask(BaseControlTask):
         head_pitch: float,
         head_yaw: float,
         head_roll: float,
-    ) -> dict[str, Any]:
+    ) -> IntentResult:
         """Latch four head command offsets in radians."""
 
         values = np.asarray((neck_pitch, head_pitch, head_yaw, head_roll), dtype=np.float32)
@@ -677,14 +669,16 @@ class MicroDuckPolicyTask(BaseControlTask):
             self._desired_head[:] = values
             return self._intent(True)
 
-    def look_at(self, x: float, y: float, z: float, neck_pitch: float = 0.0) -> dict[str, Any]:
+    def look_at(self, x: float, y: float, z: float, neck_pitch: float = 0.0) -> LookResult:
         """Solve and latch a camera gaze for a point in the trunk frame."""
 
         values = (float(x), float(y), float(z), float(neck_pitch))
         if not all(math.isfinite(value) for value in values):
             return self._look_result(False, "look target must contain only finite values")
-        gaze = solve_look_at((values[0], values[1], values[2]), values[3])
         with self._lock:
+            if self._head_kinematics is None:
+                self._head_kinematics = HeadKinematics(self._config.head_mjcf)
+            gaze = self._head_kinematics.look_at((values[0], values[1], values[2]), values[3])
             self._desired_head[:] = gaze.joints
         return self._look_result(True, None, clamped=gaze.clamped, head=gaze.joints)
 
@@ -694,7 +688,7 @@ class MicroDuckPolicyTask(BaseControlTask):
         roll: float = 0.0,
         pitch: float = 0.0,
         active: bool = True,
-    ) -> dict[str, Any]:
+    ) -> IntentResult:
         """Enable or clear the standing body-pose command."""
 
         with self._lock:
@@ -718,7 +712,7 @@ class MicroDuckPolicyTask(BaseControlTask):
             self._body_active = True
             return self._intent(True)
 
-    def set_posture(self, posture: str) -> dict[str, Any]:
+    def set_posture(self, posture: str) -> IntentResult:
         """Request the idempotent ``sit`` or ``stand`` posture."""
 
         if posture not in ("sit", "stand"):
@@ -747,19 +741,19 @@ class MicroDuckPolicyTask(BaseControlTask):
             self._rise_remaining = self._sitstand_rise_s
             return self._intent(True)
 
-    def run_skill(self, name: str) -> dict[str, Any]:
+    def run_skill(self, name: str) -> IntentResult:
         """Start one manifest-defined walking-mode one-shot policy."""
 
         if name not in _PUBLIC_SKILL_ORDER:
             return self._intent(False, f"unknown skill {name!r}")
         with self._lock:
-            if name not in self._sessions:
+            if name not in self._policies:
                 return self._intent(False, f"skill {name!r} is unavailable")
             if not self._active or not self._armed or self._estopped:
                 return self._intent(False, "task must be armed and not E-stopped")
             if self._posture != "standing":
                 return self._intent(False, "skills require a standing robot")
-            if name == self._active_skill and self._definitions[name].chainable:
+            if name == self._active_skill and self._policies[name].definition.chainable:
                 self._skill_chain_window = 0.15
                 return self._intent(True)
             if self._is_busy():
@@ -772,11 +766,11 @@ class MicroDuckPolicyTask(BaseControlTask):
                 self._ground_phase = 0.0
             else:
                 self._active_skill = name
-                self._skill_remaining = self._definitions[name].duration_s
+                self._skill_remaining = self._policies[name].definition.duration_s
                 self._skill_chain_window = 0.0
             return self._intent(True)
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def list_skills(self) -> list[SkillInfo]:
         """List the exact public one-shot set and manifest-derived metadata."""
 
         with self._lock:
@@ -784,14 +778,14 @@ class MicroDuckPolicyTask(BaseControlTask):
                 {
                     "name": name,
                     "duration_s": self._skill_duration(name),
-                    "chainable": self._definitions[name].chainable,
+                    "chainable": self._policies[name].definition.chainable,
                     "required_mode": "walk",
                 }
                 for name in _PUBLIC_SKILL_ORDER
-                if name in self._definitions
+                if name in self._policies
             ]
 
-    def get_status(self) -> dict[str, Any]:
+    def get_status(self) -> TaskStatus:
         """Return a lock-consistent, JSON-serializable task snapshot."""
 
         with self._lock:
@@ -870,10 +864,10 @@ class MicroDuckPolicyTask(BaseControlTask):
     def _skill_duration(self, name: str) -> float:
         if name == "ground_pick":
             return self._ground_period_s * self._ground_end_phase
-        return self._definitions[name].duration_s
+        return self._policies[name].definition.duration_s
 
     @staticmethod
-    def _intent(accepted: bool, reason: str | None = None) -> dict[str, Any]:
+    def _intent(accepted: bool, reason: str | None = None) -> IntentResult:
         return {"accepted": accepted, "reason": reason}
 
     @staticmethod
@@ -883,7 +877,7 @@ class MicroDuckPolicyTask(BaseControlTask):
         *,
         clamped: bool = False,
         head: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
-    ) -> dict[str, Any]:
+    ) -> LookResult:
         return {
             "accepted": accepted,
             "reason": reason,
@@ -904,7 +898,7 @@ class MicroDuckPolicyTaskParams(BaseConfig):
     auto_arm: bool = True
 
 
-def create_task(cfg: Any, hardware: Any) -> MicroDuckPolicyTask:
+def create_task(cfg: TaskConfig, hardware: Mapping[str, ConnectedHardware]) -> MicroDuckPolicyTask:
     """Construct a MicroDuck task from its registry envelope."""
 
     params = MicroDuckPolicyTaskParams.model_validate(cfg.params)
@@ -918,16 +912,18 @@ def create_task(cfg: Any, hardware: Any) -> MicroDuckPolicyTask:
             f"MicroDuckPolicyTask {cfg.name!r} requires WHOLE_BODY hardware "
             f"{params.hardware_id!r}, got {type(connected).__name__}"
         )
-    if list(cfg.joint_names) != connected.joint_names:
+    if (
+        tuple(cfg.joint_names) != MICRODUCK_JOINTS
+        or tuple(connected.joint_names) != MICRODUCK_JOINTS
+    ):
         raise ValueError(
-            f"MicroDuckPolicyTask {cfg.name!r} joint order must equal hardware order; "
-            f"task={cfg.joint_names}, hardware={connected.joint_names}"
+            f"MicroDuckPolicyTask {cfg.name!r} task and hardware joint order must match "
+            f"the fixed policy order {MICRODUCK_JOINTS}"
         )
     return MicroDuckPolicyTask(
         cfg.name,
         MicroDuckPolicyTaskConfig(
             policy_dir=params.policy_dir,
-            joint_names=list(cfg.joint_names),
             hardware_id=params.hardware_id,
             priority=cfg.priority,
             auto_arm=params.auto_arm,

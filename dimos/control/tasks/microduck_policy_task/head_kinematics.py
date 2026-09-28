@@ -12,150 +12,122 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""MicroDuck head FK and gaze IK in the upstream trunk/cv2 frames.
-
-This is a small Python port of ``microduck/kinematics/src/head.rs``. The rest
-transforms come from the pinned alpha MJCF. Policy-space limits are narrower
-than mechanical travel, so gaze results are clamped to the trained envelope.
-"""
+"""Model-derived head FK and the upstream two-axis gaze objective."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import mujoco
 import numpy as np
 from numpy.typing import NDArray
+import pinocchio as pin
 
-_Vec3 = NDArray[np.float64]
-_Quat = NDArray[np.float64]
+from dimos.manipulation.planning.kinematics.pinocchio_ik import PinocchioIK
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 
-# rest position, rest quaternion (wxyz), then a rotation about local +z
-_HEAD_CHAIN: tuple[tuple[tuple[float, ...], tuple[float, ...]], ...] = (
-    ((0.026, 0.0145, 0.0324215), (0.0, 0.0, 0.707107, -0.707107)),
-    ((0.0, -0.05, 0.0), (0.0, 1.0, 0.0, 0.0)),
-    ((0.0, 0.0186931, -0.0145), (0.0, 0.0, -0.707107, -0.707107)),
-    ((-0.0179, 0.0, 0.0145), (0.707107, 0.0, -0.707107, 0.0)),
-)
-_CAMERA_POS = np.asarray((0.0155, -9.13778e-05, -0.0733), dtype=np.float64)
-_CAMERA_QUAT = np.asarray((0.707107, 0.0, 0.707107, 0.0), dtype=np.float64)
-_SITE_TO_CV2 = np.asarray((0.5, -0.5, 0.5, -0.5), dtype=np.float64)
+HeadJoints = tuple[float, float, float, float]
+HEAD_JOINT_NAMES = ("neck_pitch", "head_pitch", "head_yaw", "head_roll")
 
-# neck_pitch, head_pitch, head_yaw, head_roll command envelopes
+# Command limits belong to the trained policy, not the mechanical MJCF limits.
 HEAD_COMMAND_LOWER = np.asarray((-1.10, -1.10, -1.40, -0.31), dtype=np.float64)
 HEAD_COMMAND_UPPER = np.asarray((1.10, 1.10, 1.40, 0.31), dtype=np.float64)
+_SITE_TO_CV2 = pin.SE3(Quaternion(-0.5, 0.5, -0.5, 0.5).to_rotation_matrix(), np.zeros(3))
 
 
 @dataclass(frozen=True)
 class Gaze:
-    joints: tuple[float, float, float, float]
+    joints: HeadJoints
     clamped: bool
 
 
-def _quat_normalized(q: _Quat) -> _Quat:
-    norm = float(np.linalg.norm(q))
-    return np.asarray((1.0, 0.0, 0.0, 0.0), dtype=np.float64) if norm < 1e-12 else q / norm
+class HeadKinematics:
+    """Use dimOS Pinocchio FK for the MJCF camera site. Caller owns synchronization."""
 
+    def __init__(self, mjcf_path: str | Path) -> None:
+        # Pinocchio's MJCF parser does not handle this model's repeated default
+        # blocks. MuJoCo normalizes them (and includes) without changing geometry.
+        spec = mujoco.MjSpec.from_file(str(mjcf_path))
+        spec.compile()
+        with TemporaryDirectory(prefix="microduck-fk-") as directory:
+            normalized = Path(directory) / "robot.xml"
+            normalized.write_text(spec.to_xml(), encoding="utf-8")
+            model = PinocchioIK.from_model_path(normalized, ee_joint_id=0).model
 
-def _quat_mul(a: _Quat, b: _Quat) -> _Quat:
-    aw, ax, ay, az = a
-    bw, bx, by, bz = b
-    return np.asarray(
-        (
-            aw * bw - ax * bx - ay * by - az * bz,
-            aw * bx + ax * bw + ay * bz - az * by,
-            aw * by - ax * bz + ay * bw + az * bx,
-            aw * bz + ax * by - ay * bx + az * bw,
-        ),
-        dtype=np.float64,
-    )
+        for name in ("head_camera", "trunk_base"):
+            if not model.existFrame(name):
+                raise ValueError(f"MicroDuck MJCF is missing frame {name!r}")
+        indices: list[int] = []
+        for name in HEAD_JOINT_NAMES:
+            if not model.existJointName(name):
+                raise ValueError(f"MicroDuck MJCF is missing joint {name!r}")
+            joint = model.joints[model.getJointId(name)]
+            if joint.nq != 1:
+                raise ValueError(f"MicroDuck head joint {name!r} must have one coordinate")
+            indices.append(int(joint.idx_q))
+        self._indices = np.asarray(indices)
+        self._neutral = pin.neutral(model)
+        data = model.createData()
+        pin.forwardKinematics(model, data, self._neutral)
+        pin.updateFramePlacements(model, data)
+        self._trunk_from_world = data.oMf[model.getFrameId("trunk_base")].inverse()
+        camera = model.frames[model.getFrameId("head_camera")]
+        self._camera_from_joint = camera.placement * _SITE_TO_CV2
+        self._fk = PinocchioIK(model, data, int(camera.parentJoint))
 
+    def camera_in_trunk_cv2(self, joints: HeadJoints) -> pin.SE3:
+        """Return the camera optical pose in the trunk frame."""
 
-def _quat_rotate(q: _Quat, vector: _Vec3) -> _Vec3:
-    q = _quat_normalized(q)
-    xyz = q[1:]
-    t = 2.0 * np.cross(xyz, vector)
-    return np.asarray(vector + q[0] * t + np.cross(xyz, t), dtype=np.float64)
+        q = self._neutral.copy()
+        q[self._indices] = joints
+        return self._trunk_from_world * self._fk.forward_kinematics(q) * self._camera_from_joint
 
+    def look_at(self, target_in_trunk: tuple[float, float, float], neck_pitch: float = 0.0) -> Gaze:
+        """Point the camera toward a target, retaining upstream gaze semantics."""
 
-def _z_rotation(angle: float) -> _Quat:
-    sine, cosine = math.sin(0.5 * angle), math.cos(0.5 * angle)
-    return np.asarray((cosine, 0.0, 0.0, sine), dtype=np.float64)
-
-
-def camera_in_trunk_cv2(joints: tuple[float, float, float, float]) -> tuple[_Vec3, _Quat]:
-    """Return camera position and cv2-axis quaternion in the trunk frame."""
-
-    position = np.zeros(3, dtype=np.float64)
-    quaternion = np.asarray((1.0, 0.0, 0.0, 0.0), dtype=np.float64)
-    for angle, (rest_position, rest_quaternion) in zip(joints, _HEAD_CHAIN, strict=True):
-        position += _quat_rotate(quaternion, np.asarray(rest_position, dtype=np.float64))
-        quaternion = _quat_mul(quaternion, _quat_normalized(np.asarray(rest_quaternion)))
-        quaternion = _quat_mul(quaternion, _z_rotation(angle))
-
-    position += _quat_rotate(quaternion, _CAMERA_POS)
-    quaternion = _quat_mul(quaternion, _quat_normalized(_CAMERA_QUAT))
-    quaternion = _quat_mul(quaternion, _SITE_TO_CV2)
-    return position, _quat_normalized(quaternion)
-
-
-def look_at(target_in_trunk: tuple[float, float, float], neck_pitch: float = 0.0) -> Gaze:
-    """Point the camera toward a trunk-frame target with damped 2-DOF IK."""
-
-    target = np.asarray(target_in_trunk, dtype=np.float64)
-    joints = np.asarray((neck_pitch, 0.0, 0.0, 0.0), dtype=np.float64)
-    joints = np.clip(joints, HEAD_COMMAND_LOWER, HEAD_COMMAND_UPPER)
-
-    tolerance = 1e-4
-    step_h = 1e-5
-    damping = 1e-3
-    max_step = 0.7
-
-    def pointing_error(values: NDArray[np.float64]) -> NDArray[np.float64]:
-        position, quaternion = camera_in_trunk_cv2(tuple(float(v) for v in values))  # type: ignore[arg-type]
-        delta = target - position
-        camera_delta = _quat_rotate(
-            np.asarray((quaternion[0], -quaternion[1], -quaternion[2], -quaternion[3])),
-            delta,
-        )
-        flat = math.hypot(float(camera_delta[0]), float(camera_delta[2]))
-        return np.asarray(
-            (
-                math.atan2(float(camera_delta[0]), float(camera_delta[2])),
-                math.atan2(float(camera_delta[1]), flat),
-            ),
-            dtype=np.float64,
-        )
-
-    residual = math.inf
-    for _ in range(30):
-        error = pointing_error(joints)
-        residual = float(np.max(np.abs(error)))
-        if residual < tolerance:
-            break
-
-        jacobian = np.empty((2, 2), dtype=np.float64)
-        for column, joint_index in enumerate((1, 2)):
-            probe = joints.copy()
-            probe[joint_index] += step_h
-            jacobian[:, column] = (pointing_error(probe) - error) / step_h
-
-        lhs = jacobian.T @ jacobian + damping * np.eye(2)
-        rhs = -(jacobian.T @ error)
-        try:
-            step = np.linalg.solve(lhs, rhs)
-        except np.linalg.LinAlgError:
-            break
-        norm = float(np.linalg.norm(step))
-        if norm > max_step:
-            step *= max_step / norm
-        joints[1:3] += step
+        target = np.asarray(target_in_trunk, dtype=np.float64)
+        joints = np.asarray((neck_pitch, 0.0, 0.0, 0.0), dtype=np.float64)
         joints = np.clip(joints, HEAD_COMMAND_LOWER, HEAD_COMMAND_UPPER)
+        tolerance, step_h, damping, max_step = 1e-4, 1e-5, 1e-3, 0.7
 
-    # Re-evaluate after the final update; upstream reports whether the answer
-    # still misses, regardless of whether travel or geometry caused the miss.
-    residual = float(np.max(np.abs(pointing_error(joints))))
-    return Gaze(
-        joints=tuple(float(value) for value in joints),  # type: ignore[arg-type]
-        clamped=residual >= tolerance,
-    )
+        def pointing_error(values: NDArray[np.float64]) -> NDArray[np.float64]:
+            angles = (float(values[0]), float(values[1]), float(values[2]), float(values[3]))
+            camera_delta = self.camera_in_trunk_cv2(angles).inverse().act(target)
+            flat = math.hypot(float(camera_delta[0]), float(camera_delta[2]))
+            return np.asarray(
+                (
+                    math.atan2(float(camera_delta[0]), float(camera_delta[2])),
+                    math.atan2(float(camera_delta[1]), flat),
+                ),
+                dtype=np.float64,
+            )
+
+        for _ in range(30):
+            error = pointing_error(joints)
+            if float(np.max(np.abs(error))) < tolerance:
+                break
+            jacobian = np.empty((2, 2), dtype=np.float64)
+            for column, joint_index in enumerate((1, 2)):
+                probe = joints.copy()
+                probe[joint_index] += step_h
+                jacobian[:, column] = (pointing_error(probe) - error) / step_h
+            lhs = jacobian.T @ jacobian + damping * np.eye(2)
+            rhs = -(jacobian.T @ error)
+            try:
+                step = np.linalg.solve(lhs, rhs)
+            except np.linalg.LinAlgError:
+                break
+            norm = float(np.linalg.norm(step))
+            if norm > max_step:
+                step *= max_step / norm
+            joints[1:3] += step
+            joints = np.clip(joints, HEAD_COMMAND_LOWER, HEAD_COMMAND_UPPER)
+
+        residual = float(np.max(np.abs(pointing_error(joints))))
+        return Gaze(
+            joints=(float(joints[0]), float(joints[1]), float(joints[2]), float(joints[3])),
+            clamped=residual >= tolerance,
+        )

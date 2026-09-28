@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 from functools import cache
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING, cast
 
 from dimos.core.global_config import global_config
 from dimos.robot.pollen.microduck.config import (
@@ -27,6 +28,11 @@ from dimos.robot.pollen.microduck.config import (
 )
 from dimos.visualization.rerun.mjcf_robot import MjcfRobotRerun
 from dimos.visualization.rerun.scene_package import scene_package_static_entities
+
+if TYPE_CHECKING:
+    from rerun import Archetype
+
+    from dimos.msgs.sensor_msgs.JointState import JointState
 
 MICRODUCK_RERUN_ROOT = "world/microduck/odom/model"
 MICRODUCK_RERUN_JOINTS = "world/microduck/joints"
@@ -43,20 +49,20 @@ def _microduck_rerun_robot() -> MjcfRobotRerun:
     )
 
 
-def microduck_static_robot(rr: Any) -> list[tuple[str, Any]]:
+def microduck_static_robot(rr: ModuleType) -> list[tuple[str, Archetype]]:
     """Log the official MicroDuck CAD meshes under its odometry transform."""
 
     return _microduck_rerun_robot().static(rr)
 
 
-def microduck_joint_state(msg: Any) -> list[tuple[str, Any]]:
+def microduck_joint_state(msg: JointState) -> list[tuple[str, Archetype]]:
     """Animate the MicroDuck CAD model from its published joint state."""
 
     return _microduck_rerun_robot().joint_state(msg)
 
 
-def microduck_static_scene(rr: Any) -> list[Any]:
+def microduck_static_scene(rr: ModuleType) -> list[Archetype]:
     """Log the active cooked scene package without passing callable instances."""
 
     factory = scene_package_static_entities(global_config.scene_package).get(MICRODUCK_RERUN_SCENE)
-    return [] if factory is None else factory(rr)
+    return [] if factory is None else cast("list[Archetype]", factory(rr))

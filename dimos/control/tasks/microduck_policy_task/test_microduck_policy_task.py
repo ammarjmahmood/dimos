@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from typing import Any
@@ -20,16 +21,27 @@ from typing import Any
 import numpy as np
 import pytest
 
+from dimos.control.coordinator import TaskConfig
+from dimos.control.hardware_interface import ConnectedWholeBody
 from dimos.control.task import CoordinatorState, JointStateSnapshot
+from dimos.control.tasks.microduck_policy_task.head_kinematics import Gaze
+import dimos.control.tasks.microduck_policy_task.microduck_policy_task as policy_module
 from dimos.control.tasks.microduck_policy_task.microduck_policy_task import (
     ACTION_LEN,
     OBS_LEN,
     MicroDuckPolicyTask,
     MicroDuckPolicyTaskConfig,
+    PolicyManifest,
+    create_task,
 )
+from dimos.hardware.whole_body.mock.adapter import MockWholeBodyAdapter
 from dimos.hardware.whole_body.spec import IMUState
 from dimos.msgs.geometry_msgs.Twist import Twist
-from dimos.robot.pollen.microduck.config import MICRODUCK_HOME, MICRODUCK_JOINTS
+from dimos.robot.pollen.microduck.config import (
+    MICRODUCK_HOME,
+    MICRODUCK_JOINTS,
+    make_microduck_sim_hardware,
+)
 
 
 @dataclass
@@ -114,7 +126,7 @@ def policy_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def task_and_sessions(
     policy_dir: Path,
-) -> tuple[MicroDuckPolicyTask, dict[str, _FakeSession]]:
+) -> Iterator[tuple[MicroDuckPolicyTask, dict[str, _FakeSession]]]:
     values = {
         "alpha_walking": 0.2,
         "alpha_stand": 0.1,
@@ -135,12 +147,14 @@ def task_and_sessions(
         "microduck_policy",
         MicroDuckPolicyTaskConfig(
             policy_dir=policy_dir,
-            joint_names=list(MICRODUCK_JOINTS),
             session_factory=factory,
         ),
     )
     task.start()
-    return task, sessions
+    try:
+        yield task, sessions
+    finally:
+        task.stop()
 
 
 def _state(t_now: float = 1.0, dt: float = 0.02) -> CoordinatorState:
@@ -324,16 +338,117 @@ def test_incomplete_state_emits_nothing_and_runtime_failure_disarms(
     assert "non-finite" in status["last_error"]
 
 
-def test_look_at_reports_reachable_and_clamped_targets(
+def test_look_at_latches_solver_result_and_reports_clamping(
     task_and_sessions: tuple[MicroDuckPolicyTask, dict[str, _FakeSession]],
+    mocker,
 ) -> None:
     task, _ = task_and_sessions
+    solver = mocker.patch.object(policy_module, "HeadKinematics").return_value
+    solver.look_at.return_value = Gaze((0.1, 0.2, 1.4, 0.0), clamped=True)
 
-    reachable = task.look_at(1.0, 0.2, -0.1)
-    behind = task.look_at(-1.0, 0.0, 0.0)
+    result = task.look_at(1.0, 0.2, -0.1, neck_pitch=0.1)
 
-    assert reachable["accepted"] is True
-    assert reachable["clamped"] is False
-    assert behind["accepted"] is True
-    assert behind["clamped"] is True
-    assert abs(behind["head"]["head_yaw"]) == pytest.approx(1.4)
+    solver.look_at.assert_called_once_with((1.0, 0.2, -0.1), 0.1)
+    assert result == {
+        "accepted": True,
+        "reason": None,
+        "clamped": True,
+        "head": {"neck_pitch": 0.1, "head_pitch": 0.2, "head_yaw": 1.4, "head_roll": 0.0},
+    }
+    task.compute(_state())
+    _, sessions = task_and_sessions
+    np.testing.assert_allclose(
+        sessions["alpha_stand"].inputs[-1][0, 51:55], [0.02, 0.04, 0.28, 0.0]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("timeout", float("nan")),
+        ("timeout", 0),
+        ("head_target_alpha", -0.1),
+        ("leg_target_alpha", 1.1),
+        ("walking_action_scale", float("inf")),
+        ("standing_threshold", -0.1),
+        ("joint_names", list(reversed(MICRODUCK_JOINTS))),
+    ],
+)
+def test_config_rejects_invalid_control_parameters(field, value, tmp_path):
+    with pytest.raises(ValueError, match=field):
+        MicroDuckPolicyTaskConfig(policy_dir=tmp_path, **{field: value})
+
+
+@pytest.mark.parametrize("reorder", ["task", "hardware", "both"])
+def test_factory_rejects_noncanonical_joint_order(reorder, policy_dir):
+    task_joints = list(MICRODUCK_JOINTS)
+    hardware_joints = list(MICRODUCK_JOINTS)
+    if reorder in ("task", "both"):
+        task_joints.reverse()
+    if reorder in ("hardware", "both"):
+        hardware_joints.reverse()
+    component = replace(make_microduck_sim_hardware(), joints=hardware_joints)
+    hardware = ConnectedWholeBody(MockWholeBodyAdapter(dof=ACTION_LEN), component)
+    config = TaskConfig(
+        name="duck",
+        type="microduck_policy",
+        joint_names=task_joints,
+        params={"policy_dir": policy_dir},
+    )
+
+    with pytest.raises(ValueError, match="fixed policy order"):
+        create_task(config, {"microduck": hardware})
+
+
+def test_policy_order_is_independent_of_state_dictionary_order(task_and_sessions, mocker):
+    task, sessions = task_and_sessions
+    state = _state()
+    offsets = np.arange(ACTION_LEN, dtype=np.float32) * 0.001
+    state.joints.joint_positions = {
+        MICRODUCK_JOINTS[i]: MICRODUCK_HOME[i] + float(offsets[i])
+        for i in reversed(range(ACTION_LEN))
+    }
+    actions = np.arange(ACTION_LEN, dtype=np.float32).reshape(1, -1) * 0.01
+    run = mocker.patch.object(sessions["alpha_stand"], "run", return_value=[actions])
+
+    output = task.compute(state)
+
+    assert output is not None
+    assert output.joint_names == list(MICRODUCK_JOINTS)
+    np.testing.assert_allclose(run.call_args.args[1]["observation"][0, 6:20], offsets, atol=1e-7)
+    np.testing.assert_allclose(output.positions, np.asarray(MICRODUCK_HOME) + actions[0], atol=1e-7)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("obs_len", 62),
+        ("robot.control_hz", 100),
+        ("policies.0.file", "../walk.onnx"),
+        ("policies.0.action_scale", float("nan")),
+        ("policies.4.duration_s", 0),
+        ("policies.3.command.period_s", -1),
+        ("policies.3.command.end_phase", 1.2),
+    ],
+)
+def test_manifest_rejects_incompatible_or_invalid_policy_metadata(policy_dir, path, value):
+    manifest = json.loads((policy_dir / "manifest.json").read_text())
+    parts = [int(part) if part.isdigit() else part for part in path.split(".")]
+    target = manifest
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] = value
+
+    with pytest.raises(ValueError):
+        PolicyManifest.model_validate(manifest)
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_manifest_rejects_missing_or_duplicate_policies(policy_dir, duplicate):
+    manifest = json.loads((policy_dir / "manifest.json").read_text())
+    if duplicate:
+        manifest["policies"].append(manifest["policies"][0])
+    else:
+        manifest["policies"].pop(0)
+    with pytest.raises(ValueError, match="duplicate|policy set mismatch"):
+        PolicyManifest.model_validate(manifest)
