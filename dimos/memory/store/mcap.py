@@ -25,7 +25,7 @@ Read-only: no append, blobs, vectors, or embeddings. Payloads decode lazily on
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import replace
 from functools import partial
 from typing import Any, Protocol, runtime_checkable
@@ -211,6 +211,104 @@ class McapObservationStore(ObservationStore[Any]):
         raise NotImplementedError("McapStore is read-only")
 
 
+# Chunks decompressed at once by read_topic; a batch is what is held in memory.
+READ_WORKERS = 8
+READ_BATCH = 32
+
+
+def read_topic(
+    path: str,
+    topics: Iterable[str],
+    *,
+    start: int | None = None,
+    end: int | None = None,
+    workers: int = READ_WORKERS,
+) -> Iterator[tuple[int, bytes]]:
+    """``(log_time_ns, data)`` for every message on *topics*, chunk by chunk, in file
+    order, optionally only those logged in ``[start, end]`` (ns).
+
+    The mcap reader decompresses one chunk at a time on one thread, which for a model's
+    patch vectors -- incompressible floats, zstd'd anyway -- ran at 110 MB/s off an
+    NVMe. Here the chunks the index says hold these topics are read with ``os.pread``
+    and decompressed on a thread pool (both let go of the GIL), a batch at a time so
+    only a batch is ever held. Within a chunk, messages come in the order written.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import os
+    import struct
+
+    from mcap.reader import make_reader
+
+    from dimos.memory.store.mcap_append import load_summary
+
+    with open(path, "rb") as f:
+        summary = load_summary(make_reader(f), path)
+    if summary is None:
+        return
+    wanted = {cid for cid, ch in summary.channels.items() if ch.topic in set(topics)}
+    chunks = sorted(
+        (
+            index
+            for index in summary.chunk_indexes
+            if wanted & set(index.message_index_offsets)
+            and (start is None or index.message_end_time >= start)
+            and (end is None or index.message_start_time <= end)
+        ),
+        key=lambda index: index.chunk_start_offset,
+    )
+    if not chunks:
+        return
+
+    def messages_in(fd: int, index: Any) -> list[tuple[int, bytes]]:
+        raw = os.pread(fd, index.chunk_length, index.chunk_start_offset)
+        body = memoryview(raw)[9:]  # opcode + record length
+        at = 8 + 8 + 8 + 4  # start, end, uncompressed size, crc
+        (name_length,) = struct.unpack_from("<I", body, at)
+        at += 4 + name_length
+        (records_length,) = struct.unpack_from("<Q", body, at)
+        at += 8
+        records = body[at : at + records_length]
+        if index.compression == "zstd":
+            import zstandard
+
+            records = memoryview(
+                zstandard.ZstdDecompressor().decompress(
+                    records, max_output_size=index.uncompressed_size
+                )
+            )
+        elif index.compression == "lz4":
+            import lz4.frame
+
+            records = memoryview(lz4.frame.decompress(records))
+        elif index.compression:
+            raise ValueError(f"unsupported chunk compression {index.compression!r}")
+        found = []
+        at = 0
+        while at + 9 <= len(records):
+            opcode = records[at]
+            (length,) = struct.unpack_from("<Q", records, at + 1)
+            if opcode == 0x05:  # message
+                channel, _, log_time = struct.unpack_from("<HIQ", records, at + 9)
+                if (
+                    channel in wanted
+                    and (start is None or log_time >= start)
+                    and (end is None or log_time <= end)
+                ):
+                    found.append((log_time, bytes(records[at + 9 + 22 : at + 9 + length])))
+            at += 9 + length
+        return found
+
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for first in range(0, len(chunks), READ_BATCH):
+                batch = chunks[first : first + READ_BATCH]
+                for found in pool.map(lambda index: messages_in(fd, index), batch):
+                    yield from found
+    finally:
+        os.close(fd)
+
+
 class McapStoreConfig(StoreConfig):
     path: str = ""
 
@@ -262,6 +360,21 @@ class McapStore(Store):
                 if ch.topic not in self._codecs:
                     sch = summary.schemas.get(ch.schema_id)
                     self._raw[name] = sch.name if sch else None
+
+    def read_payloads(
+        self, name: str, t1: float | None = None, t2: float | None = None
+    ) -> Iterator[tuple[float, Any]]:
+        """``(ts, payload)`` for a whole stream, or the part logged in ``[t1, t2]``, read
+        with :func:`read_topic`: many times faster than iterating the stream for a
+        large one, and in file order rather than as observations."""
+        topic = self._stream_topic[name]
+        codec = self._codecs.get(topic) or _BYTES_CODEC
+        start = None if t1 is None else max(0, int(t1 * 1e9) - 1)
+        end = None if t2 is None else int(t2 * 1e9) + 1
+        for log_time, data in read_topic(self.config.path, [topic], start=start, end=end):
+            ts = log_time / 1e9
+            if (t1 is None or ts >= t1) and (t2 is None or ts <= t2):
+                yield ts, codec.decode(data)
 
     def list_streams(self) -> list[str]:
         return sorted(set(self._available) | set(self._streams))

@@ -33,6 +33,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 import math
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -509,6 +510,9 @@ class RecordingFrames:
         # tf is read a window at a time around them (`ensure_tf`), and these are the
         # windows already read. None: read it all at once, as a sqlite store is.
         self._tf_windows: set[int] | None = set() if is_mcap(recording) else None
+        # An mcap's whole /tf, read on a thread from `warm` so the first question does
+        # not pay for it; `ensure_tf` waits for it rather than reading windows twice.
+        self._tf_reader: threading.Thread | None = None
         filled = filled_stream_for("")
         if filled not in recording.list_streams():
             filled = DEPTH2DEPTH_STREAM  # the same depth, as a ROS 2 mcap carries it
@@ -524,6 +528,20 @@ class RecordingFrames:
             logger.info(f"hyperspace: showing the detector {kept}")
         self._fusion: Any = None
         self._fused_cache: dict[tuple[str, float], NDArray[np.float32]] = {}
+
+    def prefetch_tf(self) -> None:
+        """Read an mcap's whole /tf on a thread; `ensure_tf` waits for it."""
+        if self._tf_windows is None or self._tf_reader is not None:
+            return
+        if self._tf_stream not in self.recording.list_streams():
+            return
+
+        def read() -> None:
+            for _, message in self.recording.read_payloads(self._tf_stream):
+                self.tf.receive_tfmessage(message)
+
+        self._tf_reader = threading.Thread(target=read, name="prefetch-tf", daemon=True)
+        self._tf_reader.start()
 
     def warm(self) -> float:
         """Do the first lookup's work now, while nobody is waiting on an answer.
@@ -584,6 +602,9 @@ class RecordingFrames:
         window within `TF_WINDOW_S / 2` of a stamp is read, whole and once.
         """
         self.load_tf()
+        if self._tf_reader is not None:
+            self._tf_reader.join()  # the whole of it is, or is about to be, read
+            return
         if self._tf_windows is None or self._tf_stream not in self.recording.list_streams():
             return
         wanted: set[int] = set()
@@ -594,7 +615,6 @@ class RecordingFrames:
         wanted -= self._tf_windows
         if not wanted:
             return
-        stream = self.recording.stream(self._tf_stream, TFMessage)
         # consecutive windows in one read
         runs: list[list[int]] = []
         for window in sorted(wanted):
@@ -606,8 +626,8 @@ class RecordingFrames:
             start = run[0] * TF_WINDOW_S
             # just short of the next window, which owns its own first instant
             end = (run[-1] + 1) * TF_WINDOW_S - 1e-6
-            for observation in stream.time_range(start, end):
-                self.tf.receive_tfmessage(observation.data)
+            for _, message in self.recording.read_payloads(self._tf_stream, start, end):
+                self.tf.receive_tfmessage(message)
         self._tf_windows |= wanted
 
     def pose(self, camera_frame: str, ts: float, world_frame: str) -> NDArray[np.float64] | None:

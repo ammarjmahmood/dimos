@@ -793,8 +793,7 @@ def load_mcap(store: Any, tag: str, stream: str) -> ResidentPatches:
     vectors: NDArray[Any] | None = None
     at = 0
     columns: dict[str, NDArray[Any]] = {}
-    for observation in frames:
-        frame = observation.data
+    for _, frame in store.read_payloads(stream):
         cells = frame.rows * frame.cols
         if vectors is None:
             capacity = cells * count
@@ -854,7 +853,7 @@ class ResidentIndex:
         self._held: dict[str, ResidentPatches] = {}
         # Read ahead by `prefetch`, not yet placed: stream -> the thread reading it and
         # what it read (or the error it met, raised again where the load would have).
-        self._reading: dict[str, tuple[threading.Thread, list[Any]]] = {}
+        self._reading: dict[str, tuple[threading.Event, list[Any]]] = {}
         # Where the vectors are kept. "auto" is the accelerator this process can use,
         # "cpu" is the numpy path this used to be. Set before warming, because a member
         # is placed as it loads.
@@ -899,38 +898,47 @@ class ResidentIndex:
         return held
 
     def prefetch(self, store: Any, members: Sequence[tuple[str, str]]) -> None:
-        """Start reading these members into RAM, one thread each, and return at once.
+        """Start reading these members into RAM on a thread, and return at once.
 
         Only for an mcap: reading one is plain file I/O on handles of its own, where a
         sqlite store's connection belongs to the thread that opened it. The read overlaps
         whatever the caller loads next -- the detector and the text towers are half a
         minute -- and placing on the device still waits for them, so the order `warm`
-        chooses for the card is unchanged.
+        chooses for the card is unchanged. One thread reads the members in turn, each
+        on `read_topic`'s own pool: a thread per member measured slower on sf_office1
+        (42.6 s against 6.1 s alone for so400m), every one of them fighting the text
+        towers for the interpreter.
         """
         if not is_mcap(store):
             return
-        for tag, stream in members:
-            if stream in self._held or stream in self._reading:
-                continue
-            box: list[Any] = []
+        todo = [
+            (tag, stream)
+            for tag, stream in members
+            if stream not in self._held and stream not in self._reading
+        ]
+        if not todo:
+            return
+        boxes = {stream: (threading.Event(), []) for _, stream in todo}
 
-            def read(tag: str = tag, stream: str = stream, box: list[Any] = box) -> None:
+        def read() -> None:
+            for tag, stream in todo:
+                done, box = boxes[stream]
                 try:
                     box.append(load(store, tag, stream))
                 except Exception as error:  # raised again by `_loaded`
                     box.append(error)
+                done.set()
 
-            thread = threading.Thread(target=read, name=f"prefetch-{tag}", daemon=True)
-            thread.start()
-            self._reading[stream] = (thread, box)
+        threading.Thread(target=read, name="prefetch-index", daemon=True).start()
+        self._reading.update(boxes)
 
     def _loaded(self, store: Any, tag: str, stream: str) -> ResidentPatches:
         """What `prefetch` read for this stream, waited for; otherwise a load now."""
         reading = self._reading.pop(stream, None)
         if reading is None:
             return load(store, tag, stream)
-        thread, box = reading
-        thread.join()
+        done, box = reading
+        done.wait()
         if isinstance(box[0], BaseException):
             raise box[0]
         return box[0]

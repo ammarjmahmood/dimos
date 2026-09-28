@@ -159,6 +159,7 @@ class LiveQuery:
         # The detector still goes first of all: it is the one that cannot spill. An
         # mcap's index is read into RAM meanwhile; only placing it waits its turn.
         self.held.prefetch(self.store, self.members())
+        self.frames.prefetch_tf()
         self.loaded["detector"] = self.boxes.warm()
         self.loaded["recording"] = self.frames.warm()
 
