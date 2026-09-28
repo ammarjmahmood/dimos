@@ -21,7 +21,9 @@ planner skills and the wrist camera only, graded on the bodies' recorded poses.
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 import math
+from pathlib import Path
 
 from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
@@ -37,12 +39,12 @@ PERCEPTION_MODULES = (
 )
 
 SCENE = (
-    "The table top is at z=0.12 m in the world frame and spans roughly x=0.30 to 0.60 m "
-    "ahead of the arm base. On it are a red ball about 8 cm wide and a cylinder about 7 cm "
-    "wide and 12 cm tall; find where they are by looking through the wrist camera. The "
-    "gripper starts pointing straight down: for top-down moves omit roll/pitch/yaw in "
-    "move_to_pose to keep the current orientation, or pass roll=3.1416, pitch=0. "
-    "roll=pitch=yaw=0 points the gripper up."
+    "The table top is at z=0.13 m in the world frame and spans roughly x=0.30 to 0.60 m "
+    "ahead of the arm base. On it are a red ball about 8 cm wide, an orange ball about 9 cm "
+    "wide and a cylinder about 7 cm wide and 12 cm tall; find where they are by looking "
+    "through the wrist camera. The gripper starts pointing straight down: for top-down moves "
+    "omit roll/pitch/yaw in move_to_pose to keep the current orientation, or pass "
+    "roll=3.1416, pitch=0. roll=pitch=yaw=0 points the gripper up."
 )
 
 
@@ -54,13 +56,24 @@ def environment() -> MujocoEnvironment:
     )
 
 
+def _settled_z(outcome: Outcome, body: str) -> float | None:
+    """The body's height once the sim was ready, from the environment's episode metadata."""
+    episode = outcome.artifacts.get("episode")
+    if episode is None:
+        return None
+    position = json.loads(Path(episode).read_text()).get("initial_body_positions", {}).get(body)
+    return None if position is None else float(position[2])
+
+
 def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
-    """How far the body ended above where it started, full credit at ``by_m``."""
+    """How far the body ended above where it rested, full credit at ``by_m``."""
 
     def grade(outcome: Outcome) -> float:
         with recording(outcome) as store:
             try:
-                start = first_body_transform(store, body).translation.z
+                start = _settled_z(outcome, body)
+                if start is None:
+                    start = first_body_transform(store, body).translation.z
                 end = last_body_transform(store, body).translation.z
             except LookupError:
                 return 0.0

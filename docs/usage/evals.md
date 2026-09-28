@@ -461,7 +461,7 @@ lift_apple = EvalCase(
 A fixed-base arm has no odometry, so readiness waits for fresh `color_image`
 and `coordinator_joint_state` plus a pose for every tracked body, and settling
 waits until every joint is slower than `at_rest_rad_s`. Floating-base robots
-still settle on `odom`. The recording keeps colour, camera info, joint state,
+still settle on `odom`. The recording keeps color, camera info, joint state,
 `tf` and `odom`; depth frames are float32, which the JPEG recorder rejects. `module_env` passes extra
 `MODULE__FIELD` overrides to the launched dimos, which beat blueprint-pinned
 values, so a case can retune a module without a new blueprint.

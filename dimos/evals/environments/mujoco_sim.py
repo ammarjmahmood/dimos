@@ -40,7 +40,7 @@ _RECORDED_TOPICS = ("color_image", "camera_info", "coordinator_joint_state", "tf
 
 
 class MujocoEnvironmentConfig(SimConfig):
-    # Free bodies whose world pose the simulator publishes on tf for the graders.
+    # Free bodies whose world pose the simulator publishes on tf with each camera frame.
     tracked_bodies: tuple[str, ...] = ()
     # Joint speed below which the robot counts as at rest while settling.
     at_rest_rad_s: float = 0.02
