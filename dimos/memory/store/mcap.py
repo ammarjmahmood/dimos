@@ -36,7 +36,13 @@ from dimos.memory.codecs.jpeg import JpegCodec
 from dimos.memory.notifier.subject import SubjectNotifier
 from dimos.memory.observationstore.base import ObservationStore, ObservationStoreConfig
 from dimos.memory.store.base import Store, StoreConfig
-from dimos.memory.type.filter import StreamQuery
+from dimos.memory.type.filter import (
+    AfterFilter,
+    AtFilter,
+    BeforeFilter,
+    StreamQuery,
+    TimeRangeFilter,
+)
 from dimos.memory.type.observation import Observation
 
 
@@ -71,6 +77,34 @@ def _slug(topic: str) -> str:
     return topic.removeprefix("rt/").replace("/", "_")
 
 
+def _time_window(q: StreamQuery) -> tuple[int | None, int | None]:
+    """The log-time span (ns) every filter in *q* confines matches to, if any does."""
+    low: float | None = None
+    high: float | None = None
+
+    def narrow(lo: float | None, hi: float | None) -> None:
+        nonlocal low, high
+        if lo is not None:
+            low = lo if low is None else max(low, lo)
+        if hi is not None:
+            high = hi if high is None else min(high, hi)
+
+    for f in q.filters:
+        if isinstance(f, AtFilter):
+            narrow(f.t - f.tolerance, f.t + f.tolerance)
+        elif isinstance(f, TimeRangeFilter):
+            narrow(f.t1, f.t2)
+        elif isinstance(f, AfterFilter):
+            narrow(f.t, None)
+        elif isinstance(f, BeforeFilter):
+            narrow(None, f.t)
+    # a nanosecond of slack either side: the filters compare float seconds
+    return (
+        None if low is None else max(0, int(low * 1e9) - 1),
+        None if high is None else int(high * 1e9) + 1,
+    )
+
+
 class McapObservationStoreConfig(ObservationStoreConfig):
     name: str = "<mcap>"
 
@@ -103,12 +137,33 @@ class McapObservationStore(ObservationStore[Any]):
     def name(self) -> str:
         return self.config.name
 
-    def _iter(self, reverse: bool = False) -> Iterator[Observation[Any]]:
+    def _iter(
+        self, reverse: bool = False, window: tuple[int | None, int | None] = (None, None)
+    ) -> Iterator[Observation[Any]]:
+        """Every message, or only those logged inside *window* (ns, inclusive).
+
+        A window is read through the chunk index, so looking up one moment of a long
+        recording costs the chunks around it rather than a walk from the start. Ids
+        are positions in the stream, and a windowed read does not know its position:
+        its observations carry id -1.
+        """
         from mcap.reader import make_reader  # optional mcap dependency
 
+        from dimos.memory.store.mcap_append import load_summary
+
         decode, dtype, n = self._codec.decode, self._codec.payload_type, self._count
+        start, end = window
+        windowed = start is not None or end is not None
         with open(self._path, "rb") as f:
-            msgs = make_reader(f).iter_messages(topics=[self._topic], reverse=reverse)
+            reader = make_reader(f)
+            load_summary(reader, self._path)
+            msgs = reader.iter_messages(
+                topics=[self._topic],
+                reverse=reverse,
+                start_time=start,
+                # the reader's end_time is exclusive
+                end_time=None if end is None else end + 1,
+            )
             for i, (_schema, _channel, message) in enumerate(msgs):
                 observation_time = (
                     message.publish_time
@@ -116,7 +171,7 @@ class McapObservationStore(ObservationStore[Any]):
                     else message.log_time
                 )
                 yield Observation(
-                    id=(n - 1 - i) if reverse else i,
+                    id=-1 if windowed else (n - 1 - i) if reverse else i,
                     ts=observation_time / 1e9,
                     data_type=dtype,
                     _loader=partial(decode, message.data),
@@ -126,13 +181,17 @@ class McapObservationStore(ObservationStore[Any]):
         # MCAP is natively log-time ordered, so id ordering never needs a sort.
         # Native DimOS recordings expose publish_time as observation ts; source
         # time can differ from log/reception order and must use the generic sort.
+        # Log time is what the index is built on, so a time filter narrows the read
+        # itself; the filters still run over what comes back, so the window only has
+        # to be no narrower than they are.
+        window = (None, None) if self._observation_uses_publish_time else _time_window(q)
         if q.order_field == "id" or (
             q.order_field == "ts" and not self._observation_uses_publish_time
         ):
-            it = self._iter(reverse=q.order_desc)
+            it = self._iter(reverse=q.order_desc, window=window)
             q = replace(q, order_field=None, order_desc=False)
             return q.apply(it)
-        return q.apply(self._iter())
+        return q.apply(self._iter(window=window))
 
     def count(self, q: StreamQuery) -> int:
         if not q.filters and q.search_text is None and q.search_vec is None:
@@ -178,8 +237,10 @@ class McapStore(Store):
         super().__init__(**kwargs)
         self._codecs = dict(codecs or {})
         name_of = {topic: name for name, topic in (streams or {}).items()}  # topic -> override
+        from dimos.memory.store.mcap_append import load_summary
+
         with open(self.config.path, "rb") as f:
-            summary = make_reader(f).get_summary()
+            summary = load_summary(make_reader(f), self.config.path)
         self._stream_topic: dict[str, str] = {}  # stream name -> topic
         self._available: dict[str, int] = {}  # stream name -> message count
         self._observation_uses_publish_time: dict[str, bool] = {}
