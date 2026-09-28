@@ -252,7 +252,6 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     spawn_yaw: float | None = None
     reset_joint_positions: list[float] | None = None
     headless: bool = False
-    # Free bodies whose world pose is published on tf as world -> <body>.
     tracked_bodies: list[str] = Field(default_factory=list)
     dof: int = 7
 
@@ -1012,7 +1011,7 @@ class MujocoSimModule(
         engine = self._engine
         if engine is None or not self.config.tracked_bodies:
             return []
-        ts = time.time()  # read now, not at the camera frame's capture
+        ts = time.time()
         transforms: list[Transform] = []
         for name in self.config.tracked_bodies:
             pose = engine.get_body_pose(name)

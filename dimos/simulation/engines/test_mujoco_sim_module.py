@@ -197,7 +197,7 @@ def test_tracked_bodies_are_published_on_tf_in_world() -> None:
             timestamp=1.0,
         )
         module._publish_tf(10.0, frame)
-        module._publish_tf(11.0, frame)  # the unknown body warns once and is skipped again
+        module._publish_tf(11.0, frame)
         children = [t.child_frame_id for t in messages[-1].transforms]
         assert children[:3] == [
             "wrist_camera_color_optical_frame",
@@ -207,7 +207,7 @@ def test_tracked_bodies_are_published_on_tf_in_world() -> None:
         assert children[3:] == ["apple"]
         apple = messages[-1].transforms[3]
         assert apple.frame_id == "world"
-        assert apple.ts == pytest.approx(time.time(), abs=5.0)  # stamped at the read
+        assert apple.ts == pytest.approx(time.time(), abs=5.0)
         assert np.allclose(apple.translation.to_numpy(), [0.4, 0.08, 0.17])
     finally:
         module.stop()

@@ -102,10 +102,9 @@ SUITE: Suite = [
         id="xarm_ball_on_cylinder",
         inputs=f"Pick up the red ball and place it on top of the cylinder. {SCENE}",
         environment=environment(),
-        # A 4 cm ball resting on the 6 cm-half-height cylinder sits 10 cm above its centre.
         grade=stacked_on("apple", "cup", rise_m=(0.08, 0.12), band_m=0.07),
         timeout_s=900.0,
-        threshold=0.5,  # within 3.5 cm of the cylinder's axis
+        threshold=0.5,
         tags=frozenset({"mujoco", "manipulation", "pick", "place"}),
     ),
 ]

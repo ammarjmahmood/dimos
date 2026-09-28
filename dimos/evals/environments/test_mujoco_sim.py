@@ -56,7 +56,7 @@ def test_launch_flags(monkeypatch):
     environment().configure_launch(proc)
     assert "MUJOCOSIMMODULE__TRACKED_BODIES" not in proc.extra_env
 
-    monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")  # a Linux shell asking for the viewer
+    monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")
     proc = DimosCliCall()
     environment(
         module_env={"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}
@@ -83,7 +83,7 @@ def test_module_env_reaches_blueprint_parser(monkeypatch):
     assert perception["detector_backend"] == "owlv2"
     assert perception["segmentation_backend"] == "yolo"
     sim = parsed.module_kwargs("mujocosimmodule")
-    assert sim["headless"] is True  # the environment beats the blueprint's pinned value
+    assert sim["headless"] is True
     assert sim["tracked_bodies"] == ["apple", "cup"]
 
 
@@ -114,24 +114,24 @@ def test_ready_needs_fresh_streams_and_tracked_body_poses():
 
 def test_settle_waits_for_joints_to_stop():
     env = environment(at_rest_s=0.0, settle_poll_s=0.01)
-    env.settle(1.0)  # nothing recorded yet: returns at once
+    env.settle(1.0)
     with MemoryStore() as store:
         env._recording = store
         started = time.monotonic()
-        env.settle(1.0)  # no joint state stream and no odom: nothing to wait for
+        env.settle(1.0)
         joints = store.stream("coordinator_joint_state", JointState)
-        env.settle(1.0)  # the stream exists but is empty
+        env.settle(1.0)
         assert time.monotonic() - started < 0.5
         joints.append(JointState(ts=1.0, name=["j1"], position=[0.0], velocity=[0.5]))
         env._recording = store
         started = time.monotonic()
         env.settle(0.2)
-        assert time.monotonic() - started >= 0.2  # still moving: waits out the budget
+        assert time.monotonic() - started >= 0.2
 
         joints.append(JointState(ts=2.0, name=["j1"], position=[0.0], velocity=[0.0]))
         started = time.monotonic()
         env.settle(5.0)
-        assert time.monotonic() - started < 1.0  # at rest: returns early
+        assert time.monotonic() - started < 1.0
     env._recording = None
 
 

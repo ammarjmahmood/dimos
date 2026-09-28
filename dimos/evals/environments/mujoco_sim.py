@@ -35,16 +35,12 @@ if TYPE_CHECKING:
 
 
 _READY_STREAMS = ("color_image", "coordinator_joint_state")
-# What graders and readiness read; depth_image is float32, which the JPEG recorder rejects.
 _RECORDED_TOPICS = ("color_image", "camera_info", "coordinator_joint_state", "tf", "odom")
 
 
 class MujocoEnvironmentConfig(SimConfig):
-    # Free bodies whose world pose the simulator publishes on tf with each camera frame.
     tracked_bodies: tuple[str, ...] = ()
-    # Joint speed below which the robot counts as at rest while settling.
     at_rest_rad_s: float = 0.02
-    # Extra MODULE__FIELD overrides for the launched dimos; they beat blueprint values.
     module_env: dict[str, str] = Field(default_factory=dict)
 
 
@@ -57,7 +53,6 @@ class MujocoEnvironment(Sim):
         proc.simulator = "mujoco"
         proc.global_args = ["--record-topics", ",".join(_RECORDED_TOPICS)]
         proc.extra_env.update(self.config.module_env)
-        # Headless unless the shell asks for the viewer (MUJOCOSIMMODULE__HEADLESS=false on Linux).
         proc.extra_env.setdefault(
             "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
         )
@@ -72,7 +67,6 @@ class MujocoEnvironment(Sim):
 
     def wait_ready(self, recording: Store, *, deadline: float) -> None:
         """Wait for fresh samples on every ready stream and a pose for every tracked body."""
-        # Message timestamps are Unix wall-clock seconds; the deadline is monotonic.
         while time.monotonic() < deadline:
             try:
                 ages = [
