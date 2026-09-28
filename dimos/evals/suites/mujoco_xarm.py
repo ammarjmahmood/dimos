@@ -101,7 +101,7 @@ def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
     return grade
 
 
-def _ended_near(body: str, x: float, y: float, *, band_m: float) -> Callable[[Outcome], float]:
+def ended_near(body: str, x: float, y: float, *, band_m: float) -> Callable[[Outcome], float]:
     """Where the body ended up on the table plane: 1.0 at the target, 0.0 at ``band_m`` away."""
 
     def grade(outcome: Outcome) -> float:
@@ -142,7 +142,7 @@ SUITE: Suite = [
             "around x=0.45 m, y=0.12 m in the world frame."
         ),
         environment=environment(),
-        grade=_ended_near("orange", 0.45, 0.12, band_m=0.10),
+        grade=ended_near("orange", 0.45, 0.12, band_m=0.10),
         timeout_s=600.0,
         threshold=0.5,  # within 5 cm
         tags=frozenset({"mujoco", "manipulation", "pick", "place"}),

@@ -109,8 +109,14 @@ def test_ready_needs_fresh_streams_and_tracked_body_poses():
 
 def test_settle_waits_for_joints_to_stop():
     env = environment(at_rest_s=0.0, settle_poll_s=0.01)
+    env.settle(1.0)  # nothing recorded yet: returns at once
     with MemoryStore() as store:
+        env._recording = store
+        started = time.monotonic()
+        env.settle(1.0)  # no joint state stream and no odom: nothing to wait for
         joints = store.stream("coordinator_joint_state", JointState)
+        env.settle(1.0)  # the stream exists but is empty
+        assert time.monotonic() - started < 0.5
         joints.append(JointState(ts=1.0, name=["j1"], position=[0.0], velocity=[0.5]))
         env._recording = store
         started = time.monotonic()
