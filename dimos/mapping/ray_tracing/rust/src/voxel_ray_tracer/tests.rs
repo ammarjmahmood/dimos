@@ -78,13 +78,16 @@ fn find_misses_along_ray_hits_correct_voxels() {
     .collect();
     let mut map_voxels: AHashMap<VoxelKey, Voxel> = AHashMap::new();
     for v in &expected {
-        map_voxels.insert(*v, Voxel::with_health(1));
+        let mut voxel = Voxel::with_health(1);
+        voxel.normal = NormalFit::Fitted(None);
+        map_voxels.insert(*v, voxel);
     }
 
-    let mut misses: AHashSet<VoxelKey> = AHashSet::new();
+    let mut walk = RayWalk::default();
     find_misses_along_ray(
-        &mut misses,
+        &mut walk,
         &map_voxels,
+        &AHashSet::new(),
         origin,
         end,
         voxel_size,
@@ -96,7 +99,8 @@ fn find_misses_along_ray_hits_correct_voxels() {
         endpoint,
     );
 
-    assert_eq!(misses, expected);
+    assert_eq!(walk.misses, expected);
+    assert!(walk.deferred.is_empty());
 }
 
 #[test]
@@ -1157,9 +1161,9 @@ fn fine_emission_applies_support_min() {
     assert_eq!(gated.len(), 9, "isolated voxel's fine cell is gated out");
 }
 
-/// Milestone-gated refits must track continuously-refit normals: after
-/// streaming a jittered floor over many frames, every cached normal matches
-/// a from-scratch pooled fit almost exactly.
+/// Milestone-gated staleness bounds drift: normals fit mid-stream, then left
+/// unmarked through more frames of a jittered floor, still match a
+/// from-scratch pooled fit almost exactly.
 #[test]
 fn milestone_gated_normals_match_full_refit() {
     let mut state = 7043284794951226509_u64;
@@ -1184,7 +1188,10 @@ fn milestone_gated_normals_match_full_refit() {
     let n = (2.0 / ds).ceil() as i32;
     let origin = (1.0, 1.0, 1.0);
     let mut map = VoxelMap::default();
-    for _ in 0..12 {
+    for frame in 0..14 {
+        if frame == 12 {
+            map.recompute_all_normals(voxel_size);
+        }
         let floor: Vec<(f32, f32, f32)> = (0..=n)
             .flat_map(|i| {
                 let mut j2 = jitter;
@@ -1202,7 +1209,10 @@ fn milestone_gated_normals_match_full_refit() {
         let Some((want, _)) = pooled_normal(&map.voxels, key, voxel_size) else {
             continue;
         };
-        let got = v.normal.expect("streamed voxel must carry a normal");
+        let NormalFit::Fitted(got) = v.normal else {
+            continue;
+        };
+        let got = got.expect("fitted floor voxel must carry a normal");
         assert!(
             got.dot(&want).abs() > 0.99,
             "stale normal at {key:?}: cached {got:?}, fresh {want:?}"
@@ -1212,10 +1222,10 @@ fn milestone_gated_normals_match_full_refit() {
     assert!(checked > 100, "expected a real floor, checked {checked}");
 }
 
-/// A voxel created below its first milestone gets a pooled fit from converged
-/// neighbors on its creation frame, keeping the grazing spare available.
+/// A voxel created below its first milestone is fit from its converged
+/// neighbors before the next frame's grazing ray, which it survives.
 #[test]
-fn new_voxel_gets_pooled_normal_on_creation() {
+fn new_voxel_is_fit_before_grazing_ray() {
     let voxel_size = 0.1_f32;
     let cfg = Config {
         voxel_size,
@@ -1243,12 +1253,15 @@ fn new_voxel_gets_pooled_normal_on_creation() {
     );
 
     update_map(&mut map, origin, &[(1.05, 1.05, 0.05)], &cfg);
-    let v = &map.voxels[&gap];
-    assert_eq!(v.num_pts, 1);
-    assert!(
-        v.normal.is_some(),
-        "creation-frame voxel must carry a pooled normal"
-    );
+    assert_eq!(map.voxels[&gap].num_pts, 1);
+
+    // Descends through the floor plane inside the gap voxel, 17 degrees off it.
+    update_map(&mut map, (0.0, 1.05, 0.365), &[(2.0, 1.05, -0.235)], &cfg);
+    let v = map
+        .voxels
+        .get(&gap)
+        .expect("grazed gap voxel must be spared");
+    assert!(v.planar_normal().is_some());
 }
 
 /// Whole-map fine scan kept as the reference for the parallel, interior-hoisted

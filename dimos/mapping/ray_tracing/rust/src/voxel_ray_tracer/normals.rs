@@ -31,6 +31,13 @@ const NORMAL_PLANE_SIGMA_FRAC: f32 = 0.5;
 /// Fraction of points that must survive the IRLS to count as a real plane.
 const NORMAL_MIN_SUPPORT: f32 = 0.5;
 
+/// A voxel's cached pooled fit. Stale until a clearing ray needs it.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum NormalFit {
+    Stale,
+    Fitted(Option<Vector3<f32>>),
+}
+
 /// The surface normal of a covariance, or None unless it is clearly planar.
 #[cfg(test)]
 pub(super) fn fit_normal(cov: Matrix3<f32>) -> Option<(Vector3<f32>, f32)> {
@@ -146,44 +153,56 @@ pub(super) fn pooled_normal(
     classify(&last_eig?)
 }
 
-/// Refit the cached normal of every voxel whose neighborhood changed
-/// materially this frame: refit-milestone crossings and removals, dilated by
-/// the pooled-fit radius.
-pub(super) fn refresh_voxels(
-    map: &mut VoxelMap,
-    changed: &AHashSet<VoxelKey>,
-    removed: &[VoxelKey],
-    voxel_size: f32,
-) {
+/// Mark stale every voxel whose neighborhood changed materially this frame:
+/// refit-milestone crossings and removals, dilated by the pooled-fit radius.
+pub(super) fn mark_stale(map: &mut VoxelMap, changed: &AHashSet<VoxelKey>, removed: &[VoxelKey]) {
     let r = NORMAL_NEIGHBOR_RADIUS;
-    // Sized for the dilation's typical overlap so the serial loop never rehashes.
-    let mut dirty: AHashSet<VoxelKey> =
-        AHashSet::with_capacity(8 * (changed.len() + removed.len()));
     for &c in changed.iter().chain(removed.iter()) {
         for dx in -r..=r {
             for dy in -r..=r {
                 for dz in -r..=r {
-                    dirty.insert((c.0 + dx, c.1 + dy, c.2 + dz));
+                    if let Some(v) = map.voxels.get_mut(&(c.0 + dx, c.1 + dy, c.2 + dz)) {
+                        v.normal = NormalFit::Stale;
+                    }
                 }
             }
         }
     }
-    let updates: Vec<(VoxelKey, Option<Vector3<f32>>)> = dirty
+}
+
+/// Fit each stale voxel the rays crossed once, in parallel, then settle the
+/// spare decisions that waited on those fits.
+pub(super) fn resolve_deferred(
+    map: &mut VoxelMap,
+    misses: &mut AHashSet<VoxelKey>,
+    deferred: &[(VoxelKey, Vector3<f32>)],
+    voxel_size: f32,
+    graze_cos: f32,
+) {
+    let stale: AHashSet<VoxelKey> = deferred.iter().map(|&(k, _)| k).collect();
+    let fits: AHashMap<VoxelKey, Option<Vector3<f32>>> = stale
         .par_iter()
-        .filter(|k| map.voxels.contains_key(k))
         .map(|&k| (k, pooled_normal(&map.voxels, k, voxel_size).map(|(n, _)| n)))
+        .collect::<Vec<_>>()
+        .into_iter()
         .collect();
-    for (k, n) in updates {
-        if let Some(c) = map.voxels.get_mut(&k) {
-            c.normal = n;
+    for &(k, ray_unit) in deferred {
+        if !should_spare(fits[&k], ray_unit, graze_cos) {
+            misses.insert(k);
+        }
+    }
+    for (k, n) in fits {
+        if let Some(v) = map.voxels.get_mut(&k) {
+            v.normal = NormalFit::Fitted(n);
         }
     }
 }
 
 /// Spare a clearing miss when a grazing ray skims a planar surface.
-pub(super) fn should_spare(c: &Voxel, ray_unit: Vector3<f32>, graze_cos: f32) -> bool {
-    match c.normal {
-        Some(n) => ray_unit.dot(&n).abs() < graze_cos,
-        None => false,
-    }
+pub(super) fn should_spare(
+    normal: Option<Vector3<f32>>,
+    ray_unit: Vector3<f32>,
+    graze_cos: f32,
+) -> bool {
+    normal.is_some_and(|n| ray_unit.dot(&n).abs() < graze_cos)
 }

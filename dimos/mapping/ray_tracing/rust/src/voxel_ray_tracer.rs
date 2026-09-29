@@ -24,7 +24,9 @@ mod tests;
 
 #[cfg(test)]
 use normals::fit_normal;
-use normals::{pooled_normal, refresh_voxels, should_spare, NORMAL_MIN_POINTS};
+use normals::{
+    mark_stale, pooled_normal, resolve_deferred, should_spare, NormalFit, NORMAL_MIN_POINTS,
+};
 
 pub type VoxelKey = (i32, i32, i32);
 pub type VoxelHealth = i32;
@@ -397,7 +399,7 @@ impl VoxelMap {
             })
             .collect();
         for (k, n) in updates {
-            self.voxels.get_mut(&k).unwrap().normal = n;
+            self.voxels.get_mut(&k).unwrap().normal = NormalFit::Fitted(n);
         }
     }
 }
@@ -418,7 +420,7 @@ pub struct Voxel {
     next_fit_pts: u32,
     sum: Vector3<f32>,
     m2: Matrix3<f32>,
-    normal: Option<Vector3<f32>>,
+    normal: NormalFit,
 }
 
 impl Default for Voxel {
@@ -431,7 +433,7 @@ impl Default for Voxel {
             next_fit_pts: NORMAL_MIN_POINTS,
             sum: Vector3::zeros(),
             m2: Matrix3::zeros(),
-            normal: None,
+            normal: NormalFit::Stale,
         }
     }
 }
@@ -460,7 +462,10 @@ impl Voxel {
 
     #[cfg(test)]
     fn planar_normal(&self) -> Option<Vector3<f32>> {
-        self.normal
+        match self.normal {
+            NormalFit::Fitted(n) => n,
+            NormalFit::Stale => panic!("normal read while stale"),
+        }
     }
 
     /// Fit a normal from this voxel's own points alone, ignoring neighbors.
@@ -567,7 +572,7 @@ fn percentile(values: &mut [f32], p: f32) -> f32 {
 }
 
 /// Healthy voxel centers paired with their surface normal, the zero vector where
-/// there is no plane.
+/// there is no plane. Stale normals are fit on the fly.
 pub fn iter_global_normals(
     map: &VoxelMap,
     voxel_size: f32,
@@ -582,7 +587,13 @@ pub fn iter_global_normals(
                 ky as f32 * voxel_size + half,
                 kz as f32 * voxel_size + half,
             );
-            let normal = c.normal.map_or([0.0; 3], |n| [n[0], n[1], n[2]]);
+            let fit = match c.normal {
+                NormalFit::Fitted(n) => n,
+                NormalFit::Stale => {
+                    pooled_normal(&map.voxels, (kx, ky, kz), voxel_size).map(|(n, _)| n)
+                }
+            };
+            let normal = fit.map_or([0.0; 3], |n| [n[0], n[1], n[2]]);
             (pos, normal)
         })
 }
@@ -936,17 +947,18 @@ pub fn update_map(
     let origin_voxel = world_to_voxel(origin.0, origin.1, origin.2, inv);
     let step = cfg.ray_subsample as usize;
     let voxels = &map.voxels;
-    let misses: AHashSet<VoxelKey> = points
+    let walk = points
         .par_iter()
         .enumerate()
-        .fold(AHashSet::new, |mut misses, (i, &p)| {
+        .fold(RayWalk::default, |mut walk, (i, &p)| {
             if i % step != 0 {
-                return misses;
+                return walk;
             }
             let endpoint = world_to_voxel(p.0, p.1, p.2, inv);
             find_misses_along_ray(
-                &mut misses,
+                &mut walk,
                 voxels,
+                &hits,
                 origin,
                 p,
                 cfg.voxel_size,
@@ -957,15 +969,14 @@ pub fn update_map(
                 origin_voxel,
                 endpoint,
             );
-            misses
+            walk
         })
-        .reduce(AHashSet::new, |mut a, mut b| {
-            if a.len() < b.len() {
-                std::mem::swap(&mut a, &mut b);
-            }
-            a.extend(b);
-            a
-        });
+        .reduce(RayWalk::default, RayWalk::merge);
+    let RayWalk {
+        mut misses,
+        deferred,
+    } = walk;
+    resolve_deferred(map, &mut misses, &deferred, cfg.voxel_size, cfg.graze_cos);
 
     // New voxels join the refresh set so a sparse voxel among converged
     // neighbors gets a pooled fit before its first milestone.
@@ -989,13 +1000,13 @@ pub fn update_map(
     }
 
     let mut removed: Vec<VoxelKey> = Vec::new();
-    for &v in misses.difference(&hits) {
+    for &v in &misses {
         if map.record_miss(v, cfg.min_health) {
             removed.push(v);
         }
     }
 
-    refresh_voxels(map, &changed, &removed, cfg.voxel_size);
+    mark_stale(map, &changed, &removed);
 
     FrameHits {
         coarse: hits,
@@ -1085,14 +1096,35 @@ fn crossed_fine_cells(
     }
 }
 
+/// One frame's clearing decisions. Deferred crossings hit a voxel whose normal
+/// was stale and wait on its refit.
+#[derive(Default)]
+struct RayWalk {
+    misses: AHashSet<VoxelKey>,
+    deferred: Vec<(VoxelKey, Vector3<f32>)>,
+}
+
+impl RayWalk {
+    fn merge(mut self, mut other: Self) -> Self {
+        if self.misses.len() < other.misses.len() {
+            std::mem::swap(&mut self.misses, &mut other.misses);
+        }
+        self.misses.extend(other.misses);
+        self.deferred.append(&mut other.deferred);
+        self
+    }
+}
+
 /// Amanatides and Woo 3d DDA. Records in-map voxels along the ray between the
 /// origin and the end of the shadow region. Voxels within the grace region of
-/// the endpoint are spared from being marked as misses. With a fine divisor,
-/// a voxel is also spared when the ray misses all of its observed fine cells.
+/// the endpoint are spared from being marked as misses, as are voxels hit this
+/// frame. With a fine divisor, a voxel is also spared when the ray misses all of
+/// its observed fine cells.
 #[allow(clippy::too_many_arguments)]
 fn find_misses_along_ray(
-    misses: &mut AHashSet<VoxelKey>,
+    walk: &mut RayWalk,
     map_voxels: &AHashMap<VoxelKey, Voxel>,
+    hits: &AHashSet<VoxelKey>,
     origin: (f32, f32, f32),
     end: (f32, f32, f32),
     voxel_size: f32,
@@ -1213,7 +1245,7 @@ fn find_misses_along_ray(
         }
 
         if let Some(c) = map_voxels.get(&(x, y, z)) {
-            if should_spare(c, ray_unit, graze_cos) {
+            if hits.contains(&(x, y, z)) {
                 continue;
             }
             // A ray through unobserved fine cells contradicts nothing.
@@ -1233,7 +1265,14 @@ fn find_misses_along_ray(
                     }
                 }
             }
-            misses.insert((x, y, z));
+            match c.normal {
+                NormalFit::Fitted(n) => {
+                    if !should_spare(n, ray_unit, graze_cos) {
+                        walk.misses.insert((x, y, z));
+                    }
+                }
+                NormalFit::Stale => walk.deferred.push(((x, y, z), ray_unit)),
+            }
         }
     }
 }
