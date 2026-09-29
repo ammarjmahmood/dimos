@@ -14,6 +14,8 @@
 
 //! Neighborhood-pooled surface-normal fitting and its refresh policy.
 
+use std::collections::VecDeque;
+
 use ahash::{AHashMap, AHashSet};
 use arrayvec::ArrayVec;
 use nalgebra::{Matrix3, Vector3};
@@ -218,6 +220,34 @@ pub(super) fn pooled_normal(
     classify(&last_eig?)
 }
 
+/// Most normal refits one frame pays for; the rest wait, oldest first, since a
+/// dilated refit set grows with the map and a slightly stale normal only
+/// delays a grazing-miss decision.
+pub(super) const NORMAL_REFITS_PER_FRAME: usize = 8192;
+
+/// Deduplicated FIFO of voxels awaiting a normal refit.
+#[derive(Default)]
+pub(super) struct PendingNormals {
+    queue: VecDeque<VoxelKey>,
+    queued: AHashSet<VoxelKey>,
+}
+
+impl PendingNormals {
+    fn push(&mut self, key: VoxelKey) {
+        if self.queued.insert(key) {
+            self.queue.push_back(key);
+        }
+    }
+
+    fn take(&mut self, limit: usize) -> Vec<VoxelKey> {
+        let batch: Vec<VoxelKey> = self.queue.drain(..limit.min(self.queue.len())).collect();
+        for key in &batch {
+            self.queued.remove(key);
+        }
+        batch
+    }
+}
+
 /// Refit the cached normal of every voxel whose neighborhood changed
 /// materially this frame: refit-milestone crossings and removals, dilated by
 /// the pooled-fit radius.
@@ -240,7 +270,11 @@ pub(super) fn refresh_voxels(
             }
         }
     }
-    let updates: Vec<(VoxelKey, Option<Vector3<f32>>)> = dirty
+    for key in dirty {
+        map.pending_normals.push(key);
+    }
+    let batch = map.pending_normals.take(NORMAL_REFITS_PER_FRAME);
+    let updates: Vec<(VoxelKey, Option<Vector3<f32>>)> = batch
         .par_iter()
         .filter(|k| map.voxels.contains_key(k))
         .map(|&k| (k, pooled_normal(&map.voxels, k, voxel_size).map(|(n, _)| n)))
@@ -327,5 +361,24 @@ mod sym3_tests {
         let iso = sym3_eigen(&(Matrix3::identity() * 2.0));
         assert!(iso.values.iter().all(|v| (v - 2.0).abs() < 1e-6));
         assert!((iso.smallest.norm() - 1.0).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::PendingNormals;
+
+    #[test]
+    fn refits_are_deduplicated_and_taken_oldest_first_up_to_the_cap() {
+        let mut pending = PendingNormals::default();
+        for key in [(1, 0, 0), (2, 0, 0), (1, 0, 0), (3, 0, 0)] {
+            pending.push(key);
+        }
+        assert_eq!(pending.take(2), vec![(1, 0, 0), (2, 0, 0)]);
+        // A voxel taken can queue again; one still waiting cannot double up.
+        pending.push((1, 0, 0));
+        pending.push((3, 0, 0));
+        assert_eq!(pending.take(10), vec![(3, 0, 0), (1, 0, 0)]);
+        assert!(pending.take(10).is_empty());
     }
 }
