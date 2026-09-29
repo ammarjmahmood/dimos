@@ -115,7 +115,7 @@ impl RayTracingVoxelMap {
         }
 
         let mapper = self.mapper.as_mut().expect("built in setup");
-        mapper.add_frame(points, pose);
+        mapper.add_frame(points, pose, &msg.header.frame_id);
 
         let region = mapper.local_due().then(|| mapper.take_local_bounds());
         let cylinder = region.map(|c| c.bounds());
@@ -312,6 +312,9 @@ mod tests {
             grace_depth: 0.0,
             min_health: 0,
             max_health: 1,
+            range_error_coeff: 0.0,
+            range_error_exponent: 2.0,
+            range_error_frame_ids: Vec::new(),
             graze_cos: 0.5,
             support_min: 0,
             emit_every: 1,

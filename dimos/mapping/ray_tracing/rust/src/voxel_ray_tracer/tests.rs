@@ -25,6 +25,9 @@ fn basic_config() -> Config {
         grace_depth: 0.0,
         min_health: 0,
         max_health: 1,
+        range_error_coeff: 0.0,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
         graze_cos: 0.5,
         support_min: 0,
         emit_every: 1,
@@ -78,10 +81,10 @@ fn find_misses_along_ray_hits_correct_voxels() {
     .collect();
     let mut map_voxels: AHashMap<VoxelKey, Voxel> = AHashMap::new();
     for v in &expected {
-        map_voxels.insert(*v, Voxel::with_health(1));
+        map_voxels.insert(*v, Voxel::with_health(1.0));
     }
 
-    let mut misses: AHashSet<VoxelKey> = AHashSet::new();
+    let mut misses: AHashMap<VoxelKey, f32> = AHashMap::new();
     find_misses_along_ray(
         &mut misses,
         &map_voxels,
@@ -91,12 +94,13 @@ fn find_misses_along_ray_hits_correct_voxels() {
         shadow_depth,
         0.0,
         0.5,
+        RangeWeight::OFF,
         None,
         origin_voxel,
         endpoint,
     );
 
-    assert_eq!(misses, expected);
+    assert_eq!(misses.keys().copied().collect::<AHashSet<_>>(), expected);
 }
 
 #[test]
@@ -158,8 +162,8 @@ fn hits_insert_voxels() {
         &[(5.5, 0.5, 0.5), (0.5, 5.5, 0.5)],
         &cfg,
     );
-    assert_eq!(map.health((5, 0, 0)), Some(1));
-    assert_eq!(map.health((0, 5, 0)), Some(1));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
+    assert_eq!(map.health((0, 5, 0)), Some(1.0));
     assert_eq!(map.voxels.len(), 2);
 }
 
@@ -167,42 +171,42 @@ fn hits_insert_voxels() {
 fn voxels_on_ray_are_removed() {
     let cfg = basic_config();
     let mut map = VoxelMap::default();
-    map.set_health((3, 0, 0), 1);
+    map.set_health((3, 0, 0), 1.0);
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
     // The voxel on the ray should be cleared.
     assert!(!map.voxels.contains_key(&(3, 0, 0)));
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 }
 
 #[test]
 fn voxels_not_on_ray_survive() {
     let cfg = basic_config();
     let mut map = VoxelMap::default();
-    map.set_health((3, 5, 0), 1);
+    map.set_health((3, 5, 0), 1.0);
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((3, 5, 0)), Some(1));
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((3, 5, 0)), Some(1.0));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 }
 
 #[test]
 fn voxels_within_shadow_region_are_removed() {
     let cfg = basic_config();
     let mut map = VoxelMap::default();
-    map.set_health((6, 0, 0), 1);
+    map.set_health((6, 0, 0), 1.0);
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
     // The voxel inside the shadow region should be cleared.
     assert!(!map.voxels.contains_key(&(6, 0, 0)));
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 }
 
 #[test]
 fn voxels_beyond_shadow_region_survive() {
     let cfg = basic_config();
     let mut map = VoxelMap::default();
-    map.set_health((8, 0, 0), 1);
+    map.set_health((8, 0, 0), 1.0);
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((8, 0, 0)), Some(1));
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((8, 0, 0)), Some(1.0));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 }
 
 #[test]
@@ -215,8 +219,8 @@ fn hit_caught_by_other_ray_is_not_removed() {
         &[(3.5, 0.5, 0.5), (5.5, 0.5, 0.5)],
         &cfg,
     );
-    assert_eq!(map.health((3, 0, 0)), Some(1));
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((3, 0, 0)), Some(1.0));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 }
 
 #[test]
@@ -226,9 +230,9 @@ fn point_beyond_max_range_does_not_clear() {
         ..basic_config()
     };
     let mut map = VoxelMap::default();
-    map.set_health((3, 0, 0), 1);
+    map.set_health((3, 0, 0), 1.0);
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((3, 0, 0)), Some(1));
+    assert_eq!(map.health((3, 0, 0)), Some(1.0));
 }
 
 #[test]
@@ -240,13 +244,13 @@ fn fine_gate_spares_ray_through_unobserved_cells() {
     };
     let mut map = VoxelMap::default();
     update_map(&mut map, (0.5, 0.75, 0.25), &[(5.5, 0.75, 0.25)], &cfg);
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 
     // The clearing ray crosses only the empty top cells of the voxel.
     update_map(&mut map, (0.5, 0.75, 0.75), &[(9.5, 0.75, 0.75)], &cfg);
     assert_eq!(
         map.health((5, 0, 0)),
-        Some(1),
+        Some(1.0),
         "a ray through unobserved cells must not decrement"
     );
 }
@@ -260,7 +264,7 @@ fn fine_gate_clears_when_ray_crosses_observed_cells() {
     };
     let mut map = VoxelMap::default();
     update_map(&mut map, (0.5, 0.75, 0.25), &[(5.5, 0.75, 0.25)], &cfg);
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 
     update_map(&mut map, (0.5, 0.75, 0.25), &[(9.5, 0.75, 0.25)], &cfg);
     assert_eq!(
@@ -278,10 +282,10 @@ fn two_hits_needed_when_min_health_is_negative() {
     };
     let mut map = VoxelMap::default();
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((5, 0, 0)), Some(0));
+    assert_eq!(map.health((5, 0, 0)), Some(0.0));
 
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((5, 0, 0)), Some(1));
+    assert_eq!(map.health((5, 0, 0)), Some(1.0));
 }
 
 /// A grazing ray along a floor must not clip floor voxels near its hit.
@@ -299,6 +303,9 @@ fn ground_clipping_single_ray() {
         grace_depth: 0.2,
         min_health: 0,
         max_health: 1,
+        range_error_coeff: 0.0,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
         graze_cos: 0.5,
         support_min: 0,
         emit_every: 1,
@@ -327,7 +334,7 @@ fn ground_clipping_single_ray() {
     );
     let mut total_clipped = 0usize;
     for &range in &ranges {
-        let (mut map, _) = build_surface(&floor_points, voxel_size, cfg.max_health);
+        let (mut map, _) = build_surface(&floor_points, voxel_size, cfg.max_health as VoxelHealth);
         // The ray walks the y=0, z=0 row, so only that row is ever at risk.
         let center_row: Vec<VoxelKey> = map
             .voxels
@@ -456,6 +463,9 @@ fn stair_clipping_ray_fan() {
         grace_depth: 0.2,
         min_health: 0,
         max_health: 1,
+        range_error_coeff: 0.0,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
         graze_cos: 0.5,
         support_min: 0,
         emit_every: 1,
@@ -482,7 +492,7 @@ fn stair_clipping_ray_fan() {
     }
 
     let lidar = sample_segments(&segments, voxel_size);
-    let (mut map, all_stairs) = build_surface(&lidar, voxel_size, cfg.max_health);
+    let (mut map, all_stairs) = build_surface(&lidar, voxel_size, cfg.max_health as VoxelHealth);
 
     // Voxels with a normal must be spared. Only edge voxels with no plane may clear.
     let planar: Vec<VoxelKey> = all_stairs
@@ -535,6 +545,9 @@ fn landing_floor_ray_fan() {
         grace_depth: 0.2,
         min_health: 0,
         max_health: 1,
+        range_error_coeff: 0.0,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
         graze_cos: 0.5,
         support_min: 0,
         emit_every: 1,
@@ -554,7 +567,7 @@ fn landing_floor_ray_fan() {
     ];
 
     let lidar = sample_segments(&segments, voxel_size);
-    let (mut map, all_surf) = build_surface(&lidar, voxel_size, cfg.max_health);
+    let (mut map, all_surf) = build_surface(&lidar, voxel_size, cfg.max_health as VoxelHealth);
 
     // Sensor above the floor, so grazing rays skim it on the way to the wall.
     const SENSOR_HEIGHT: f32 = 0.3;
@@ -602,6 +615,9 @@ fn landing_grazed_from_below() {
         grace_depth: 0.2,
         min_health: 0,
         max_health: 1,
+        range_error_coeff: 0.0,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
         graze_cos,
         support_min: 0,
         emit_every: 1,
@@ -649,7 +665,7 @@ fn landing_grazed_from_below() {
         }
     }
 
-    let (mut map, surf) = build_surface(&lidar, voxel_size, 1);
+    let (mut map, surf) = build_surface(&lidar, voxel_size, 1.0);
     update_map(&mut map, origin, &hits, &cfg(0.7));
 
     let cleared: Vec<VoxelKey> = surf
@@ -672,10 +688,10 @@ fn two_misses_needed_when_max_health_is_two() {
     let mut map = VoxelMap::default();
     update_map(&mut map, (0.0, 0.0, 0.0), &[(3.5, 0.5, 0.5)], &cfg);
     update_map(&mut map, (0.0, 0.0, 0.0), &[(3.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((3, 0, 0)), Some(2));
+    assert_eq!(map.health((3, 0, 0)), Some(2.0));
 
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
-    assert_eq!(map.health((3, 0, 0)), Some(1));
+    assert_eq!(map.health((3, 0, 0)), Some(1.0));
 
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
     assert!(!map.voxels.contains_key(&(3, 0, 0)));
@@ -738,6 +754,9 @@ fn grazing_ray_spares_planar_floor() {
         grace_depth: 0.2,
         min_health: 0,
         max_health: 1,
+        range_error_coeff: 0.0,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
         graze_cos: 0.5,
         support_min: 0,
         emit_every: 1,
@@ -747,7 +766,7 @@ fn grazing_ray_spares_planar_floor() {
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
     };
-    let (mut map, _) = build_surface(&floor, voxel_size, cfg.max_health);
+    let (mut map, _) = build_surface(&floor, voxel_size, cfg.max_health as VoxelHealth);
     let row: Vec<VoxelKey> = map
         .voxels
         .keys()
@@ -766,10 +785,10 @@ fn support_gate_drops_isolated_voxels() {
     // A 3x3 surface patch, plus one isolated voxel far from anything.
     for x in 0..3 {
         for y in 0..3 {
-            map.set_health((x, y, 0), 1);
+            map.set_health((x, y, 0), 1.0);
         }
     }
-    map.set_health((20, 20, 0), 1);
+    map.set_health((20, 20, 0), 1.0);
     let bounds = LocalBounds {
         origin_x: 0.0,
         origin_y: 0.0,
@@ -809,7 +828,7 @@ fn emit_points_naive(
     let in_bounds = |x, y, z| bounds.is_none_or(|b| b.contains(x, y, z));
     let mut out = Vec::with_capacity(map.voxels.len() + live.len());
     for (&key, c) in map.voxels.iter() {
-        if c.health <= 0 {
+        if c.health <= 0.0 {
             continue;
         }
         let (x, y, z) = voxel_center(key, voxel_size);
@@ -822,7 +841,7 @@ fn emit_points_naive(
         out.push((x, y, z));
     }
     for &key in live.iter() {
-        if matches!(map.voxels.get(&key), Some(c) if c.health > 0) {
+        if matches!(map.voxels.get(&key), Some(c) if c.health > 0.0) {
             continue;
         }
         let (x, y, z) = voxel_center(key, voxel_size);
@@ -880,7 +899,7 @@ fn emit_points_matches_naive_scan_on_random_maps() {
                 (next_u64() % 10) as i32 - 5,
             );
             // Mostly unhealthy so healthy voxels are sparse relative to entries.
-            let health = (next_u64() % 7) as i32 - 5;
+            let health = (next_u64() % 7) as VoxelHealth - 5.0;
             map.set_health(key, health);
         }
 
@@ -903,11 +922,11 @@ fn emit_points_matches_naive_scan_on_random_maps() {
 fn healthy_chunk_index_excludes_dead_entries_regardless_of_count() {
     let mut map = VoxelMap::default();
     for i in 0..50_000_i32 {
-        map.set_health((i % 500, (i / 500) % 500, 0), 0); // health=0, never healthy
+        map.set_health((i % 500, (i / 500) % 500, 0), 0.0); // health=0, never healthy
     }
     for x in 0..3 {
         for y in 0..3 {
-            map.set_health((x, y, 100), 1);
+            map.set_health((x, y, 100), 1.0);
         }
     }
 
@@ -928,7 +947,7 @@ fn healthy_chunk_index_excludes_dead_entries_regardless_of_count() {
 fn healthy_chunk_index_tracks_health_transitions_through_update_map() {
     let cfg = basic_config(); // min_health=0, max_health=1
     let mut map = VoxelMap::default();
-    map.set_health((3, 0, 0), 1);
+    map.set_health((3, 0, 0), 1.0);
     assert_eq!(
         map.healthy_chunks.values().map(|s| s.len()).sum::<usize>(),
         1,
@@ -983,13 +1002,18 @@ fn support_field_matches_neighbor_scan_after_random_transitions() {
             );
             match next_u64() % 3 {
                 0 => {
-                    map.record_hit(key, cfg.min_health, cfg.max_health);
+                    map.record_hit(
+                        key,
+                        cfg.min_health as VoxelHealth,
+                        cfg.max_health as VoxelHealth,
+                        1.0,
+                    );
                 }
                 1 => {
-                    map.record_miss(key, cfg.min_health);
+                    map.record_miss(key, cfg.min_health as VoxelHealth, 1.0);
                 }
                 _ => {
-                    let health = (next_u64() % 5) as i32 - 2;
+                    let health = (next_u64() % 5) as VoxelHealth - 2.0;
                     map.set_health(key, health);
                 }
             }
@@ -1012,11 +1036,11 @@ fn support_field_matches_neighbor_scan_after_random_transitions() {
 #[test]
 fn new_voxel_seeds_support_from_existing_healthy_neighbors() {
     let mut map = VoxelMap::default();
-    map.set_health((1, 0, 0), 1);
-    map.set_health((-1, 0, 0), 1);
-    map.set_health((0, 1, 0), 1);
+    map.set_health((1, 0, 0), 1.0);
+    map.set_health((-1, 0, 0), 1.0);
+    map.set_health((0, 1, 0), 1.0);
 
-    map.set_health((0, 0, 0), 1);
+    map.set_health((0, 0, 0), 1.0);
 
     assert_eq!(
         map.voxels[&(0, 0, 0)].support,
@@ -1117,7 +1141,7 @@ fn live_fine_cells_emit_before_confirmation() {
     };
     let mut map = VoxelMap::default();
     let hits = update_map(&mut map, (0.0, 0.0, 0.0), &[(5.1, 0.1, 0.1)], &cfg);
-    assert_eq!(map.health((5, 0, 0)), Some(0), "not yet healthy");
+    assert_eq!(map.health((5, 0, 0)), Some(0.0), "not yet healthy");
 
     let no_live = AHashSet::new();
     assert!(emit_points_fine(&map, 1.0, 2, None, 0, &no_live).is_empty());
@@ -1141,11 +1165,11 @@ fn fine_emission_applies_support_min() {
     let mut map = VoxelMap::default();
     for x in 0..3 {
         for y in 0..3 {
-            map.set_health((x, y, 0), 1);
+            map.set_health((x, y, 0), 1.0);
             map.accumulate((x as f32 + 0.5, y as f32 + 0.5, 0.5), 1.0, Some(2));
         }
     }
-    map.set_health((20, 20, 0), 1);
+    map.set_health((20, 20, 0), 1.0);
     map.accumulate((20.5, 20.5, 0.5), 1.0, Some(2));
 
     let no_live = AHashSet::new();
@@ -1263,7 +1287,7 @@ fn emit_points_fine_naive(
     let fine_size = voxel_size / divisor as f32;
     let mut out = Vec::new();
     for (&key, v) in map.voxels.iter() {
-        if v.health <= 0 {
+        if v.health <= 0.0 {
             continue;
         }
         if support_min > 0 && v.support < support_min as u32 {
@@ -1402,9 +1426,9 @@ fn clear_voxels_removes_from_the_healthy_chunk_index() {
 #[test]
 fn clear_voxels_decrements_neighbor_support() {
     let mut map = VoxelMap::default();
-    map.set_health((0, 0, 0), 1);
-    map.set_health((1, 0, 0), 1);
-    map.set_health((0, 1, 0), 1);
+    map.set_health((0, 0, 0), 1.0);
+    map.set_health((1, 0, 0), 1.0);
+    map.set_health((0, 1, 0), 1.0);
     assert_eq!(map.voxels[&(1, 0, 0)].support, 2);
     assert_eq!(map.voxels[&(0, 1, 0)].support, 2);
 
@@ -1419,8 +1443,8 @@ fn clear_voxels_decrements_neighbor_support() {
 #[test]
 fn clear_voxels_leaves_support_alone_for_an_unhealthy_voxel() {
     let mut map = VoxelMap::default();
-    map.set_health((1, 0, 0), 1);
-    map.set_health((0, 0, 0), 0);
+    map.set_health((1, 0, 0), 1.0);
+    map.set_health((0, 0, 0), 0.0);
     assert_eq!(map.voxels[&(1, 0, 0)].support, 0);
 
     assert_eq!(map.clear_voxels([(0, 0, 0)]), 1);
@@ -1431,7 +1455,7 @@ fn clear_voxels_leaves_support_alone_for_an_unhealthy_voxel() {
 #[test]
 fn clear_voxels_skips_keys_the_map_does_not_hold() {
     let mut map = VoxelMap::default();
-    map.set_health((0, 0, 0), 1);
+    map.set_health((0, 0, 0), 1.0);
 
     assert_eq!(map.clear_voxels([(0, 0, 0), (9, 9, 9), (0, 0, 0)]), 1);
 
@@ -1454,4 +1478,123 @@ fn clear_voxels_takes_the_fine_layer_with_it() {
     assert_eq!(map.clear_voxels([(5, 0, 0)]), 1);
 
     assert!(emit_points_fine(&map, 1.0, 2, None, 0, &no_live).is_empty());
+}
+
+#[test]
+fn range_weight_falls_off_with_the_squared_range() {
+    let weight = |coeff_voxels, half_exponent| RangeWeight {
+        coeff_voxels,
+        half_exponent,
+    };
+    assert_eq!(weight(0.0, 1.0).at(400.0), 1.0);
+    // One voxel of error halves the update, two voxels leaves a fifth.
+    assert!((weight(0.01, 1.0).at(100.0) - 0.5).abs() < 1e-6);
+    assert!((weight(0.01, 1.0).at(200.0) - 0.2).abs() < 1e-6);
+    // Exponent 1: the same error at 100 m that exponent 2 reaches at 10 m.
+    assert!((weight(0.01, 0.5).at(10_000.0) - 0.5).abs() < 1e-6);
+
+    // Error is measured in voxels, so a finer map trusts the same sensor less.
+    let cfg = Config {
+        voxel_size: 0.5,
+        range_error_coeff: 0.01,
+        range_error_exponent: 3.0,
+        ..basic_config()
+    };
+    let scaled = cfg.range_weight();
+    assert_eq!(scaled.coeff_voxels, 0.02);
+    assert_eq!(scaled.half_exponent, 1.5);
+}
+
+#[test]
+fn a_zero_coefficient_leaves_health_unweighted() {
+    let cfg = Config {
+        min_health: 0,
+        max_health: 10,
+        ..basic_config()
+    };
+    let mut map = VoxelMap::default();
+    update_map(&mut map, (0.5, 0.5, 0.5), &[(20.5, 0.5, 0.5)], &cfg);
+    assert_eq!(map.health((20, 0, 0)), Some(1.0));
+}
+
+#[test]
+fn a_far_hit_adds_less_health_than_a_near_one() {
+    let cfg = Config {
+        min_health: 0,
+        max_health: 10,
+        range_error_coeff: 0.01,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
+        ..basic_config()
+    };
+    let origin = (0.5, 0.5, 0.5);
+
+    let mut near = VoxelMap::default();
+    update_map(&mut near, origin, &[(2.5, 0.5, 0.5)], &cfg);
+    let mut far = VoxelMap::default();
+    update_map(&mut far, origin, &[(20.5, 0.5, 0.5)], &cfg);
+
+    let near_health = near.health((2, 0, 0)).unwrap();
+    let far_health = far.health((20, 0, 0)).unwrap();
+    assert!(near_health > 0.99, "2 m return only counted {near_health}");
+    assert!(far_health < 0.1, "20 m return counted {far_health}");
+}
+
+#[test]
+fn a_far_miss_clears_less_than_a_near_one() {
+    let cfg = Config {
+        min_health: -10,
+        max_health: 10,
+        range_error_coeff: 0.01,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
+        ..basic_config()
+    };
+    let origin = (0.5, 0.5, 0.5);
+
+    let mut near = VoxelMap::default();
+    near.set_health((5, 0, 0), 1.0);
+    update_map(&mut near, origin, &[(9.5, 0.5, 0.5)], &cfg);
+
+    let mut far = VoxelMap::default();
+    far.set_health((50, 0, 0), 1.0);
+    update_map(&mut far, origin, &[(54.5, 0.5, 0.5)], &cfg);
+
+    let near_drop = 1.0 - near.health((5, 0, 0)).unwrap();
+    let far_drop = 1.0 - far.health((50, 0, 0)).unwrap();
+    assert!(near_drop > 0.9, "4.5 m miss only cleared {near_drop}");
+    assert!(far_drop < 0.01, "49.5 m miss cleared {far_drop}");
+}
+
+#[test]
+fn a_far_ray_spares_a_voxel_a_near_ray_would_delete() {
+    let cfg = Config {
+        min_health: 0,
+        max_health: 10,
+        range_error_coeff: 0.01,
+        range_error_exponent: 2.0,
+        range_error_frame_ids: Vec::new(),
+        ..basic_config()
+    };
+    let origin = (0.5, 0.5, 0.5);
+    // Just under one near miss, so only the near ray reaches min_health in one frame.
+    let health = 0.9;
+
+    let mut near = VoxelMap::default();
+    near.set_health((5, 0, 0), health);
+    update_map(&mut near, origin, &[(9.5, 0.5, 0.5)], &cfg);
+
+    let mut far = VoxelMap::default();
+    far.set_health((50, 0, 0), health);
+    update_map(&mut far, origin, &[(54.5, 0.5, 0.5)], &cfg);
+
+    assert_eq!(
+        near.health((5, 0, 0)),
+        None,
+        "near ray must delete the voxel"
+    );
+    assert!(
+        far.health((50, 0, 0)).is_some_and(|h| h > 0.0),
+        "far ray must leave the voxel healthy"
+    );
 }

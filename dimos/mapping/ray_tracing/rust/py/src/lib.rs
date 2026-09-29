@@ -93,6 +93,8 @@ impl VoxelRayMapper {
         grace_depth = 0.2,
         min_health = -1,
         max_health = 5,
+        range_error_coeff = 0.0,
+        range_error_exponent = 2.0,
         graze_cos = 0.7,
         support_min = 4,
         region_percentile = 95.0,
@@ -109,6 +111,8 @@ impl VoxelRayMapper {
         grace_depth: f32,
         min_health: i32,
         max_health: i32,
+        range_error_coeff: f32,
+        range_error_exponent: f32,
         graze_cos: f32,
         support_min: i32,
         region_percentile: f32,
@@ -129,6 +133,9 @@ impl VoxelRayMapper {
             grace_depth,
             min_health,
             max_health,
+            range_error_coeff,
+            range_error_exponent,
+            range_error_frame_ids: Vec::new(),
             graze_cos,
             support_min,
             emit_every,
@@ -170,7 +177,7 @@ impl VoxelRayMapper {
             orientation,
         };
         let mapper = &mut self.mapper;
-        py.allow_threads(move || mapper.add_frame(pts, pose));
+        py.allow_threads(move || mapper.add_frame(pts, pose, ""));
         Ok(())
     }
 

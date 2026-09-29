@@ -56,6 +56,11 @@ class RayTracingVoxelMapConfig(NativeModuleConfig):
     # Bounds for the health of voxels. Positive health means voxel is occupied.
     min_health: int = -1
     max_health: int = 5
+    # Range error coeff * d**exponent (m) scales each hit/miss by 1/(1+(error/voxel)**2); 0 is off.
+    range_error_coeff: float = 0.0
+    range_error_exponent: float = 2.0
+    # Cloud frame_ids the range error applies to; empty applies it to every cloud.
+    range_error_frame_ids: list[str] = []
     # Don't clear a miss when abs of ray dot normal is below this, clear it when above.
     # Higher clears only on direct hits, lower clears on slight grazes too.
     graze_cos: float = 0.7
