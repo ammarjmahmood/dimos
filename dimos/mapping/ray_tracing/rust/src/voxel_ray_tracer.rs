@@ -165,6 +165,8 @@ pub struct VoxelMap {
     /// Healthy (health > 0) voxel keys grouped by chunk, kept in sync with `voxels`
     /// on every health transition. `emit_points` scans this instead of the whole map.
     healthy_chunks: AHashMap<ChunkKey, AHashSet<VoxelKey>>,
+    /// Voxels whose normal is due a refit, oldest first, capped per frame by `refresh_voxels`.
+    pending_normals: normals::PendingNormals,
 }
 
 impl VoxelMap {
