@@ -36,6 +36,8 @@ pub struct Pose {
 /// binding. Callers own transport only.
 pub struct Mapper {
     config: Config,
+    // The same config with range weighting off, for clouds outside range_error_frame_ids.
+    unweighted: Config,
     // The mapper owns its worker pool, so its thread setting cannot collide
     // with other components sharing the process.
     pool: Arc<rayon::ThreadPool>,
@@ -51,9 +53,14 @@ pub struct Mapper {
 impl Mapper {
     /// The config must already be validated at the caller's boundary.
     pub fn new(config: Config) -> Self {
+        let unweighted = Config {
+            range_error_coeff: 0.0,
+            ..config.clone()
+        };
         Self {
             pool: worker_pool(config.worker_threads),
             config,
+            unweighted,
             map: VoxelMap::default(),
             live: FrameHits::default(),
             batch_points: Vec::new(),
@@ -73,8 +80,8 @@ impl Mapper {
     }
 
     /// Register a sensor-frame cloud into the world by `pose` and fold it into
-    /// the map.
-    pub fn add_frame(&mut self, mut sensor_points: Vec<Point>, pose: Pose) {
+    /// the map, range weighted when `frame_id` is one the config names.
+    pub fn add_frame(&mut self, mut sensor_points: Vec<Point>, pose: Pose, frame_id: &str) {
         let (px, py, pz) = pose.position;
         let (qx, qy, qz, qw) = pose.orientation;
         let translation = Vector3::new(px, py, pz);
@@ -84,17 +91,23 @@ impl Mapper {
             let w = rot * Vector3::new(p.0, p.1, p.2) + translation;
             *p = (w.x, w.y, w.z);
         }
-        self.ingest(sensor_points, pose.position);
+        let weighted = self.config.range_weights_frame(frame_id);
+        self.ingest(sensor_points, pose.position, weighted);
     }
 
     /// Fold an already world-frame cloud into the map, raycasting from `origin`.
     pub fn add_frame_world(&mut self, world_points: Vec<Point>, origin: Point) {
-        self.ingest(world_points, origin);
+        self.ingest(world_points, origin, true);
     }
 
-    fn ingest(&mut self, points: Vec<Point>, origin: Point) {
+    fn ingest(&mut self, points: Vec<Point>, origin: Point, range_weighted: bool) {
         let pool = Arc::clone(&self.pool);
-        self.live = pool.install(|| update_map(&mut self.map, origin, &points, &self.config));
+        let cfg = if range_weighted {
+            &self.config
+        } else {
+            &self.unweighted
+        };
+        self.live = pool.install(|| update_map(&mut self.map, origin, &points, cfg));
 
         // The batch only feeds the local region bounds, so skip it when the
         // local cadence is disabled.
@@ -252,6 +265,9 @@ mod tests {
             grace_depth: 0.0,
             min_health: 0,
             max_health: 1,
+            range_error_coeff: 0.0,
+            range_error_exponent: 2.0,
+            range_error_frame_ids: Vec::new(),
             graze_cos: 0.5,
             support_min: 0,
             emit_every: 1,
@@ -272,7 +288,7 @@ mod tests {
             position: (10.0, 0.0, 0.0),
             orientation: (0.0, 0.0, half, half),
         };
-        mapper.add_frame(vec![(3.5, 0.0, 0.5)], pose);
+        mapper.add_frame(vec![(3.5, 0.0, 0.5)], pose, "");
         let world = mapper.registered_points();
         assert!((world[0].0 - 10.0).abs() < 1e-5);
         assert!((world[0].1 - 3.5).abs() < 1e-5);
@@ -295,7 +311,7 @@ mod tests {
             position: (0.0, 0.0, 0.0),
             orientation: IDENTITY,
         };
-        mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose);
+        mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose, "");
         assert_eq!(mapper.registered_points(), &[(5.5, 0.5, 0.5)]);
         assert_eq!(mapper.global_points(), vec![5.5, 0.5, 0.5]);
     }
@@ -307,7 +323,7 @@ mod tests {
             position: (1.0, 2.0, 3.0),
             orientation: IDENTITY,
         };
-        mapper.add_frame(vec![(2.0, 0.5, 0.5)], pose);
+        mapper.add_frame(vec![(2.0, 0.5, 0.5)], pose, "");
         let c = mapper.take_local_bounds();
         assert_eq!((c.cx, c.cy), (1.0, 2.0));
         assert!(c.radius > 0.0);
@@ -332,7 +348,7 @@ mod tests {
         };
         let mut dues = Vec::new();
         for _ in 0..6 {
-            mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose);
+            mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose, "");
             dues.push((mapper.local_due(), mapper.global_due()));
         }
         assert_eq!(
@@ -361,7 +377,7 @@ mod tests {
             orientation: IDENTITY,
         };
         for _ in 0..4 {
-            mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose);
+            mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose, "");
             assert_eq!((mapper.local_due(), mapper.global_due()), (false, false));
         }
     }
@@ -376,7 +392,7 @@ mod tests {
             position: (0.0, 0.0, 0.0),
             orientation: IDENTITY,
         };
-        mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose);
+        mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose, "");
         assert_eq!(mapper.global_points(), vec![5.5, 0.5, 0.5]);
 
         assert_eq!(mapper.clear_metric([(5.5, 0.5, 0.5)]), 1);
@@ -392,7 +408,7 @@ mod tests {
             position: (0.0, 0.0, 0.0),
             orientation: IDENTITY,
         };
-        mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose);
+        mapper.add_frame(vec![(5.5, 0.5, 0.5)], pose, "");
         let bounds = LocalBounds {
             origin_x: 0.0,
             origin_y: 0.0,
@@ -406,7 +422,35 @@ mod tests {
             fine_divisor: 2,
             ..config()
         });
-        fine.add_frame(vec![(5.1, 0.1, 0.1)], pose);
+        fine.add_frame(vec![(5.1, 0.1, 0.1)], pose, "");
         assert_eq!(fine.fine_points(&bounds).unwrap(), vec![5.25, 0.25, 0.25]);
+    }
+
+    #[test]
+    fn range_weighting_applies_only_to_the_named_frames() {
+        let config = Config {
+            min_health: 0,
+            max_health: 10,
+            range_error_coeff: 0.01,
+            range_error_frame_ids: vec!["camera".to_string()],
+            ..config()
+        };
+        let pose = Pose {
+            position: (0.5, 0.5, 0.5),
+            orientation: (0.0, 0.0, 0.0, 1.0),
+        };
+        let mut lidar = Mapper::new(config.clone());
+        lidar.add_frame(vec![(20.0, 0.0, 0.0)], pose, "lidar");
+        let mut camera = Mapper::new(config);
+        camera.add_frame(vec![(20.0, 0.0, 0.0)], pose, "camera");
+        let health = |m: &Mapper| {
+            m.map()
+                .voxels
+                .values()
+                .map(|v| v.health)
+                .fold(0.0, f32::max)
+        };
+        assert_eq!(health(&lidar), 1.0);
+        assert!(health(&camera) < 0.1);
     }
 }

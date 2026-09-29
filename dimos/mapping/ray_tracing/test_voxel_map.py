@@ -187,3 +187,26 @@ def test_global_map_normal_fits_min_eigs_track_planarity() -> None:
     assert min_eigs[rough_i] > 1e-4, "a jittered patch fits with a visible residual"
     np.testing.assert_allclose(np.abs(normals[flat_i]), [0.0, 0.0, 1.0], atol=1e-3)
     np.testing.assert_allclose(np.abs(normals[rough_i]), [0.0, 0.0, 1.0], atol=0.05)
+
+
+def test_range_error_coeff_spares_near_geometry_from_a_far_ray() -> None:
+    obstacle = np.array([[50.5, 0.5, 0.5]], dtype=np.float32)
+    near_origin = (49.0, 0.5, 0.5)
+    through = np.array([[60.5, 0.5, 0.5]], dtype=np.float32)
+    far_origin = (0.0, 0.5, 0.5)
+
+    def obstacle_survives(range_error_coeff: float) -> bool:
+        mapper = VoxelRayMapper(
+            voxel_size=1.0,
+            max_range=100.0,
+            min_health=0,
+            max_health=1,
+            graze_cos=0.0,
+            range_error_coeff=range_error_coeff,
+        )
+        mapper.add_frame_world(obstacle, near_origin)
+        mapper.add_frame_world(through, far_origin)
+        return bool((mapper.global_map() == [50.5, 0.5, 0.5]).all(axis=1).any())
+
+    assert not obstacle_survives(0.0), "unweighted, one ray clears it whatever the range"
+    assert obstacle_survives(0.01), "a 50 m ray must not undo a 1.5 m observation"

@@ -27,7 +27,8 @@ use normals::fit_normal;
 use normals::{pooled_normal, refresh_voxels, should_spare, NORMAL_MIN_POINTS};
 
 pub type VoxelKey = (i32, i32, i32);
-pub type VoxelHealth = i32;
+/// Occupancy evidence; fractional because each update is weighted by its range.
+pub type VoxelHealth = f32;
 type ChunkKey = (i32, i32, i32);
 
 /// Voxels per chunk edge for the healthy-voxel spatial index `emit_points` scans.
@@ -74,6 +75,14 @@ pub struct Config {
     pub min_health: i32,
     #[validate(range(min = 1))]
     pub max_health: i32,
+    /// Sensor range error `range_error_coeff * d^range_error_exponent` (m); zero weights all updates equally.
+    #[validate(range(min = 0.0))]
+    pub range_error_coeff: f32,
+    /// Exponent on range in the error model; 2 is stereo/structured-light depth.
+    #[validate(range(min = 0.0, max = 8.0))]
+    pub range_error_exponent: f32,
+    /// Cloud frame_ids the range error applies to; empty applies it to every cloud.
+    pub range_error_frame_ids: Vec<String>,
     /// Spare a miss when abs of ray dot normal is below this. Higher clears only
     /// on direct hits, lower clears on slight grazes too.
     #[validate(range(min = 0.0, max = 1.0))]
@@ -116,7 +125,44 @@ fn validate_config(cfg: &Config) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Health an update is worth at a range: 1 / (1 + (error in voxels)^2).
+#[derive(Clone, Copy)]
+struct RangeWeight {
+    coeff_voxels: f32,
+    half_exponent: f32,
+}
+
+impl RangeWeight {
+    #[cfg(test)]
+    const OFF: Self = Self {
+        coeff_voxels: 0.0,
+        half_exponent: 1.0,
+    };
+
+    #[inline]
+    fn at(self, distance_sq: f32) -> f32 {
+        if self.coeff_voxels == 0.0 {
+            return 1.0;
+        }
+        let error_voxels = self.coeff_voxels * distance_sq.powf(self.half_exponent);
+        1.0 / (1.0 + error_voxels * error_voxels)
+    }
+}
+
 impl Config {
+    /// Whether clouds in `frame_id` are range weighted.
+    pub fn range_weights_frame(&self, frame_id: &str) -> bool {
+        self.range_error_frame_ids.is_empty()
+            || self.range_error_frame_ids.iter().any(|f| f == frame_id)
+    }
+
+    fn range_weight(&self) -> RangeWeight {
+        RangeWeight {
+            coeff_voxels: self.range_error_coeff / self.voxel_size,
+            half_exponent: self.range_error_exponent * 0.5,
+        }
+    }
+
     /// The enabled fine layer as (divisor, fine cell size), or None when off.
     pub fn fine_layer(&self) -> Option<(u32, f32)> {
         (self.fine_divisor >= 2).then(|| {
@@ -169,7 +215,7 @@ pub struct VoxelMap {
 
 impl VoxelMap {
     pub fn healthy_count(&self) -> usize {
-        self.voxels.values().filter(|c| c.health > 0).count()
+        self.voxels.values().filter(|c| c.health > 0.0).count()
     }
 
     /// Add a return to its voxel's accumulated moments, marking its fine cell
@@ -231,7 +277,7 @@ impl VoxelMap {
                         continue;
                     }
                     let nk = (key.0 + dx, key.1 + dy, key.2 + dz);
-                    if self.voxels.get(&nk).is_some_and(|c| c.health > 0) {
+                    if self.voxels.get(&nk).is_some_and(|c| c.health > 0.0) {
                         n += 1;
                     }
                 }
@@ -264,22 +310,21 @@ impl VoxelMap {
         }
     }
 
-    /// Register a ray hit: create the voxel at `min_health` if new, then bump its
-    /// health. Keeps the healthy-chunk index and every neighbor's `support` count
-    /// in sync. Returns whether the voxel was created.
+    /// Add `weight` to a voxel's health, creating it at `min_health`; returns whether it was created.
     fn record_hit(
         &mut self,
         key: VoxelKey,
         min_health: VoxelHealth,
         max_health: VoxelHealth,
+        weight: f32,
     ) -> bool {
         let (created, was_healthy, now_healthy) = if let Some(c) = self.voxels.get_mut(&key) {
-            let was_healthy = c.health > 0;
-            c.health = (c.health + 1).min(max_health);
-            (false, was_healthy, c.health > 0)
+            let was_healthy = c.health > 0.0;
+            c.health = (c.health + weight).min(max_health);
+            (false, was_healthy, c.health > 0.0)
         } else {
             let support = self.count_healthy_neighbors(key);
-            let health = (min_health + 1).min(max_health);
+            let health = (min_health + weight).min(max_health);
             self.voxels.insert(
                 key,
                 Voxel {
@@ -288,7 +333,7 @@ impl VoxelMap {
                     ..Default::default()
                 },
             );
-            (true, false, health > 0)
+            (true, false, health > 0.0)
         };
         self.update_health_index(key, was_healthy, now_healthy);
         if was_healthy != now_healthy {
@@ -297,17 +342,15 @@ impl VoxelMap {
         created
     }
 
-    /// Apply a clearing miss: drop the voxel's health by one, removing it once it
-    /// reaches `min_health`. Keeps the healthy-chunk index and every neighbor's
-    /// `support` count in sync. Returns whether the voxel was removed.
-    fn record_miss(&mut self, key: VoxelKey, min_health: VoxelHealth) -> bool {
+    /// Subtract `weight` from a voxel's health, removing it at `min_health`; returns whether it was removed.
+    fn record_miss(&mut self, key: VoxelKey, min_health: VoxelHealth, weight: f32) -> bool {
         let Some(c) = self.voxels.get_mut(&key) else {
             return false;
         };
-        let was_healthy = c.health > 0;
-        c.health -= 1;
+        let was_healthy = c.health > 0.0;
+        c.health -= weight;
         let removed = c.health <= min_health;
-        let now_healthy = !removed && c.health > 0;
+        let now_healthy = !removed && c.health > 0.0;
         if removed {
             self.voxels.remove(&key);
         }
@@ -334,7 +377,7 @@ impl VoxelMap {
             };
             // The fine-cell bitmask rides inside the removed voxel, so the fine
             // layer needs no separate cleanup.
-            let was_healthy = voxel.health > 0;
+            let was_healthy = voxel.health > 0.0;
             self.update_health_index(key, was_healthy, false);
             if was_healthy {
                 self.propagate_neighbor_support(key, -1);
@@ -349,7 +392,7 @@ impl VoxelMap {
     #[cfg(test)]
     pub fn set_health(&mut self, key: VoxelKey, health: VoxelHealth) {
         let was_healthy = if let Some(c) = self.voxels.get_mut(&key) {
-            let was_healthy = c.health > 0;
+            let was_healthy = c.health > 0.0;
             c.health = health;
             was_healthy
         } else {
@@ -364,7 +407,7 @@ impl VoxelMap {
             );
             false
         };
-        let now_healthy = health > 0;
+        let now_healthy = health > 0.0;
         self.update_health_index(key, was_healthy, now_healthy);
         if was_healthy != now_healthy {
             self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
@@ -424,7 +467,7 @@ pub struct Voxel {
 impl Default for Voxel {
     fn default() -> Self {
         Self {
-            health: 0,
+            health: 0.0,
             support: 0,
             fine: 0,
             num_pts: 0,
@@ -575,7 +618,7 @@ pub fn iter_global_normals(
     let half = voxel_size * 0.5;
     map.voxels
         .iter()
-        .filter(|(_, c)| c.health > 0)
+        .filter(|(_, c)| c.health > 0.0)
         .map(move |(&(kx, ky, kz), c)| {
             let pos = (
                 kx as f32 * voxel_size + half,
@@ -595,7 +638,7 @@ pub fn global_normal_fits(map: &VoxelMap, voxel_size: f32) -> (Vec<f32>, Vec<f32
     let keys: Vec<VoxelKey> = map
         .voxels
         .iter()
-        .filter(|(_, c)| c.health > 0)
+        .filter(|(_, c)| c.health > 0.0)
         .map(|(&k, _)| k)
         .collect();
     let fits: Vec<([f32; 3], [f32; 3], f32)> = keys
@@ -809,7 +852,7 @@ pub fn emit_points(
     );
 
     for &key in live.iter() {
-        if matches!(map.voxels.get(&key), Some(c) if c.health > 0) {
+        if matches!(map.voxels.get(&key), Some(c) if c.health > 0.0) {
             continue;
         }
         let (x, y, z) = voxel_center(key, voxel_size);
@@ -872,7 +915,7 @@ pub fn emit_points_fine(
 
     for &fine_key in live_fine.iter() {
         let (coarse, _) = split_fine_key(fine_key, divisor);
-        if matches!(map.voxels.get(&coarse), Some(v) if v.health > 0) {
+        if matches!(map.voxels.get(&coarse), Some(v) if v.health > 0.0) {
             continue;
         }
         let (x, y, z) = voxel_center(fine_key, fine_size);
@@ -884,11 +927,21 @@ pub fn emit_points_fine(
     out
 }
 
-fn live_voxels(points: &[(f32, f32, f32)], voxel_size: f32) -> AHashSet<VoxelKey> {
+/// The voxels this batch returned from, each with the weight of its nearest return.
+fn live_voxels(
+    points: &[(f32, f32, f32)],
+    origin: (f32, f32, f32),
+    voxel_size: f32,
+    range_weight: RangeWeight,
+) -> AHashMap<VoxelKey, f32> {
     let inv = 1.0_f32 / voxel_size;
-    let mut out: AHashSet<VoxelKey> = AHashSet::with_capacity(points.len());
+    let mut out: AHashMap<VoxelKey, f32> = AHashMap::with_capacity(points.len());
     for &(x, y, z) in points {
-        out.insert(world_to_voxel(x, y, z, inv));
+        let distance_sq = (x - origin.0).powi(2) + (y - origin.1).powi(2) + (z - origin.2).powi(2);
+        let weight = range_weight.at(distance_sq);
+        out.entry(world_to_voxel(x, y, z, inv))
+            .and_modify(|best| *best = best.max(weight))
+            .or_insert(weight);
     }
     out
 }
@@ -930,16 +983,17 @@ pub fn update_map(
     }));
     let points = &filtered[..];
 
-    let hits = live_voxels(points, cfg.voxel_size);
+    let range_weight = cfg.range_weight();
+    let hits = live_voxels(points, origin, cfg.voxel_size, range_weight);
     let fine = cfg.fine_layer().map(|(d, _)| d as i32);
 
     let origin_voxel = world_to_voxel(origin.0, origin.1, origin.2, inv);
     let step = cfg.ray_subsample as usize;
     let voxels = &map.voxels;
-    let misses: AHashSet<VoxelKey> = points
+    let misses: AHashMap<VoxelKey, f32> = points
         .par_iter()
         .enumerate()
-        .fold(AHashSet::new, |mut misses, (i, &p)| {
+        .fold(AHashMap::new, |mut misses, (i, &p)| {
             if i % step != 0 {
                 return misses;
             }
@@ -953,25 +1007,32 @@ pub fn update_map(
                 cfg.shadow_depth,
                 cfg.grace_depth,
                 cfg.graze_cos,
+                range_weight,
                 fine,
                 origin_voxel,
                 endpoint,
             );
             misses
         })
-        .reduce(AHashSet::new, |mut a, mut b| {
+        .reduce(AHashMap::new, |mut a, mut b| {
             if a.len() < b.len() {
                 std::mem::swap(&mut a, &mut b);
             }
-            a.extend(b);
+            for (key, weight) in b {
+                a.entry(key)
+                    .and_modify(|best| *best = best.max(weight))
+                    .or_insert(weight);
+            }
             a
         });
 
     // New voxels join the refresh set so a sparse voxel among converged
     // neighbors gets a pooled fit before its first milestone.
+    let min_health = cfg.min_health as VoxelHealth;
+    let max_health = cfg.max_health as VoxelHealth;
     let mut changed: AHashSet<VoxelKey> = AHashSet::new();
-    for &v in &hits {
-        if map.record_hit(v, cfg.min_health, cfg.max_health) {
+    for (&v, &weight) in &hits {
+        if map.record_hit(v, min_health, max_health, weight) {
             changed.insert(v);
         }
     }
@@ -989,8 +1050,8 @@ pub fn update_map(
     }
 
     let mut removed: Vec<VoxelKey> = Vec::new();
-    for &v in misses.difference(&hits) {
-        if map.record_miss(v, cfg.min_health) {
+    for (&v, &weight) in misses.iter().filter(|(v, _)| !hits.contains_key(*v)) {
+        if map.record_miss(v, min_health, weight) {
             removed.push(v);
         }
     }
@@ -998,7 +1059,7 @@ pub fn update_map(
     refresh_voxels(map, &changed, &removed, cfg.voxel_size);
 
     FrameHits {
-        coarse: hits,
+        coarse: hits.into_keys().collect(),
         fine: fine_live,
     }
 }
@@ -1091,7 +1152,7 @@ fn crossed_fine_cells(
 /// a voxel is also spared when the ray misses all of its observed fine cells.
 #[allow(clippy::too_many_arguments)]
 fn find_misses_along_ray(
-    misses: &mut AHashSet<VoxelKey>,
+    misses: &mut AHashMap<VoxelKey, f32>,
     map_voxels: &AHashMap<VoxelKey, Voxel>,
     origin: (f32, f32, f32),
     end: (f32, f32, f32),
@@ -1099,6 +1160,7 @@ fn find_misses_along_ray(
     shadow_depth: f32,
     grace_depth: f32,
     graze_cos: f32,
+    range_weight: RangeWeight,
     fine_divisor: Option<i32>,
     origin_voxel: VoxelKey,
     endpoint: VoxelKey,
@@ -1159,7 +1221,8 @@ fn find_misses_along_ray(
     let shadow_sq = shadow_depth.powi(2);
     let grace_sq = grace_depth.powi(2);
 
-    let ray_len = (dx * dx + dy * dy + dz * dz).sqrt();
+    let ray_len_sq = dx * dx + dy * dy + dz * dz;
+    let ray_len = ray_len_sq.sqrt();
     let t_max = 1.0 + shadow_depth / ray_len.max(f32::EPSILON);
     let ray_unit = Vector3::new(dx, dy, dz) / ray_len.max(f32::EPSILON);
 
@@ -1233,7 +1296,12 @@ fn find_misses_along_ray(
                     }
                 }
             }
-            misses.insert((x, y, z));
+            // Weighted by this voxel's range, so a long ray still clears near the sensor.
+            let weight = range_weight.at(t_enter * t_enter * ray_len_sq);
+            misses
+                .entry((x, y, z))
+                .and_modify(|best| *best = best.max(weight))
+                .or_insert(weight);
         }
     }
 }

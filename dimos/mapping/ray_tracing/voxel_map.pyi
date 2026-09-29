@@ -29,6 +29,8 @@ class VoxelRayMapper:
         grace_depth: float = 0.2,
         min_health: int = -1,
         max_health: int = 5,
+        range_error_coeff: float = 0.0,
+        range_error_exponent: float = 2.0,
         graze_cos: float = 0.7,
         support_min: int = 4,
         region_percentile: float = 95.0,
