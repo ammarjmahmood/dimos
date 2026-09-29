@@ -36,6 +36,7 @@
             ../../../../dimos/mapping/ray_tracing/rust/py
             ../../../../dimos/navigation/global_planner/mls_planner/rust
             ../../../../dimos/navigation/global_planner/mls_planner/rust/py
+            ../../../../dimos/hardware/sensors/camera/depth_cloud/rust
             ../../../../dimos/hardware/sensors/lidar/livox/rust
             ../../../../dimos/hardware/sensors/lidar/pointlio/rust
             ../../../../dimos/hardware/sensors/lidar/virtual_mid360
