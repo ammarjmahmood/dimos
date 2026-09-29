@@ -14,7 +14,7 @@
 
 """R1Pro physical finger sweep expressed in GraspGenX's +Z approach convention."""
 
-from dimos.manipulation.grasping.grasp_gen_x import RigidTransform, SweepVolumeGripperConfig
+from dimos.manipulation.grasping.grasp_gen_x.module import RigidTransform, SweepVolumeGripperConfig
 
 # The sim's parallel jaws close on palm Y and approach along palm -Z. Both
 # planning TCPs are 85 mm along palm -Z. Swapping X/Y and flipping Z is a proper

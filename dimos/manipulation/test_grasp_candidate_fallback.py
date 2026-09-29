@@ -106,7 +106,7 @@ def test_pick_skips_a_candidate_that_will_not_plan(
 ) -> None:
     monkeypatch.setattr(
         "dimos.manipulation.pick_and_place_module.await_gripper_settle",
-        lambda read, target, config: GripperSettle(True, target, True, 0.1),
+        lambda read, target, config, **_: GripperSettle(True, target, True, 0.1),
     )
     first = Pose(Vector3(0.4, 0.0, 0.2), Quaternion.from_euler(Vector3(-math.pi, 0.0, 0.0)))
     second = Pose(Vector3(0.4, 0.0, 0.2), Quaternion.from_euler(Vector3(-math.pi, 0.0, math.pi)))
@@ -136,7 +136,7 @@ def test_pick_skips_a_candidate_that_will_not_plan(
 def test_pick_does_not_retry_an_execution_failure(module, monkeypatch):
     monkeypatch.setattr(
         "dimos.manipulation.pick_and_place_module.await_gripper_settle",
-        lambda read, target, config: GripperSettle(True, target, True, 0.1),
+        lambda read, target, config, **_: GripperSettle(True, target, True, 0.1),
     )
     candidate = GraspCandidate(Pose(Vector3(0.4, 0.0, 0.2)), score=1.0)
     module._grasp_generator.propose_grasps.return_value = GraspCandidateArray(

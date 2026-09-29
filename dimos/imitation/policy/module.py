@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
+import sys
 from typing import Any, ClassVar, Protocol, TypedDict
 
 from pydantic import Field, field_validator
@@ -38,6 +40,7 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.spec.utils import Spec
 from dimos.teleop.webxr.controller_types import BUTTON_ALIASES, Buttons
+from dimos.utils.data import get_project_root
 
 POLICY_ROLLOUT_TASK_NAME = "policy_rollout"
 POLICY_ROLLOUT_INSTANCE_NAME = "PolicyRolloutModule"
@@ -171,5 +174,11 @@ def declare_policy_module(
             "__qualname__": name,
             "implementation": implementation,
             "profile": profile,
+            # The runtime project is the ``python/`` directory beside the declaring module.
+            "project_dir": str(
+                (Path(inspect.getfile(sys.modules[module_name])).parent / "python")
+                .resolve()
+                .relative_to(get_project_root())
+            ),
         },
     )

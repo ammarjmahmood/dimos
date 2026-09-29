@@ -272,7 +272,7 @@ def test_build_does_not_mutate_parsed_config(mocker) -> None:
     mocker.patch.object(ModuleCoordinator, "_connect_streams")
     mocker.patch("dimos.core.coordination.module_coordinator._connect_module_refs")
     mocker.patch.object(ModuleCoordinator, "build_all_modules")
-    mocker.patch.object(ModuleCoordinator, "start_all_modules")
+    mocker.patch.object(ModuleCoordinator, "start_all_modules", return_value={})
     mocker.patch("dimos.core.coordination.module_coordinator._log_blueprint_graph")
 
     coordinator = ModuleCoordinator.build(blueprint, parsed)
@@ -993,13 +993,13 @@ def test_start_rpc_service_is_idempotent(dynamic_coordinator) -> None:
 def test_loop_starts_rpc_service_and_stops_on_interrupt(dynamic_coordinator, mocker) -> None:
     start_rpc = mocker.patch.object(dynamic_coordinator, "start_rpc_service")
     stop = mocker.patch.object(dynamic_coordinator, "stop")
-    event = mocker.patch("dimos.core.coordination.module_coordinator.threading.Event")
-    event.return_value.wait.side_effect = KeyboardInterrupt
+    wait = mocker.patch.object(dynamic_coordinator._shutdown_event, "wait")
+    wait.side_effect = KeyboardInterrupt
 
     dynamic_coordinator.loop()
 
     start_rpc.assert_called_once_with()
-    event.return_value.wait.assert_called_once_with()
+    wait.assert_called_once_with()
     stop.assert_called_once_with()
 
 
@@ -1204,3 +1204,20 @@ def test_absolute_remapping_matches_direct_adapter_topic(monkeypatch, backend):
     stream = _get_transport_for(blueprint, "/base/cmd_vel", Data1)
     adapter = make_transport("/base/cmd_vel", Data1)
     assert stream.topic == adapter.topic
+
+
+def test_shutdown_unblocks_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """shutdown() (the RPC handler) releases loop(), which stops everything."""
+    coordinator = ModuleCoordinator(g=GlobalConfig())
+    monkeypatch.setattr(coordinator, "start_rpc_service", lambda: None)
+    stopped = threading.Event()
+    monkeypatch.setattr(coordinator, "stop", stopped.set)
+
+    looper = threading.Thread(target=coordinator.loop, daemon=True)
+    looper.start()
+    assert not stopped.wait(0.1)
+
+    coordinator.shutdown()
+    looper.join(timeout=5)
+    assert not looper.is_alive()
+    assert stopped.is_set()

@@ -62,8 +62,8 @@ dimos run teleop-webxr-openarm --left-can-port can1 --right-can-port can0
 
 The blueprint also includes `ManipulationModule` with the same bimanual model
 and Viser visualization. Its coordinator has a joint-trajectory task over both
-arms at priority 20; planned execution therefore preempts the priority-10
-teleoperation task through normal arbitration and clears the engagement state.
+arms at priority 10. Manual arm and gripper tasks run at priority 20, so
+manual takeover aborts any active planner or policy trajectory.
 
 ## Arm task bindings
 
@@ -111,7 +111,29 @@ raw levels independently.
 
 **Axes**: thumbstick X, thumbstick Y, trigger (analog), grip (analog)
 
-**Buttons**: trigger, grip, touchpad, thumbstick, X/A, Y/B, menu
+**Buttons**: trigger, grip, touchpad, thumbstick, X/A, Y/B, optional menu. WebXR
+omits a platform-reserved menu button on devices such as PICO controllers.
+
+## Body Tracking Messages
+
+The WebSocket carries two frame formats. Controller poses and joystick state use
+binary LCM messages. When body tracking is enabled, every sampled frame includes
+a JSON body-tracking heartbeat. A `null` joint map means the body source is
+unavailable; an empty map means the source resolved no joints for that frame.
+
+The PICO demo requires body tracking. Enable standard DimOS debug logging to
+inspect incoming snapshots:
+
+```bash
+DIMOS_LOG_LEVEL=DEBUG uv run dimos run demo-pico-body-tracking
+```
+
+The WebXR module logs the first resolved body pose at INFO. At DEBUG, it reports
+the received snapshot rate, availability, reference space, joint count, and
+joint positions every five seconds of incoming messages. Timing starts with the
+first snapshot, excluding headset setup time. Null and empty snapshots are valid
+and do not generate warnings; malformed messages do. Reports stop when messages
+stop arriving, so these diagnostics do not detect a disconnected or silent client.
 
 ## File Structure
 

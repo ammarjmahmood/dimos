@@ -23,10 +23,10 @@ from dimos.constants import RECORDINGS_DIR
 from dimos.control.components import HardwareComponent, HardwareType, make_twist_base_joints
 from dimos.control.coordinator import TaskConfig
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
-from dimos.manipulation.grasping.grasp_gen_x import GraspGenXModule
+from dimos.manipulation.grasping.grasp_gen_x.module import GraspGenXModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.planners.config import RRTConnectPlannerConfig
-from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.robot.assets.model import PlanarBaseDefinition
 from dimos.robot.galaxea.r1pro.apartment_coordinator import R1ProApartmentCoordinator
 from dimos.robot.galaxea.r1pro.apartment_navigation import (
@@ -45,6 +45,7 @@ from dimos.robot.galaxea.r1pro.classical_skills import R1ProClassicalSkills
 from dimos.robot.galaxea.r1pro.config import (
     R1PRO_MODEL,
     R1PRO_PLANAR_BASE,
+    R1PRO_UPPER_BODY_PLANNING_JOINTS,
     make_r1pro_planar_model_config,
 )
 from dimos.robot.galaxea.r1pro.grasping_blueprint import build_r1pro_manipulation
@@ -114,14 +115,14 @@ def build_classical_apartment(
         ),
         navigation_task=TaskConfig(
             name=CLASSICAL_BASE_TASK,
-            type="base_trajectory",
+            type="planar_base_trajectory",
             joint_names=base_joints,
             priority=30,
             params={
                 "max_linear": 0.3,
                 "max_angular": 0.4,
-                "goal_tolerance": 0.005,
-                "orientation_tolerance": 0.005,
+                "position_goal_tolerance": 0.005,
+                "orientation_goal_tolerance": 0.005,
                 "settle_timeout": 25.0,
                 "stop_hold_s": 0.5,
             },
@@ -227,7 +228,10 @@ def build_classical_apartment(
             model=model,
             planner=RRTConnectPlannerConfig(),
             joint_state_aliases=dict(zip(base_joints, R1PRO_PLANAR_BASE.joint_names, strict=True)),
-            base_trajectory_task=CLASSICAL_BASE_TASK,
+            trajectory_tasks={
+                "joint_trajectory": list(R1PRO_UPPER_BODY_PLANNING_JOINTS),
+                CLASSICAL_BASE_TASK: list(R1PRO_PLANAR_BASE.joint_names),
+            },
             visualization={"backend": "none"},
         ),
         McpServer.blueprint(),

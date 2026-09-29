@@ -189,6 +189,7 @@ def test_python_native_runtime_tree_is_not_scanned(tmp_path: Path) -> None:
     runtime.parent.mkdir(parents=True)
     contract.write_text("")
     runtime.write_text("")
+    (runtime.parent.parent / "pyproject.toml").write_text("")
 
     assert list(_get_all_python_files(tmp_path)) == [contract]
 
@@ -273,19 +274,16 @@ def _check_for_uncommitted_changes(file_path: Path) -> bool:
 
 
 def _get_all_python_files(root: Path) -> Generator[Path, None, None]:
-    """Yield host source files without entering Python-native runtime projects."""
-    for directory, directory_names, file_names in os.walk(root):
-        # A sibling directory named ``python`` is the isolation boundary for a
-        # PythonNativeModule. Its implementation and .venv are not host code.
-        directory_names[:] = sorted(
-            name for name in directory_names if name not in {"__pycache__", "python"}
-        )
-        for file_name in sorted(file_names):
-            if not file_name.endswith(".py"):
-                continue
-            path = Path(directory) / file_name
-            rel_path = str(path.relative_to(root.parent))
-            if rel_path not in IGNORED_FILES:
+    for directory, children, filenames in os.walk(root):
+        parent = Path(directory)
+        children[:] = [
+            name
+            for name in children
+            if name != "__pycache__" and not (parent / name / "pyproject.toml").is_file()
+        ]
+        for name in filenames:
+            path = parent / name
+            if path.suffix == ".py" and str(path.relative_to(root.parent)) not in IGNORED_FILES:
                 yield path
 
 
@@ -351,3 +349,26 @@ def _ends_with_blueprint_method(node: ast.expr) -> bool:
         if isinstance(func, ast.Attribute) and func.attr in BLUEPRINT_METHODS:
             return True
     return False
+
+
+def test_nested_projects_do_not_contribute_modules_or_blueprints(tmp_path: Path) -> None:
+    root = tmp_path / "dimos"
+    runtime = root / "provider/python"
+    runtime.mkdir(parents=True)
+    (runtime / "pyproject.toml").write_text('[project]\nname = "runtime"\n')
+    (root / "provider/contract.py").write_text(
+        "class HostContract(Module): pass\n"
+        "class RuntimeOnlyBase: pass\n"
+        "class NotAModule(RuntimeOnlyBase): pass\n"
+        "host_blueprint = HostContract.blueprint()\n"
+    )
+    (runtime / "runtime.py").write_text(
+        "class PublicRuntime(HostContract): pass\n"
+        "class RuntimeOnlyBase(Module): pass\n"
+        "runtime_blueprint = PublicRuntime.blueprint()\n"
+    )
+
+    blueprints, modules = _scan_for_blueprints(root)
+
+    assert blueprints == {"host-blueprint": "dimos.provider.contract:host_blueprint"}
+    assert modules == {"host-contract": "dimos.provider.contract.HostContract"}

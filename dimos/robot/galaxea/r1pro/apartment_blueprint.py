@@ -21,7 +21,7 @@ from dimos.constants import RECORDINGS_DIR
 from dimos.control.components import make_twist_base_joints
 from dimos.control.coordinator import TaskConfig
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
-from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.robot.galaxea.r1pro.apartment_coordinator import R1ProApartmentCoordinator
 from dimos.robot.galaxea.r1pro.apartment_navigation import (
     APARTMENT_FRAME,

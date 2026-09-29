@@ -21,7 +21,7 @@ from dimos.control.coordinator import TaskConfig
 from dimos.control.path_following_coordinator import PathFollowingCoordinator
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.imitation.policy.lerobot.module import R1ProPackingPolicy
-from dimos.navigation.nav_3d.mls_planner.mls_planner_native import MLSPlannerNative
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.robot.galaxea.r1pro.grasping_blueprint import build_r1pro_manipulation
 from dimos.robot.galaxea.r1pro.learning import R1PRO_PACKING_TASK
 from dimos.robot.galaxea.r1pro.navigation_sim import (

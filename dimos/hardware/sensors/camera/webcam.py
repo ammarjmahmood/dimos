@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from functools import cache
+import sys
 import threading
 import time
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BeforeValidator, Field
 from reactivex import create
@@ -24,15 +25,15 @@ from reactivex.observable import Observable
 from dimos.hardware.sensors.camera.spec import CameraConfig, CameraHardware
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
-from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import backpressure
 
-logger = setup_logger()
 
-
-def _parse_camera_device(value: object) -> object:
-    if isinstance(value, str) and value.isdecimal():
-        return int(value)
+def _parse_camera_device(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
     return value
 
 
@@ -58,6 +59,7 @@ class Webcam(CameraHardware):
         self._capture_thread = None
         self._stop_event = threading.Event()
         self._observer = None
+        self._emitted_size: tuple[int, int] | None = None
 
     @cache
     def image_stream(self) -> Observable[Image]:
@@ -89,26 +91,19 @@ class Webcam(CameraHardware):
         if self._capture_thread and self._capture_thread.is_alive():
             return
 
-        # Open the video capture
-        self._capture = cv2.VideoCapture(self.config.camera_index)  # type: ignore[assignment]
+        # Device paths otherwise let FFmpeg open the camera, which cannot apply
+        # the requested capture dimensions and frame rate through set().
+        device = self.config.camera_index
+        backend = cv2.CAP_ANY
+        if sys.platform == "linux" and isinstance(device, str) and device.startswith("/dev/"):
+            backend = cv2.CAP_V4L2
+        self._capture = cv2.VideoCapture(device, backend)  # type: ignore[assignment]
         if not self._capture.isOpened():  # type: ignore[attr-defined]
             raise RuntimeError(f"Failed to open camera {self.config.camera_index}")
 
         # Set camera properties
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.width)  # type: ignore[attr-defined]
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.height)  # type: ignore[attr-defined]
-        if self.config.fps > 0:
-            self._capture.set(cv2.CAP_PROP_FPS, self.config.fps)  # type: ignore[attr-defined]
-        logger.info(
-            "Webcam %s requested %.1fHz %dx%d; negotiated %.1fHz %dx%d",
-            self.config.camera_index,
-            self.config.fps,
-            self.config.width,
-            self.config.height,
-            self._capture.get(cv2.CAP_PROP_FPS),  # type: ignore[attr-defined]
-            round(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH)),  # type: ignore[attr-defined]
-            round(self._capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),  # type: ignore[attr-defined]
-        )
 
         # Clear stop event and start the capture thread
         self._stop_event.clear()
@@ -141,7 +136,6 @@ class Webcam(CameraHardware):
         import cv2
 
         ret, frame = self._capture.read()  # type: ignore[attr-defined]
-        acquired_at = time.time()
         if not ret:
             raise RuntimeError(f"Failed to read frame from camera {self.config.camera_index}")
 
@@ -155,7 +149,7 @@ class Webcam(CameraHardware):
             frame_rgb,
             format=ImageFormat.RGB,  # We converted to RGB above
             frame_id=self._frame("camera_optical"),  # Standard frame ID for camera images
-            ts=acquired_at,
+            ts=time.time(),  # Current timestamp
         )
 
         if self.config.stereo_slice in ("left", "right"):
@@ -165,6 +159,7 @@ class Webcam(CameraHardware):
             else:
                 image = image.crop(half_width, 0, half_width, image.height)
 
+        self._emitted_size = (image.width, image.height)
         return image
 
     def _capture_loop(self) -> None:
@@ -194,6 +189,18 @@ class Webcam(CameraHardware):
 
     @property
     def camera_info(self) -> CameraInfo:
-        return self.config.camera_info
+        info = self.config.camera_info
+        if info.width and info.height and info.K[0] > 0 and info.K[4] > 0:
+            return info
+        # No intrinsics configured: a nominal pinhole so the image still renders.
+        # Sized from the frames actually emitted (the stereo slice halves them).
+        if self._emitted_size is not None:
+            width, height = self._emitted_size
+        else:
+            width = self.config.width // 2 if self.config.stereo_slice else self.config.width
+            height = self.config.height
+        return CameraInfo.from_fov(
+            60.0, width, height, axis="horizontal", frame_id=self._frame("camera_optical")
+        )
 
     def emit(self, image: Image) -> None: ...

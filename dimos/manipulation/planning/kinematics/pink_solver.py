@@ -270,6 +270,7 @@ class _PinkSolverCore:
                 model.lowerPositionLimit[int(joint.idx_q)] = -np.inf
                 model.upperPositionLimit[int(joint.idx_q)] = np.inf
 
+        model = _reduce_to_controlled_joints(model, config, controlled_joints)
         data = model.createData()
         _assert_base_link_is_model_root(model, config.base_link)
         frame_id = _get_frame_id(model, frame_name)
