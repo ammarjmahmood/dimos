@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>sim2 | Follow the loops</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="source.js" defer></script>
+  <script src="map.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to walkthrough</a>
+  <header class="topbar"><a href="#start" class="brand">Dimensional <span>/</span> <strong>sim2</strong></a><span class="context">Native runtime &middot; G1 GR00T example</span><a href="../../../pimsim-notebook/SIM2_HARDWARE_EMULATOR_PLAN.md">Notebook</a></header>
+  <div class="document">
+    <nav class="contents" aria-label="Walkthrough chapters">
+      <span class="nav-label">FOLLOW ONE COMMAND</span>
+      <a href="#start">The short version</a>
+      <a href="#control"><b>01</b> Choose motor targets</a>
+      <a href="#physics"><b>02</b> Move the physical world</a>
+      <a href="#feedback"><b>03</b> Publish robot feedback</a>
+      <a href="#sensors"><b>04</b> Make images and scans</a>
+      <a href="#navigation"><b>05</b> Decide where to go next</a>
+      <div class="nav-break"></div>
+      <a href="#startup">Before the loops start</a>
+      <a href="#review">What is worth questioning?</a>
+      <a href="#reference">Loop reference</a>
+      <small>Current source behavior.<br>Rates are configuration,<br>not a performance claim.</small>
+    </nav>
+    <main id="main">
+      <section id="start" class="introduction">
+        <p class="eyebrow">THE RUNNING SYSTEM</p>
+        <h1>Two loops move the robot.<br>Three more let DimOS observe it.</h1>
+        <p class="lead">One loop decides what the motors should do. Another applies those commands and advances the world. Feedback, camera and lidar run alongside them, on their own clocks.</p>
+        <figure class="motor-loop" aria-label="ControlCoordinator sends motor targets through shared memory to physics; physics returns measured joints and IMU through shared memory.">
+          <div class="loop-end control"><span class="loop-label">DECIDE</span><strong>ControlCoordinator</strong><span>New targets every 20 ms</span><b>50 Hz</b></div>
+          <div class="loop-link"><div>motor targets <span aria-hidden="true">&rarr;</span></div><strong>Shared memory</strong><div><span aria-hidden="true">&larr;</span> joints + IMU</div></div>
+          <div class="loop-end physics"><span class="loop-label">APPLY</span><strong>MuJoCo physics</strong><span>Advance the world every 5 ms</span><b>200 Hz</b></div>
+          <figcaption>G1's current simulation configuration. The loops run independently; one does not call the other.</figcaption>
+        </figure>
+        <p class="key-sentence">The controller does <em>not</em> wait for an image or a lidar scan before keeping the robot balanced.</p>
+        <div class="observing"><span>Meanwhile, the same world feeds:</span><a href="#feedback">robot feedback <b>200 Hz</b></a><a href="#sensors">camera <b>10 Hz</b></a><a href="#sensors">lidar <b>10 Hz</b></a></div>
+      </section>
+
+      <section id="control" class="chapter control">
+        <div class="chapter-heading"><span class="number">01</span><div><p class="eyebrow">THE CONTROL LOOP &middot; EXISTING DIMOS</p><h2>Choose what every motor should do.</h2></div><span class="rate">50 Hz<br><small>every 20 ms</small></span></div>
+        <p>Suppose a person presses forward, or navigation asks the robot to walk forward. That changes a desired velocity. It does not directly set a leg angle or step the simulator.</p>
+        <ol class="steps">
+          <li><strong>Read the latest measured state.</strong><span>The coordinator's hardware adapter reads joint positions and velocities from shared memory. Its IMU reading comes from that same sampled frame.</span></li>
+          <li><strong>Run the active control tasks.</strong><span>The GR00T policy turns state and desired velocity into targets for the legs and waist. An arm trajectory task can supply other joint targets.</span></li>
+          <li><strong>Resolve competing commands, then write.</strong><span>The coordinator chooses the winning command for each joint. Its adapter writes targets, gains and feedforward effort to the robot's shared-memory channel.</span></li>
+        </ol>
+        <div class="machinery"><h3>The actual machinery</h3><p><code>ControlCoordinator</code> owns a <code>TickLoop</code> thread. That calls ordinary task and hardware objects. <code>WholeBodyAdapter</code> translates the existing hardware API into shared-memory reads and writes; it has no control thread of its own.</p></div>
+        <p class="handoff">At the end of this tick, the simulator has a new target available. The coordinator sleeps until its next tick.</p>
+        <details class="code-path"><summary>Follow this loop in the code</summary><p class="call-path">TickLoop._tick() &rarr; task.compute() &rarr; ConnectedWholeBody.write_joint_commands() &rarr; WholeBodyAdapter.write_motor_commands()</p><div data-sources="tick,tick_timer,controller_write,adapter_write,adapter_imu"></div></details>
+      </section>
+
+      <section id="physics" class="chapter physics">
+        <div class="chapter-heading"><span class="number">02</span><div><p class="eyebrow">THE PHYSICS LOOP &middot; SIM2</p><h2>Apply the targets. Move the world.</h2></div><span class="rate">200 Hz<br><small>every 5 ms</small></span></div>
+        <p>This loop keeps running between policy decisions. In the current G1 configuration, the intended ratio is four physics steps for each controller tick.</p>
+        <figure class="cadence"><div class="cadence-labels"><strong>A 20 ms interval</strong><span>Illustrative alignment, not a recorded trace</span></div><div class="time-axis"><span>0 ms</span><span>5</span><span>10</span><span>15</span><span>20 ms</span></div><div class="tick-row"><span class="track-name">Controller</span><div class="ticks decisions"><i></i><i class="quiet"></i><i class="quiet"></i><i class="quiet"></i><i></i></div><span class="track-note">choose again</span></div><div class="tick-row"><span class="track-name">Physics</span><div class="ticks physics-ticks"><i></i><i></i><i></i><i></i><i></i></div><span class="track-note">apply each step</span></div><figcaption>The last target is held between decisions. These are separate clocks, not a lockstep scheduler.</figcaption></figure>
+        <ol class="steps">
+          <li><strong>Read the latest target for each robot.</strong><span>The input is the shared-memory action frame, not an RPC request. If the controller has not written another target, physics reuses the previous one.</span></li>
+          <li><strong>Apply the motor model and call MuJoCo.</strong><span>For G1, target error and gains produce actuator torque. <code>mj_step()</code> advances contacts, joints and the rest of the scene. This is the only owner that advances physical time.</span></li>
+          <li><strong>Publish what actually happened.</strong><span>Joint and IMU observations go back to each robot's channel every physics step. A separate shared-memory snapshot holds the world state for cameras, lidar and the optional viewer.</span></li>
+        </ol>
+        <div class="machinery"><h3>The actual machinery</h3><p><code>SimulationModule._run()</code> is a timer thread in the physics worker. It calls <code>SimulationRuntime.step()</code>, which owns the authoritative <code>MjModel</code> and <code>MjData</code>, a lock, and the robot channels. Motor PD is computed inside this loop, not in another module or thread.</p></div>
+        <details class="explanation"><summary>Why two shared-memory payloads?</summary><p><strong>Motor feedback</strong> is small and robot-specific: joints, IMU and root pose. <strong>The world snapshot</strong> includes the state needed to reconstruct the whole scene. Sending the full scene state through every motor read would waste work.</p><p>Both reuse <code>RobotChannel</code>'s frame machinery. They are data channels, not two physics engines. Snapshot publication is scheduled inside the physics loop, nominally near 60 Hz, rounded to whole physics steps.</p></details>
+        <details class="code-path"><summary>Follow this loop in the code</summary><p class="call-path">SimulationModule._run() &rarr; SimulationRuntime.step() &rarr; _apply() &rarr; mj_step() &rarr; _publish()</p><div data-sources="physics_timer,physics,actuators,publish"></div></details>
+      </section>
+
+      <div class="story-turn"><p class="eyebrow">THE INNER LOOP IS NOW CLOSED</p><p>The next controller tick reads those new joints and IMU values. That is enough to run the locomotion policy. The remaining loops make the robot useful to the rest of DimOS.</p></div>
+
+      <section id="feedback" class="chapter feedback">
+        <div class="chapter-heading"><span class="number">03</span><div><p class="eyebrow">THE FEEDBACK-PUBLISHING LOOP &middot; SIM2</p><h2>Make robot state available as normal DimOS messages.</h2></div><span class="rate">200 Hz<br><small>G1 IMU configuration</small></span></div>
+        <p>The control loop reads state synchronously through a hardware API. Navigation, visualization and other modules consume messages instead. This loop serves that second audience.</p>
+        <ol class="steps"><li><strong>Sample the robot channel.</strong><span><code>WholeBodyConnection</code> uses its own adapter instance to read the latest measured joints, IMU and root pose.</span></li><li><strong>Publish typed streams.</strong><span><code>motor_states: JointState</code>, <code>imu: Imu</code>, <code>odom: PoseStamped</code> and <code>tf: TFMessage</code> enter the configured DimOS transport, such as Zenoh.</span></li></ol>
+        <div class="machinery"><h3>The actual machinery</h3><p><code>WholeBodyConnection._publish()</code> is one publisher thread. It does not run a policy or own physics. Its adapter is a second instance of the same class used by the coordinator, attached to the same robot channel.</p></div>
+        <p class="caution"><strong>A real duplication question:</strong> the coordinator also publishes joint-state streams. This connection additionally publishes IMU, pose and TF. Two publication paths exist today; that cost should be justified, not disguised as an architectural necessity.</p>
+        <p class="handoff">This simulated <code>odom</code> is ground truth. It is not a localization estimate produced by SLAM.</p>
+        <details class="code-path"><summary>Follow this loop in the code</summary><div data-sources="feedback"></div></details>
+      </section>
+
+      <section id="sensors" class="chapter sensors">
+        <div class="chapter-heading"><span class="number">04</span><div><p class="eyebrow">TWO SENSOR LOOPS &middot; SIM2</p><h2>Make an image. Cast a scan.</h2></div><span class="rate">10 Hz each<br><small>every 100 ms</small></span></div>
+        <p>The camera and lidar are independent workers. They use the same scheduling and world-reading machinery, but different measurement algorithms.</p>
+        <ol class="steps"><li><strong>Read a fresh world snapshot.</strong><span><code>WorldReader</code> restores saved state into its worker-local MuJoCo model and data. <code>mj_forward()</code> recomputes positions; it does not advance physical time. An already-seen snapshot is skipped.</span></li><li><strong>Measure from the robot's mounted sensor.</strong><span>The camera renders RGB and depth from its named MJCF camera. The lidar transforms its configured rays through its named MJCF site and raycasts the scene.</span></li><li><strong>Publish the measurement.</strong><span>Camera images, calibration and transforms use the captured snapshot's time. Lidar publishes a <code>PointCloud2</code>, with a transform when using sensor-frame output.</span></li></ol>
+        <div class="sensor-rows"><div><span class="sensor-label">CAMERA</span><p><code>SensorModule._run()</code> &rarr; <code>WorldReader.update()</code> &rarr; <code>MujocoCamera.capture()</code> &rarr; images</p></div><div><span class="sensor-label">LIDAR</span><p><code>SensorModule._run()</code> &rarr; <code>WorldReader.update()</code> &rarr; <code>Raycaster.cast()</code> &rarr; point cloud</p></div></div>
+        <div class="machinery"><h3>The actual machinery</h3><p>Each sensor module requests a dedicated worker and runs a capture thread. Each <code>WorldReader</code> loads the prepared model once, then copies state each capture. A camera owns its renderer; a lidar owns its ray pattern and raycaster. These helper objects are not more DimOS modules.</p></div>
+        <p class="caution"><strong>The cost of independence:</strong> each sensor owns a model/data copy and repeats state reconstruction. It avoids waiting for rendering inside the physics loop, but it still competes for CPU, memory bandwidth and GPU resources.</p>
+        <details class="explanation"><summary>What happens when a sensor is slow?</summary><p>The capture loop finishes its current work, then reads the newest available snapshot. It does not accumulate a mandatory queue of every physics frame. Its achieved rate can fall below 10 Hz. There is no direct camera-completion barrier in the physics loop.</p><p>The lidar here is an ideal instantaneous scan, not time-resolved Mid360 hardware emulation. No separate IMU worker is needed: MuJoCo samples the IMU with the joint observation in the physics owner.</p></details>
+        <details class="code-path"><summary>Follow these loops in the code</summary><div data-sources="sensor_loop,reader,camera,lidar"></div></details>
+      </section>
+
+      <section id="navigation" class="chapter outer">
+        <div class="chapter-heading"><span class="number">05</span><div><p class="eyebrow">THE LARGER BEHAVIOR LOOP &middot; EXISTING DIMOS</p><h2>Use what the robot sees to choose the next command.</h2></div></div>
+        <p>A locomotion policy keeps moving toward a requested velocity. Navigation decides which velocity is useful. That is a larger feedback loop built from existing modules, not another subsystem inside sim2.</p>
+        <ol class="steps"><li><strong>Build a map from lidar.</strong><span>The current G1 sim blueprint feeds <code>VoxelGridMapper</code>, then <code>CostMapper</code>.</span></li><li><strong>Plan using the map, goal and robot pose.</strong><span><code>ReplanningAStarPlanner</code> produces navigation velocity commands. <code>MovementManager</code> selects between navigation and teleoperation.</span></li><li><strong>Return to the control loop.</strong><span>The resulting <code>cmd_vel: Twist</code> reaches the coordinator and updates the task's desired velocity. The next 50 Hz control tick turns it into motor targets.</span></li></ol>
+        <p class="key-sentence">The outer loop asks, "Where should I go?" The inner loop keeps answering, "What should my motors do now?"</p>
+        <p>The map and planner have their own callbacks and scheduling. They are not all executed in one 50 Hz tick. Camera output can feed visualization or perception; GR00T locomotion in this blueprint does not consume RGB-D.</p>
+        <details class="code-path"><summary>See the message wiring in the code</summary><div data-sources="navigation,movement"></div></details>
+      </section>
+
+      <section id="startup" class="chapter setup">
+        <p class="eyebrow">ONCE, BEFORE THE LOOPS</p><h2>Where the modules, robots and sensors come from.</h2>
+        <ol class="steps"><li><strong>The robot definition describes the device.</strong><span><code>G1_GROOT</code> names the MJCF, joints, actuator mappings, initial pose and sensors. A named camera or site supplies the physical mount.</span></li><li><strong>The existing blueprint composes it.</strong><span><code>simulation(scene=..., robots=...)</code> returns <code>.blueprint</code> and <code>.hardware</code>. The first declares simulation/device modules; the second tells the existing coordinator how to attach its adapter.</span></li><li><strong>The world is built, then the loops start.</strong><span><code>SimulationModule.build()</code> composes the model, creates the shared-memory channels and writes a temporary compiled <code>world.mjb</code>. Sensor workers get its path and snapshot descriptor through <code>describe()</code>, then load their local copies.</span></li></ol>
+        <p><strong>For G1, sim2 adds four modules:</strong> one world, one robot-feedback connection, one camera and one lidar. The coordinator is an existing DimOS module. An adapter, a snapshot and a robot definition are not deployable modules.</p>
+        <details class="explanation"><summary>Where do RPCs, reset and the two viewers fit?</summary><p>RPCs handle lifecycle and occasional commands such as <code>describe()</code>, <code>reset()</code>, <code>set_spawn()</code> and <code>set_scene_state()</code>. They are not the per-tick motor data path. Physics mutations share the runtime lock; resetting physics does not, by itself, clear every controller or mapper's history.</p><p>The optional native MuJoCo viewer owns another <code>WorldReader</code>. It refreshes a read-only view, with a 1/30-second sleep between iterations. Rerun instead subscribes to DimOS messages. Neither window advances physics.</p><p>An optional privileged <code>sim_truth</code> publisher runs at 10 Hz when enabled for evaluation recording. It is not required for locomotion, sensing or navigation.</p></details>
+        <details class="code-path"><summary>See construction and auxiliary loops in the code</summary><div data-sources="g1_definition,composition,build,viewer,truth"></div></details>
+      </section>
+
+      <section id="review" class="chapter review">
+        <p class="eyebrow">THE ARCHITECTURE, NOW IN CONTEXT</p><h2>Which boundaries earn their place?</h2>
+        <dl class="decisions"><div><dt>Control separate from physics</dt><dd>DimOS owns policies and command arbitration; the emulator owns motors and physical state. The same control code can target hardware. It also introduces asynchronous timing and a transport contract to maintain.</dd></div><div><dt>Sensors separate from physics</dt><dd>Slow rendering does not sit inside the stepping loop. The price is per-sensor model copies and repeated <code>mj_forward()</code>. Sharing reconstruction is a possible optimization, not something this implementation already does.</dd></div><div><dt>Feedback publication separate from control</dt><dd>It gives ordinary DimOS consumers the device streams they expect. It also means a second adapter and overlapping joint-state publication. This is the clearest place to question consolidation.</dd></div><div><dt>Shared memory in the motor path</dt><dd>It serves synchronous hardware methods without a network RPC per tick. The binary frame layout, reset identity and lifecycle handling are real maintenance costs. This is the current choice, not proof that measured Zenoh performance could never replace it.</dd></div><div><dt>Latest-value reads instead of lockstep</dt><dd>Loops can run at different rates. They can also see stale values. Physics reuses the last valid target; <code>_apply()</code> checks episode identity but has no elapsed-time stale-target watchdog. A task's velocity-command timeout is a different safeguard.</dd></div></dl>
+        <p class="review-conclusion">That is the architecture to judge: two independently scheduled control/physics loops, separate observation loops, and ordinary DimOS modules closing the larger behavior loop.</p>
+        <details class="code-path"><summary>Inspect the shared-memory machinery</summary><div data-sources="channel_publish,channel_read"></div></details>
+        <label for="review-note" class="note-label">Review notes</label><textarea id="review-note" rows="4"></textarea><div class="note-footer"><small id="note-status">Local to this browser</small><button id="export-notes" title="Export review notes"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>Export notes</button></div>
+      </section>
+
+      <section id="reference" class="chapter reference">
+        <p class="eyebrow">THE COMPACT REFERENCE</p><h2>The loops and their owners.</h2>
+        <div class="table-scroll"><table><thead><tr><th>Work</th><th>Loop owner</th><th>Current G1 cadence</th><th>Handoff</th></tr></thead><tbody><tr><td>Choose motor targets</td><td><code>TickLoop._loop</code></td><td>50 Hz</td><td>Robot-channel actions</td></tr><tr><td>Apply motors + advance physics</td><td><code>SimulationModule._run</code></td><td>200 Hz</td><td>Robot observations + world snapshots</td></tr><tr><td>Publish device feedback</td><td><code>WholeBodyConnection._publish</code></td><td>200 Hz</td><td>JointState, Imu, PoseStamped, TFMessage</td></tr><tr><td>Render camera</td><td><code>SensorModule._run</code></td><td>10 Hz</td><td>Image, CameraInfo, TFMessage</td></tr><tr><td>Cast lidar</td><td><code>SensorModule._run</code></td><td>10 Hz</td><td>PointCloud2</td></tr><tr><td>Map, plan, select velocity</td><td>Existing navigation modules</td><td>Own scheduling / message callbacks</td><td>Twist back to the controller</td></tr></tbody></table></div>
+        <p class="fine-print">Configured targets, not live FPS or hard real-time guarantees. The physics timestep advances simulation time; sleeping and waking use wall time. Under overload those clocks can diverge. The native viewer and optional evaluation recorder are auxiliary observers.</p>
+        <details class="explanation"><summary>What changes for M20 or xArm7?</summary><p><strong>M20:</strong> the same loop structure, a different policy, 50 Hz controller and 1,000 Hz physics. Wheel velocity targets and leg position targets use the same full motor command contract.</p><p><strong>xArm7:</strong> trajectory/gripper tasks replace locomotion, the default coordinator tick is 100 Hz, and physics is 200 Hz. The arm uses its native position-servo actuators. <code>ManipulatorConnection</code> publishes joint feedback at 50 Hz; the wrist camera runs at 10 Hz. This configuration has no lidar or whole-body IMU loop.</p></details>
+      </section>
+      <footer><span id="source-status"></span><a href="README.md">Source and scope</a><a href="THIRD_PARTY_LICENSES.txt">Icon license</a><a href="#start">Back to the start</a></footer>
+    </main>
+  </div>
+</body>
+</html>
