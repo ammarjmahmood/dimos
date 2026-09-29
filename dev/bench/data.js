@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790623708578,
+  "lastUpdate": 1790689495131,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -749,6 +749,75 @@ window.BENCHMARK_DATA = {
           {
             "name": "disk write",
             "value": 740.523,
+            "unit": "MB"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "git@sambull.org",
+            "name": "Sam Bull",
+            "username": "Dreamsorcerer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0d3edcb2d8387e78fcaa4b64c777f958961b8b4",
+          "message": "Fix Playwright test on Mac runners (#4303)",
+          "timestamp": "2026-09-29T16:41:24+03:00",
+          "tree_id": "e3587fa671115b5520b6671a09b7ec4ab40b52cf",
+          "url": "https://github.com/dimensionalOS/dimos/commit/b0d3edcb2d8387e78fcaa4b64c777f958961b8b4"
+        },
+        "date": 1790689493874,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 10.935,
+            "unit": "s"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 23.106,
+            "unit": "s"
+          },
+          {
+            "name": "run cpu",
+            "value": 31.768,
+            "unit": "s"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 23.735,
+            "unit": "s"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 8.033,
+            "unit": "s"
+          },
+          {
+            "name": "peak memory",
+            "value": 2715.875,
+            "unit": "MB"
+          },
+          {
+            "name": "peak threads",
+            "value": 405,
+            "unit": "threads"
+          },
+          {
+            "name": "disk read",
+            "value": 5.543,
+            "unit": "MB"
+          },
+          {
+            "name": "disk write",
+            "value": 768.488,
             "unit": "MB"
           }
         ]
