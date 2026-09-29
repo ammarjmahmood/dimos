@@ -63,7 +63,7 @@ from dimos.robot.unitree.go2.constants import (
     ROBOT_LENGTH,
     ROBOT_WIDTH,
 )
-from dimos.robot.unitree.go2.dds.module import GO2DDS
+from dimos.robot.unitree.go2.dds.module import GO2DDS, GO2DDSConfig
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.vis_module import vis_module
 
@@ -140,11 +140,13 @@ def _dds_camera(environ: Mapping[str, str] | None = None) -> str:
     """The entity GO2DDS puts the camera on, off the same knob GO2DDS reads.
 
     h264 off the RTP multicast lands on `video`, jpeg polled off the videohub on `image`,
-    so one `.env` line (``GO2DDS__VIDEO_ENCODING=jpeg``, plus ``GO2DDS__VIDEO_FPS``) moves
+    so one `.env` line (``GO2DDS__VIDEO_ENCODING=h264``, or ``GO2DDS__VIDEO_FPS``) moves
     the robot's encoder and the pane watching it together.
     """
     env = {key.lower(): value for key, value in configuration_environment(environ).items()}
-    return "world/image" if env.get("go2dds__video_encoding") == "jpeg" else "world/video"
+    default = GO2DDSConfig.model_fields["video_encoding"].default
+    encoding = env.get("go2dds__video_encoding", default)
+    return "world/image" if encoding == "jpeg" else "world/video"
 
 
 def _rerun_config(
@@ -387,7 +389,7 @@ go2_viewer = autoconnect(
         viewer_backend=global_config.viewer,
         rerun_config={
             # the camera pane follows the encoder of the stack it dials: set
-            # GO2DDS__VIDEO_ENCODING here too when the robot is serving jpeg
+            # GO2DDS__VIDEO_ENCODING here too when the robot is serving h264
             **_rerun_config(camera=_dds_camera()),
             "topics": [
                 "tf",

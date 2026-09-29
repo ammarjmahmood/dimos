@@ -72,7 +72,7 @@
   "lowstate_on": true,
   "lowstate_hz": 50.0,
   "video_on": true,
-  "video_encoding": "h264",
+  "video_encoding": "jpeg",
   "video_fps": 15.0,
   "video_group": "230.1.1.1",
   "video_port": 1720,

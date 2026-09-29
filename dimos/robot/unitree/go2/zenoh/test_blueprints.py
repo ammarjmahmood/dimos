@@ -40,11 +40,12 @@ def _camera_entity(blueprint: Any) -> str:
 def test_camera_entity_follows_the_encoder() -> None:
     assert _dds_camera({"GO2DDS__VIDEO_ENCODING": "jpeg"}) == "world/image"
     assert _dds_camera({"go2dds__video_encoding": "jpeg"}) == "world/image"
-    assert _dds_camera({}) == "world/video"
+    assert _dds_camera({"GO2DDS__VIDEO_ENCODING": "h264"}) == "world/video"
+    assert _dds_camera({}) == "world/image"
 
 
 def test_dds_pointlio_pins_no_encoding() -> None:
-    # h264 is the default; the robot's .env is what flips it to jpeg
+    # jpeg is the default; the robot's .env is what flips it to h264
     for atom in go2_dds_motion_pointlio.active_blueprints:
         assert "video_encoding" not in atom.kwargs
         assert "video_fps" not in atom.kwargs
