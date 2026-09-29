@@ -126,8 +126,6 @@ class NativeModuleConfig(ModuleConfig):
     extra_env: dict[str, str] = Field(default_factory=dict)
     # Session settings for this module alone, e.g. opening it as the zenoh router
     # the rest of the graph connects to. None follows the global config.
-    # The concrete classes, not the base: the blueprint config layer re-validates
-    # a pinned session from its fields.
     session: ZenohConfig | LCMConfig | None = None
     shutdown_timeout: float = DEFAULT_THREAD_JOIN_TIMEOUT
     log_format: LogFormat = LogFormat.JSON
