@@ -14,9 +14,11 @@
 
 //! The Go2 on the graph: `cmd_vel` and `command` in; out go `odometry` (with its tf
 //! edge), the head L1 clouds, the front camera (H.264 on `video` or JPEG on `image`),
-//! and the body's `joint_state`, `imu`, `battery` and remote `joy`. One thread owns
-//! DDS, one the videohub RTP socket; the handlers only forward onto the DDS thread.
+//! and the body's `joint_state`, `imu`, `battery` and remote `joy`, plus the static mount
+//! tree on `tf` and the camera intrinsics on `camera_info`. One thread owns DDS, one the
+//! videohub RTP socket, one the static data; the handlers only forward onto the DDS thread.
 
+use std::f64::consts::FRAC_PI_2;
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -33,7 +35,7 @@ use lcm_msgs::geometry_msgs::{
 };
 use lcm_msgs::nav_msgs::Odometry;
 use lcm_msgs::sensor_msgs::{
-    BatteryState, CompressedImage, Imu, JointState, Joy, PointCloud2, PointField,
+    BatteryState, CameraInfo, CompressedImage, Imu, JointState, Joy, PointCloud2, PointField,
 };
 use lcm_msgs::std_msgs::{self, Header, Time};
 use tokio::runtime::Handle;
@@ -49,6 +51,12 @@ use crate::rtp;
 const CAMERA_FRAME: &str = "camera_optical";
 /// The body IMU and the legs report in the body frame.
 const BODY_FRAME: &str = "base_link";
+const MOUNT_FRAME: &str = "front_camera";
+const MID360_FRAME: &str = "mid360_link";
+/// The mount tree, as in `go2_mid360_static_transforms.py`.
+const CAMERA_XYZ: [f64; 3] = [0.32715, -0.00003, 0.04297];
+const MID360_XYZ: [f64; 3] = [-0.032, 0.0, 0.12];
+const OPTICAL_RPY: [f64; 3] = [-FRAC_PI_2, 0.0, -FRAC_PI_2];
 /// The first 12 of LowState's 20 motors, in Unitree order.
 const JOINTS: [&str; 12] = [
     "FR_hip_joint",
@@ -78,8 +86,16 @@ pub struct Config {
     /// The interface CycloneDDS binds: the Go2's own eth0, or the Jetson's Go2 link.
     pub iface: String,
     pub domain_id: u32,
-    /// The frame the live odometry moves; the odom tf edge is ours only for base_link.
+    /// The frame the live odometry moves; the odom tf edge is ours only for base_link,
+    /// and the mount edges above it are inverted so it never gets two parents.
     pub tf_root: String,
+    /// front_camera -> mid360_link, fixed-axis rpy in degrees.
+    pub mid360_mount: [f64; 3],
+    /// Mount tree rate on `tf`.
+    #[validate(range(exclusive_min = 0.0))]
+    pub publish_hz: f64,
+    #[validate(range(exclusive_min = 0.0))]
+    pub camera_info_hz: f64,
     /// Spin the head L1 up at start (park it otherwise) and stream its deskewed cloud.
     pub lidar_on: bool,
     /// Also the undeskewed sensor-frame cloud and the L1's own IMU.
@@ -254,6 +270,9 @@ pub struct Go2Dds {
     #[output(encode = Joy::encode)]
     joy: Output<Joy>,
 
+    #[output(encode = CameraInfo::encode)]
+    camera_info: Output<CameraInfo>,
+
     #[config]
     config: Config,
 
@@ -286,6 +305,14 @@ impl Go2Dds {
             handle: handle.clone(),
         };
         self.threads.push(std::thread::spawn(move || dds.run(rx)));
+        let statics = StaticLoop {
+            config: self.config.clone(),
+            camera_info: self.camera_info.clone(),
+            tf: self.tf.clone(),
+            stop: self.stop.clone(),
+            handle: handle.clone(),
+        };
+        self.threads.push(std::thread::spawn(move || statics.run()));
         if self.config.video_on && self.config.video_encoding == "h264" {
             let video = VideoLoop {
                 group: self
@@ -590,6 +617,93 @@ pub fn pointcloud(s: &types::PointCloud2, ts: f64) -> PointCloud2 {
         row_step: s.row_step as i32,
         data: s.data.clone(),
         is_dense: s.is_dense,
+    }
+}
+
+fn edge(parent: &str, child: &str, xyz: [f64; 3], rpy: [f64; 3], ts: f64) -> Transform {
+    let iso = Isometry3::from_parts(
+        Translation3::new(xyz[0], xyz[1], xyz[2]),
+        UnitQuaternion::from_euler_angles(rpy[0], rpy[1], rpy[2]),
+    );
+    Transform::new(parent, child, ts, iso)
+}
+
+fn inverse(t: Transform) -> Transform {
+    let iso = Isometry3::from_parts(t.translation().into(), t.rotation()).inverse();
+    Transform::new(t.child, t.parent, t.ts, iso)
+}
+
+/// base_link -> front_camera -> {mid360_link, camera_optical}, re-rooted at `tf_root`.
+pub fn mount_tree(mid360_mount_deg: [f64; 3], tf_root: &str, ts: f64) -> Vec<Transform> {
+    let camera = edge(BODY_FRAME, MOUNT_FRAME, CAMERA_XYZ, [0.0; 3], ts);
+    let mid360 = edge(
+        MOUNT_FRAME,
+        MID360_FRAME,
+        MID360_XYZ,
+        mid360_mount_deg.map(f64::to_radians),
+        ts,
+    );
+    let optical = edge(MOUNT_FRAME, CAMERA_FRAME, [0.0; 3], OPTICAL_RPY, ts);
+    if tf_root == MID360_FRAME {
+        vec![inverse(mid360), inverse(camera), optical]
+    } else {
+        vec![camera, mid360, optical]
+    }
+}
+
+/// The front camera's 720p calibration, `go2/front_camera_720.yaml`.
+pub fn camera_info(ts: f64) -> CameraInfo {
+    let (fx, cx, fy, cy) = (
+        797.4756164864929,
+        643.5352167821186,
+        796.4872112769983,
+        349.2783605343087,
+    );
+    CameraInfo {
+        header: header(CAMERA_FRAME, ts),
+        height: 720,
+        width: 1280,
+        distortion_model: "equidistant".into(),
+        D: vec![
+            -0.07309428880537933,
+            -0.02341140740909078,
+            -0.0069305931780026956,
+            0.009238684474464793,
+        ],
+        K: [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
+        R: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        P: [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0],
+        ..Default::default()
+    }
+}
+
+/// What the robot never sends: the mount tree and the camera intrinsics, re-stamped.
+struct StaticLoop {
+    config: Config,
+    camera_info: Output<CameraInfo>,
+    tf: Tf,
+    stop: Arc<AtomicBool>,
+    handle: Handle,
+}
+
+impl StaticLoop {
+    fn run(self) {
+        let c = &self.config;
+        let mut tf_tick = Cadence::new(c.publish_hz, Instant::now());
+        let mut info_tick = Cadence::new(c.camera_info_hz, Instant::now());
+        while !self.stop.load(Ordering::Relaxed) {
+            let now = Instant::now();
+            if tf_tick.due(now) {
+                let tree = mount_tree(c.mid360_mount, &c.tf_root, now_secs());
+                let _ = self.handle.block_on(self.tf.publish(&tree));
+            }
+            if info_tick.due(now) {
+                let _ = self
+                    .handle
+                    .block_on(self.camera_info.publish(&camera_info(now_secs())));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -980,6 +1094,42 @@ mod tests {
         assert!(c.due(t0));
         assert!(!c.due(t0 + Duration::from_millis(50)));
         assert!(c.due(t0 + Duration::from_millis(67)));
+    }
+
+    #[test]
+    fn camera_info_matches_the_calibration_yaml() {
+        let yaml = include_str!("../../../front_camera_720.yaml");
+        let info = camera_info(1.0);
+        for v in info.K.iter().chain(&info.D).chain(&info.P) {
+            assert!(yaml.contains(&format!("- {v:?}")), "{v} not in the yaml");
+        }
+        assert_eq!((info.width, info.height), (1280, 720));
+    }
+
+    #[test]
+    fn mount_tree_reroots_at_the_lidar() {
+        let body = mount_tree([0.0, 60.0, 0.0], BODY_FRAME, 1.0);
+        let optical = body[2].rotation();
+        let q = optical.quaternion();
+        assert!(
+            (q.coords - dimos_module::nalgebra::Vector4::new(-0.5, 0.5, -0.5, 0.5)).norm() < 1e-9
+        );
+        let lidar = mount_tree([0.0, 60.0, 0.0], MID360_FRAME, 1.0);
+        let parents: Vec<_> = lidar
+            .iter()
+            .map(|t| (t.parent.as_str(), t.child.as_str()))
+            .collect();
+        assert_eq!(
+            parents,
+            [
+                (MID360_FRAME, MOUNT_FRAME),
+                (MOUNT_FRAME, BODY_FRAME),
+                (MOUNT_FRAME, CAMERA_FRAME)
+            ]
+        );
+        // Inverting the lidar edge and composing back lands on the identity.
+        let round = body[1].translation() + body[1].rotation() * lidar[0].translation();
+        assert!(round.norm() < 1e-9);
     }
 
     #[test]

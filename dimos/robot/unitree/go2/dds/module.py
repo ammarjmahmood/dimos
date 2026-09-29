@@ -16,7 +16,7 @@
 
 The rust binary (``rust/``) terminates ``cmd_vel`` as sport ``Move`` and ``command`` verbs
 as sport requests, and streams the robot's own odometry (``odom -> base_link``, with the
-tf edge), the head L1 cloud and the front camera. Same profile as :class:`GO2Zenoh`, so a
+tf edge), the mount tree, the head L1 cloud, the front camera and its intrinsics. Same profile as :class:`GO2Zenoh`, so a
 blueprint written against one runs against the other.
 """
 
@@ -42,8 +42,6 @@ class GO2DDSConfig(NativeModuleConfig, Go2BaseConfig):
     executable: str = "target/release/go2_dds"
     build_command: str | None = "nix develop path:nix -c cargo build --release"
     stdin_config: bool = True
-    # Go2Base publishes the intrinsics; the mount tree rides tf, which rust claims.
-    python_ports: frozenset[str] = frozenset({"camera_info"})
 
     # Every field below crosses to the rust `Config` verbatim (test_module.py).
     # eth0 on the Go2 itself, the Go2 link on the Jetson.
@@ -64,10 +62,6 @@ class GO2DDSConfig(NativeModuleConfig, Go2BaseConfig):
     video_port: int = 1720
     # StopMove once cmd_vel has been silent this long.
     deadman_ms: int = 500
-
-    def _ignore_fields(self) -> set[str]:
-        # The rust struct rejects the python-only mount and camera fields.
-        return super()._ignore_fields() | set(Go2BaseConfig.model_fields) - {"tf_root"}
 
 
 class GO2DDS(NativeModule, Go2Base):

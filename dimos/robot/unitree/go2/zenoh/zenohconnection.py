@@ -16,23 +16,36 @@
 
 The bridge (go2web ``src/dimos_zenoh.rs``) publishes Point-LIO odom, the clouds and H.264
 video and consumes ``cmd_vel``/``command``; nothing here produces them, declaring the ports
-is what puts them on the graph. On top of :class:`Go2Base` this adds the
-``odom -> mid360_link`` tf edge the bridge does not send.
+is what puts them on the graph. On top of :class:`Go2Base` this adds what the bridge does
+not send: the ``odom -> mid360_link`` tf edge, the mount tree and the camera intrinsics.
 """
 
 from __future__ import annotations
 
+import asyncio
+import math
+import time
 from typing import Literal
 
 from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
 from dimos.core.stream import Out
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher
 from dimos.robot.unitree.go2.base import Go2Base, Go2BaseConfig
+from dimos.robot.unitree.go2.connection import _camera_info_static
+from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
+    CAMERA_XYZ,
+    MID360_XYZ,
+    OPTICAL_RPY,
+)
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -43,7 +56,7 @@ class GO2ZenohConfig(Go2BaseConfig):
     tf_root: Literal["base_link", "mid360_link"] = "mid360_link"
 
 
-class GO2Zenoh(Go2Base):
+class GO2Zenoh(Go2Base, StaticTfPublisher):
     """The go2's zenoh-side streams, plus the static data the robot doesn't send."""
 
     config: GO2ZenohConfig
@@ -51,9 +64,13 @@ class GO2Zenoh(Go2Base):
     lidar: Out[PointCloud2]  # per-scan, in the LIO's own sensor frame
     pointlio_map: Out[PointCloud2]  # accumulated world map, frame `odom`
 
+    # Nothing on the robot emits intrinsics.
+    _camera_info: CameraInfo = _camera_info_static()
+
     @rpc
     def start(self) -> None:
         super().start()
+        self.spawn(self._publish_camera_info())
         self.register_disposable(
             Disposable(self.odometry.transport.subscribe(self._publish_tf, self.odometry))
         )
@@ -99,3 +116,38 @@ class GO2Zenoh(Go2Base):
     def _publish_tf(self, odom: Odometry) -> None:
         """The one moving edge, odom -> mid360_link; the bridge publishes no tf."""
         self.tf.publish(TFMessage(Transform.from_pose(odom.child_frame_id, odom.to_pose_stamped())))
+
+    def mount_edges(self) -> dict[str, Transform]:
+        """The mount tree by child frame, measured outward from base_link."""
+        base_to_camera = Transform(
+            translation=Vector3(*CAMERA_XYZ),
+            frame_id="base_link",
+            child_frame_id="front_camera",
+        )
+        camera_to_mid360 = Transform(
+            translation=Vector3(*MID360_XYZ),
+            rotation=Quaternion.from_euler(
+                Vector3(*(math.radians(float(d)) for d in self.config.mid360_mount))
+            ),
+            frame_id="front_camera",
+            child_frame_id="mid360_link",
+        )
+        camera_to_optical = Transform(
+            rotation=Quaternion.from_euler(Vector3(*OPTICAL_RPY)),
+            frame_id="front_camera",
+            child_frame_id="camera_optical",
+        )
+        return {t.child_frame_id: t for t in (base_to_camera, camera_to_mid360, camera_to_optical)}
+
+    def transforms(self) -> list[Transform]:
+        edges = self.mount_edges()
+        if self.config.tf_root == "mid360_link":
+            return [-edges["mid360_link"], -edges["front_camera"], edges["camera_optical"]]
+        return list(edges.values())
+
+    async def _publish_camera_info(self) -> None:
+        period = 1.0 / self.config.camera_info_hz
+        while self._running:
+            self._camera_info.ts = time.time()
+            self.camera_info.publish(self._camera_info)
+            await asyncio.sleep(period)

@@ -22,34 +22,24 @@ camera intrinsics are the static data no robot-side process sends.
 
 from __future__ import annotations
 
-import asyncio
-import math
 import threading
-import time
 from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
+from dimos.core.module import Module
 from dimos.core.stream import In, Out
 from dimos.msgs.foxglove_msgs.CompressedVideo import CompressedVideo
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Twist import Twist
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.String import String
-from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher, StaticTfPublisherConfig
-from dimos.robot.unitree.go2.connection import _camera_info_static
-from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
-    CAMERA_XYZ,
-    MID360_MOUNT_PRESETS,
-    MID360_XYZ,
-    OPTICAL_RPY,
-)
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.protocol.tf.static_tf_publisher import StaticTfPublisherConfig
+from dimos.robot.unitree.go2.go2_mid360_static_transforms import MID360_MOUNT_PRESETS
 
 
 class Go2BaseConfig(StaticTfPublisherConfig):
@@ -75,8 +65,8 @@ class Go2BaseConfig(StaticTfPublisherConfig):
         return value
 
 
-class Go2Base(StaticTfPublisher):
-    """The Go2's port profile, its action verbs, and the static data it does not send."""
+class Go2Base(Module):
+    """The Go2's port profile and its action verbs."""
 
     config: Go2BaseConfig
 
@@ -89,15 +79,12 @@ class Go2Base(StaticTfPublisher):
     lidar: Out[PointCloud2]
     video: Out[CompressedVideo]  # front camera, H.264 annex-B
 
-    # Ours: nothing on the robot emits intrinsics.
     camera_info: Out[CameraInfo]
-
-    _camera_info: CameraInfo = _camera_info_static()
+    tf: Out[TFMessage]
 
     @rpc
     def start(self) -> None:
         super().start()
-        self.spawn(self._publish_camera_info())
         # Deferred: a verb sent before the transport matches the robot side is dropped.
         timer = threading.Timer(5.0, self._startup_pose)
         timer.daemon = True
@@ -179,38 +166,3 @@ class Go2Base(StaticTfPublisher):
     def set_volume(self, level: int) -> None:
         """Speaker volume, 0..10."""
         self.send_command(f"volume {level}")
-
-    def mount_edges(self) -> dict[str, Transform]:
-        """The mount tree by child frame, measured outward from base_link."""
-        base_to_camera = Transform(
-            translation=Vector3(*CAMERA_XYZ),
-            frame_id="base_link",
-            child_frame_id="front_camera",
-        )
-        camera_to_mid360 = Transform(
-            translation=Vector3(*MID360_XYZ),
-            rotation=Quaternion.from_euler(
-                Vector3(*(math.radians(float(d)) for d in self.config.mid360_mount))
-            ),
-            frame_id="front_camera",
-            child_frame_id="mid360_link",
-        )
-        camera_to_optical = Transform(
-            rotation=Quaternion.from_euler(Vector3(*OPTICAL_RPY)),
-            frame_id="front_camera",
-            child_frame_id="camera_optical",
-        )
-        return {t.child_frame_id: t for t in (base_to_camera, camera_to_mid360, camera_to_optical)}
-
-    def transforms(self) -> list[Transform]:
-        edges = self.mount_edges()
-        if self.config.tf_root == "mid360_link":
-            return [-edges["mid360_link"], -edges["front_camera"], edges["camera_optical"]]
-        return list(edges.values())
-
-    async def _publish_camera_info(self) -> None:
-        period = 1.0 / self.config.camera_info_hz
-        while self._running:
-            self._camera_info.ts = time.time()
-            self.camera_info.publish(self._camera_info)
-            await asyncio.sleep(period)

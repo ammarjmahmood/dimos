@@ -47,6 +47,7 @@ joint_state = "sensor_msgs.JointState"
 imu = "sensor_msgs.Imu"
 battery = "sensor_msgs.BatteryState"
 joy = "sensor_msgs.Joy"
+camera_info = "sensor_msgs.CameraInfo"
 
 [profile.release]
 lto = "thin"
