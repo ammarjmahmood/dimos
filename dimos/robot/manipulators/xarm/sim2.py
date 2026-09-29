@@ -18,7 +18,7 @@ import math
 
 from dimos.robot.manipulators.xarm.config import XARM7_SIM_HOME
 from dimos.sim2.sensors.spec import Camera
-from dimos.sim2.spec import ControlInterface, Joint, Mount, RobotConfig
+from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
 from dimos.utils.data import LfsPath
 
 XARM7 = RobotConfig(
@@ -67,9 +67,5 @@ XARM7 = RobotConfig(
             max_velocity=0.0,
         ),
     ),
-    sensors=(
-        Camera(
-            "wrist_camera", Mount("link7", xyz=(0.05, 0.0, 0.0), rpy=(math.pi, 0.0, math.pi / 2))
-        ),
-    ),
+    sensors=(Camera("wrist_camera", camera="wrist_camera"),),
 )

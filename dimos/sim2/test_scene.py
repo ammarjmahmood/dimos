@@ -15,12 +15,13 @@
 from dataclasses import replace
 from uuid import uuid4
 
+import mujoco
 import numpy as np
 import pytest
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.runtime import SimulationRuntime
-from dimos.sim2.scene import describe_scene, scene_robot
+from dimos.sim2.scene import describe_scene, load_scene, scene_robot
 from dimos.sim2.scene_types import (
     SceneDescription,
     SceneEntity,
@@ -28,6 +29,8 @@ from dimos.sim2.scene_types import (
     SceneRegion,
     SceneUpdate,
 )
+from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
+from dimos.sim2.sensors.spec import Camera, Imu, Lidar, Mount
 from dimos.sim2.spec import ControlInterface, Joint, RobotConfig, RobotInstance, WorldConfig
 
 pytestmark = pytest.mark.mujoco
@@ -168,3 +171,68 @@ def test_mounted_arm_root_remains_at_workbench(world):
     robot = scene_robot(world.config.scene, config, "workbench", default=(0, 0, 0))
 
     assert robot.xyz == pytest.approx((0, 0, 0.2))
+
+
+@pytest.fixture
+def sensor_world(tmp_path):
+    scene = tmp_path / "scene.xml"
+    scene.write_text("<mujoco><worldbody/></mujoco>")
+    asset = tmp_path / "robot.xml"
+    asset.write_text("""<mujoco><worldbody><body name="base">
+      <geom type="sphere" size=".1"/>
+      <camera name="front" pos=".1 .2 .3" fovy="42"/>
+      <site name="scan" pos=".2 .3 .4"/>
+      <site name="imu" pos=".3 .4 .5"/>
+      <body name="arm"><joint name="joint"/>
+        <geom type="sphere" size=".1" pos=".2 0 0"/></body>
+    </body></worldbody><actuator><motor name="motor" joint="joint"/></actuator></mujoco>""")
+    config = RobotConfig(
+        model=asset,
+        root_body="base",
+        control=ControlInterface.WHOLE_BODY,
+        joints=(Joint("joint", "joint", "motor"),),
+        sensors=(
+            Camera("rgb", camera="front"),
+            Lidar("lidar", "scan", Fibonacci()),
+            Imu("imu", "imu"),
+        ),
+    )
+    return WorldConfig(
+        scene, {"left": RobotInstance(config), "right": RobotInstance(config, xyz=(1, 0, 0))}
+    )
+
+
+def test_named_sensor_bindings_preserve_assets_and_instance_placement(sensor_world):
+    model = load_scene(sensor_world)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    assert model.ncam == 2
+    assert model.nsite == 4
+    assert model.cam_fovy.tolist() == [42, 42]
+    assert data.cam_xpos[model.camera("left/front").id] == pytest.approx((0.1, 0.2, 0.3))
+    assert data.cam_xpos[model.camera("right/front").id] == pytest.approx((1.1, 0.2, 0.3))
+    assert data.site_xpos[model.site("right/scan").id] == pytest.approx((1.2, 0.3, 0.4))
+    for robot in ("left", "right"):
+        assert model.sensor(f"{robot}/sensor/imu/gyro").objid[0] == model.site(f"{robot}/imu").id
+
+
+@pytest.mark.parametrize(
+    "sensor", [Camera("rgb", "missing"), Lidar("lidar", "missing", Fibonacci())]
+)
+def test_unknown_named_sensor_never_creates_a_replacement(sensor_world, sensor):
+    original = sensor_world.robots["left"].config
+    robot = replace(original, sensors=(sensor, original.sensors[-1]))
+    with pytest.raises(ValueError, match="unknown (camera|site) 'missing'"):
+        load_scene(replace(sensor_world, robots={"left": RobotInstance(robot)}))
+
+
+def test_explicit_added_camera_attaches_to_body_without_replacing_stock_camera(sensor_world):
+    original = sensor_world.robots["left"].config
+    robot = original.with_sensor(Camera("extra", Mount("arm", xyz=(0.2, 0, 0)), fovy=75))
+    model = load_scene(replace(sensor_world, robots={"left": RobotInstance(robot)}))
+    assert model.ncam == 2
+    assert model.camera("left/front").fovy[0] == 42
+    added = model.camera("left/sensor/extra")
+    assert added.fovy[0] == 75
+    assert added.bodyid[0] == model.body("left/arm").id

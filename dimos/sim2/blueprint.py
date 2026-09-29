@@ -16,38 +16,37 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from dimos.control.components import HardwareComponent, HardwareType
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
+from dimos.hardware.whole_body.spec import WholeBodyConfig
 from dimos.sim2.connections.manipulator import ManipulatorConnection
 from dimos.sim2.connections.whole_body import WholeBodyConnection
 from dimos.sim2.module import SimulationModule
 from dimos.sim2.sensors.camera.module import SimCameraModule, SimRGBDCameraModule
 from dimos.sim2.sensors.lidar.module import LidarModule
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
-from dimos.sim2.spec import ControlInterface, RobotConfig, RobotInstance, WorldConfig
+from dimos.sim2.spec import ControlInterface, RobotInstance, WorldConfig
 
 
-def simulated_hardware(config: RobotConfig, *, sim_id: str, robot_id: str) -> HardwareComponent:
-    return HardwareComponent(
-        hardware_id=robot_id,
-        hardware_type=HardwareType(config.control.value),
-        joints=[j.name for j in config.joints],
-        adapter_type="sim2",
-        address=f"{sim_id}/{robot_id}",
-        adapter_kwargs={"definition": config},
-    )
+@dataclass(frozen=True)
+class Simulation:
+    """Two outputs of one composition, not another running service."""
+
+    blueprint: Blueprint
+    hardware: dict[str, HardwareComponent]
 
 
-def simulation_blueprint(
+def simulation(
     *,
     scene: Path,
     robots: dict[str, RobotInstance],
     sim_id: str = "sim",
     viewer: bool = True,
     timestep: float = 0.005,
-) -> Blueprint:
+) -> Simulation:
     modules = [
         SimulationModule.blueprint(
             world=WorldConfig(scene=scene, robots=robots, timestep=timestep),
@@ -56,9 +55,25 @@ def simulation_blueprint(
         )
     ]
     multiple = len(robots) > 1
+    hardware = {}
     ports: tuple[str, ...]
     for robot_id, instance in robots.items():
         config = instance.config
+        hardware[robot_id] = HardwareComponent(
+            hardware_id=robot_id,
+            hardware_type=HardwareType(config.control.value),
+            joints=[j.name for j in config.joints],
+            adapter_type="sim2",
+            address=f"{sim_id}/{robot_id}",
+            adapter_kwargs={"definition": config},
+            wb_config=(
+                WholeBodyConfig(
+                    kp=tuple(j.kp for j in config.joints), kd=tuple(j.kd for j in config.joints)
+                )
+                if config.control == ControlInterface.WHOLE_BODY
+                else None
+            ),
+        )
         if config.control == ControlInterface.WHOLE_BODY:
             imu = next(s for s in config.sensors if isinstance(s, Imu))
             connection = WholeBodyConnection.blueprint(
@@ -110,4 +125,4 @@ def simulation_blueprint(
                     ]
                 )
             modules.append(blueprint)
-    return autoconnect(*modules)
+    return Simulation(blueprint=autoconnect(*modules), hardware=hardware)

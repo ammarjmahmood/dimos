@@ -25,7 +25,7 @@ from scipy.spatial.transform import Rotation
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.scene_types import SceneDescription
-from dimos.sim2.sensors.spec import Camera, Imu
+from dimos.sim2.sensors.spec import Camera, Imu, Mount
 from dimos.sim2.spec import RobotConfig, RobotInstance, WorldConfig
 from dimos.utils.data import LfsPath
 
@@ -58,37 +58,49 @@ def load_scene(config: WorldConfig, description: SceneDescription | None = None)
         for key in list(robot.keys):
             robot.delete(key)
         for sensor in instance.config.sensors:
-            body = robot.body(sensor.mount.link)
-            if body is None:
-                raise ValueError(f"{robot_id}/{sensor.name}: unknown mount {sensor.mount.link!r}")
-            quat = quaternion(sensor.mount.rpy)
-            if isinstance(sensor, Camera):
-                body.add_camera(
-                    name="sensor/" + sensor.name,
-                    pos=sensor.mount.xyz,
-                    quat=quat,
-                    fovy=sensor.fovy,
-                )
+            attachment = sensor.camera if isinstance(sensor, Camera) else sensor.site
+            if isinstance(attachment, Mount):
+                body = robot.body(attachment.link)
+                if body is None:
+                    raise ValueError(f"{robot_id}/{sensor.name}: unknown body {attachment.link!r}")
+                if isinstance(sensor, Camera):
+                    body.add_camera(
+                        name=sensor.model_name,
+                        pos=attachment.xyz,
+                        quat=quaternion(attachment.rpy),
+                        fovy=60.0 if sensor.fovy is None else sensor.fovy,
+                    )
+                else:
+                    body.add_site(
+                        name=sensor.model_name,
+                        pos=attachment.xyz,
+                        quat=quaternion(attachment.rpy),
+                        size=(0.001, 0.001, 0.001),
+                        rgba=(0, 0, 0, 0),
+                    )
             else:
-                body.add_site(
-                    name="sensor/" + sensor.name,
-                    pos=sensor.mount.xyz,
-                    quat=quat,
-                    size=(0.001, 0.001, 0.001),
-                    rgba=(0, 0, 0, 0),
+                target_kind = "camera" if isinstance(sensor, Camera) else "site"
+                target = (
+                    robot.camera(attachment)
+                    if isinstance(sensor, Camera)
+                    else robot.site(attachment)
                 )
-                if isinstance(sensor, Imu):
-                    for suffix, kind in (
-                        ("gyro", mujoco.mjtSensor.mjSENS_GYRO),
-                        ("accel", mujoco.mjtSensor.mjSENS_ACCELEROMETER),
-                        ("quat", mujoco.mjtSensor.mjSENS_FRAMEQUAT),
-                    ):
-                        robot.add_sensor(
-                            name=f"sensor/{sensor.name}/{suffix}",
-                            type=kind,
-                            objtype=mujoco.mjtObj.mjOBJ_SITE,
-                            objname="sensor/" + sensor.name,
-                        )
+                if target is None:
+                    raise ValueError(
+                        f"{robot_id}/{sensor.name}: unknown {target_kind} {attachment!r}"
+                    )
+            if isinstance(sensor, Imu):
+                for suffix, kind in (
+                    ("gyro", mujoco.mjtSensor.mjSENS_GYRO),
+                    ("accel", mujoco.mjtSensor.mjSENS_ACCELEROMETER),
+                    ("quat", mujoco.mjtSensor.mjSENS_FRAMEQUAT),
+                ):
+                    robot.add_sensor(
+                        name=f"sensor/{sensor.name}/{suffix}",
+                        type=kind,
+                        objtype=mujoco.mjtObj.mjOBJ_SITE,
+                        objname=sensor.model_name,
+                    )
         frame = world.worldbody.add_frame(pos=instance.xyz, quat=quaternion(instance.rpy))
         world.attach(robot, prefix=robot_id + "/", frame=frame)
     world.visual.global_.offwidth = max(

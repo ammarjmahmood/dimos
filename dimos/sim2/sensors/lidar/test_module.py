@@ -43,7 +43,6 @@ def module():
 @pytest.mark.parametrize("pitch", [0.0, -0.35, 0.35])
 def test_g1_scan_excludes_ceiling_after_mount_rotation(pitch, module, mocker):
     sensor = module.config.sensor
-    mount = sensor.mount
     model = mujoco.MjModel.from_xml_string(f"""
         <mujoco>
           <compiler angle="radian"/>
@@ -52,8 +51,8 @@ def test_g1_scan_excludes_ceiling_after_mount_rotation(pitch, module, mocker):
             <geom type="box" pos="0 0 3" size="10 10 0.1"/>
             <body name="g1/pelvis" pos="0 0 1" euler="0 {pitch} 0">
               <geom type="sphere" size="0.1"/>
-              <site name="g1/sensor/lidar" pos="{" ".join(map(str, mount.xyz))}"
-                    euler="{" ".join(map(str, mount.rpy))}"/>
+              <site name="g1/mid360_link" pos="0.0002835 0.00003 0.41618"
+                    quat="0 0.9997985784932998 0 -0.020069938783589012"/>
             </body>
           </worldbody>
         </mujoco>
@@ -87,7 +86,7 @@ def test_sensor_frame_preserves_ray_origin_and_cloud_timestamp(module, mocker):
           <geom type="plane" size="10 10 0.1"/>
           <body name="g1/pelvis" pos="2 3 1" euler="0 0.3 0.6">
             <geom type="sphere" size="0.1"/>
-            <site name="g1/sensor/lidar" pos="0.2 0 0.1" euler="3.14159265359 0 0"/>
+            <site name="g1/mid360_link" pos="0.2 0 0.1" euler="3.14159265359 0 0"/>
           </body>
         </worldbody></mujoco>
     """)

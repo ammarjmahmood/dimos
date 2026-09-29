@@ -16,7 +16,7 @@
 
 from pathlib import Path
 
-from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
+from dimos.robot.unitree.g1.control_config import (
     G1_GROOT_HOME,
     G1_GROOT_KD,
     G1_GROOT_KP,
@@ -24,7 +24,7 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
 )
 from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
-from dimos.sim2.spec import ControlInterface, Joint, Mount, RobotConfig
+from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
 from dimos.utils.data import LfsPath
 
 G1_GROOT = RobotConfig(
@@ -52,21 +52,14 @@ G1_GROOT = RobotConfig(
         )
     ),
     sensors=(
-        Imu("imu", Mount("pelvis")),
+        Imu("imu", site="control_imu"),
         Lidar(
             "lidar",
-            Mount(
-                "torso_link",
-                xyz=(0.0002835, 0.00003, 0.41618),
-                rpy=(3.141592653589793, 0.04014257279586953, 0.0),
-            ),
+            "mid360_link",
             Fibonacci(),
             rate_hz=10.0,
             maximum_world_elevation=0.0,
         ),
-        Camera(
-            "camera",
-            Mount("torso_link", xyz=(0.07, 0.0, 0.42), rpy=(1.57079632679, 0, -1.57079632679)),
-        ),
+        Camera("camera", camera="front_camera"),
     ),
 )

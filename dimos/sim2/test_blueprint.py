@@ -18,7 +18,7 @@ import pytest
 
 from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.robot.manipulators.xarm.sim2 import XARM7
-from dimos.sim2.blueprint import simulation_blueprint
+from dimos.sim2.blueprint import simulation
 from dimos.sim2.scene import scene_path
 from dimos.sim2.sensors.spec import Camera, Mount
 from dimos.sim2.spec import RobotInstance
@@ -26,11 +26,12 @@ from dimos.sim2.spec import RobotInstance
 
 def test_multiple_robots_and_rgb_cameras_have_separate_typed_ports():
     rgb = replace(XARM7, sensors=(Camera("front", Mount("link7"), depth=False),))
-    blueprint = simulation_blueprint(
+    devices = simulation(
         scene=scene_path(None, "workbench.xml"),
         robots={"left": RobotInstance(rgb), "right": RobotInstance(rgb)},
         viewer=False,
     )
+    blueprint = devices.blueprint
     parsed = BlueprintConfigParser(blueprint).parse(environ={})
     left = next(atom for atom in blueprint.active_blueprints if atom.name == "left_front")
     assert {stream.name for stream in left.streams} == {"color_image", "camera_info", "tf"}
@@ -41,15 +42,18 @@ def test_multiple_robots_and_rgb_cameras_have_separate_typed_ports():
     sensor = parsed.module_kwargs("left_front")["sensor"]
     assert isinstance(sensor, Camera)
     assert sensor == rgb.sensors[0]
+    assert devices.hardware["left"].address == "sim/left"
+    assert devices.hardware["right"].address == "sim/right"
+    assert devices.hardware["left"].adapter_kwargs["definition"] is rgb
 
 
 def test_second_camera_does_not_require_shared_module_changes():
     robot = XARM7.with_sensor(Camera("front", Mount("link_base"), depth=False))
-    blueprint = simulation_blueprint(
+    blueprint = simulation(
         scene=scene_path(None, "workbench.xml"),
         robots={"arm": RobotInstance(robot)},
         viewer=False,
-    )
+    ).blueprint
     assert blueprint.remapping_map[("arm_front", "color_image")] == "arm/front/color_image"
     assert (
         blueprint.remapping_map[("arm_wrist_camera", "color_image")]

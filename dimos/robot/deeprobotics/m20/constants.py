@@ -33,3 +33,11 @@ ROTATION_DIAMETER_M = math.hypot(BODY_LENGTH_M, BODY_WIDTH_M)
 # Vendor AOS H.265 camera streams documented for the M20 internal network.
 FRONT_CAMERA_RTSP_URL = "rtsp://10.21.31.103:8554/video1"
 REAR_CAMERA_RTSP_URL = "rtsp://10.21.31.103:8554/video2"
+
+# Public SDK control contract shared by the robot definition and policy task.
+POLICY_JOINTS = tuple(
+    f"{leg}_{joint}_joint" for leg in ("fl", "fr", "hl", "hr") for joint in ("hipx", "hipy", "knee")
+) + tuple(f"{leg}_wheel_joint" for leg in ("fl", "fr", "hl", "hr"))
+HOME = (0.0, -0.3, 0.6) * 2 + (0.0, 0.3, -0.6) * 2 + (0.0,) * 4
+KP = (80.0,) * 12 + (0.0,) * 4
+KD = (2.0,) * 12 + (0.6,) * 4

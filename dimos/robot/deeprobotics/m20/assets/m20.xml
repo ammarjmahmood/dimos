@@ -53,6 +53,8 @@
                       mass="15.882" diaginertia="0.087919 0.533522 0.563492"/>
 
             <site name="imu_site" pos="0.0632 -0.0268 0.0435" size="0.005" rgba="1 0 0 1"/>
+            <site name="lidar_site" pos="0.2 0 0.15" size="0.001" rgba="0 0 0 0"/>
+            <camera name="front_camera" pos="0.39 0 0.08" xyaxes="0 -1 0 0 0 1" fovy="60"/>
             <site name="base_site" pos="0 0 0" quat="1 0 0 0"/>
 
             <geom type="mesh" mesh="base_link" class="visual"/>
@@ -262,8 +264,6 @@
         <!--        <framelinvel name="base_linvel" objtype="site" objname="base_site"/>-->
         <!--        <frameangvel name="base_angvel" objtype="site" objname="base_site"/>-->
         <!--        <velocimeter name="base_vel" site="base_site"/>-->
-        <accelerometer site="imu_site"/>
-        <gyro site="imu_site"/>
 
     </sensor>
 </mujoco>

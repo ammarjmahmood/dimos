@@ -80,17 +80,16 @@ from dimos.sim2.scene import list_scenes
 print(list_scenes())
 ```
 
-The offline maintainer script `python -m dimos.sim2.demo_prepare_scenes --source
-/path/to/pimsim-starter --output data/sim2/scenes` produced this package from
-the retained local source library. It is not imported by the runtime. Source
-provenance is retained in each `scene.json`; source content licensing remains
-subject to the original datasets' terms.
+The supplied scenes are finished native files. Edit their `scene.xml` and
+`scene.json` directly; no preparation script or PimSim source library is
+required. Source provenance is retained in each `scene.json`; source content
+licensing remains subject to the original datasets' terms.
 
 ## Configure A Robot
 
 Robot-local definitions live in:
 
-- `dimos/robot/unitree/g1/sim2.py`: model, joint order, gains, IMU and mounts.
+- `dimos/robot/unitree/g1/sim2.py`: model, joint order, gains and named sensor bindings.
 - `dimos/robot/manipulators/xarm/sim2.py`: native servos, gripper units and camera.
 
 An existing blueprint selects simulated devices or real devices. It keeps its
@@ -102,17 +101,17 @@ from pathlib import Path
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.sim2 import XARM7
-from dimos.sim2.blueprint import simulated_hardware, simulation_blueprint
+from dimos.sim2.blueprint import simulation
 from dimos.sim2.spec import RobotInstance
 
-hardware = simulated_hardware(XARM7, sim_id="workbench", robot_id="arm")
-devices = simulation_blueprint(
+devices = simulation(
     scene=Path("/absolute/path/to/scene.xml"),
     sim_id="workbench",
     robots={"arm": RobotInstance(XARM7, xyz=(0, 0, 0.12))},
 )
+hardware = devices.hardware["arm"]
 app = autoconnect(
-    devices,
+    devices.blueprint,
     coordinator(hardware=[hardware], tasks=[trajectory_task(hardware)]),
 )
 ```
@@ -121,7 +120,23 @@ Adding a robot with supported controls/sensors means adding its `sim2.py`
 definition and changing its existing blueprint's device selection, plus a
 robot contract test and assets. There is no central robot-name switch.
 
-Add or replace a camera on an existing configuration:
+Stock sensors bind named cameras or sites in the native asset. Their positions
+and orientations are not repeated in Python. A named camera's field of view
+comes from its compiled asset. Select output size, rate and depth in Python:
+
+```python
+from dimos.sim2.sensors.spec import Camera
+
+XARM7_SMALL_RGB = XARM7.with_sensor(
+    Camera("wrist_camera", camera="wrist_camera", width=320, height=240, depth=False),
+)
+```
+
+G1 uses `Imu("imu", site="control_imu")` and a lidar bound to `mid360_link`.
+M20 uses its existing `imu_site`. These sites are explicit in the MJCF;
+G1's base-frame policy IMU is distinct from the torso hardware IMU.
+
+An additional sensor can explicitly define a new mount on an existing body:
 
 ```python
 from dimos.sim2.sensors.spec import Camera, Mount
@@ -131,15 +146,35 @@ XARM7_FRONT = XARM7.with_sensor(
 )
 ```
 
-Names select sensor instances. A missing mount fails during composition.
+Names select sensor instances. A missing named camera/site/body fails during
+composition, never triggering a replacement attachment. `Mount` means an
+explicitly added device, not an alternate interpretation of a missing name.
 Mount rotations use roll/pitch/yaw radians in the named body's local frame;
 cameras use MuJoCo's -Z viewing direction and publish an optical-frame TF.
 RGB-only and RGB-D modules have different declared ports. Repeated cameras
 use `robot/sensor/port` names; multiple robots also namespace device ports.
 
+The composition result is only data: `.blueprint` declares the world and
+devices, while `.hardware` gives ControlCoordinator the matching adapters.
+Neither `RobotConfig` nor `Simulation` is a running module. G1/M20 use four
+emulator modules (physics, connection, camera, lidar); xArm uses three.
+Physics and camera/lidar have dedicated workers. Each sensor worker holds a
+local model/data copy, so isolation has a memory and state-reconstruction cost.
+
+The existing GR00T, M20 control, xArm7 planner and coordinator-xarm7 entrypoints
+use this path. Old G1 vendor-action and other xArm perception/room/teleop,
+xArm6 and Piper simulator paths are not yet all migrated. They are not a
+fallback inside the migrated blueprints. The G1 vendor-action capability
+requires an explicit retirement or preservation decision before replacing it.
+
 Lidar configurations reference a concrete model such as
 `dimos.sim2.sensors.lidar.models.spherical.Spherical`. New ideal ray patterns
 implement the `RayPattern` contract; they need no model-name registry.
+G1 uses `models.fibonacci.Fibonacci`: the previous PimSim 15,000-ray pattern
+at 10 Hz, mounted at the calibrated upside-down MID360 pose. Its explicit
+`maximum_world_elevation=0.0` discards upward rays after the mount transform.
+This is an ideal mapping scan, without MID360 scan timing or noise. G1's
+simulation costmap no longer forces a disk around world origin to be free.
 
 ## Runtime Ownership
 

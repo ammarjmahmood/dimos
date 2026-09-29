@@ -150,14 +150,14 @@ def test_worker_snapshot_renders_scene_and_lidar(runtime, tmp_path):
     renderer = None
     try:
         assert reader.update()
-        camera = reader.model.camera("g1/sensor/camera").id
+        camera = reader.model.camera("g1/front_camera").id
         renderer = MujocoCamera(reader.model, 320, 240)
         rgb, depth = renderer.capture(reader.data, camera, True)
         assert rgb.std() > 15
         assert depth is not None
         assert np.count_nonzero((depth > 1) & (depth < 10)) > 1000
         lidar = next(s for s in G1_GROOT.sensors if s.name == "lidar")
-        site = reader.model.site("g1/sensor/lidar").id
+        site = reader.model.site("g1/mid360_link").id
         rays = lidar.model.directions() @ reader.data.site_xmat[site].reshape(3, 3).T
         reader.model.geom_group[:] = 5
         raycaster = Raycaster(reader.model, reader.model.body("g1/pelvis").id)
@@ -187,8 +187,8 @@ def test_two_robots_have_independent_channels_and_mounts():
             world.robots["left"].channel.descriptor.shm_name
             != world.robots["right"].channel.descriptor.shm_name
         )
-        left = world.model.camera("left/sensor/wrist_camera").id
-        right = world.model.camera("right/sensor/wrist_camera").id
+        left = world.model.camera("left/wrist_camera").id
+        right = world.model.camera("right/wrist_camera").id
         assert world.data.cam_xpos[right] - world.data.cam_xpos[left] == pytest.approx((2, 0, 0))
     finally:
         world.close()

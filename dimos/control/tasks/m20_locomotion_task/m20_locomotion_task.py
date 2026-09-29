@@ -33,18 +33,13 @@ from dimos.control.hardware_interface import ConnectedWholeBody
 from dimos.control.task import BaseControlTask, CoordinatorState, JointCommandOutput, ResourceClaim
 from dimos.hardware.whole_body.spec import MotorCommand
 from dimos.protocol.service.spec import BaseConfig
+from dimos.robot.deeprobotics.m20.constants import HOME, KD, KP, POLICY_JOINTS
 
 if TYPE_CHECKING:
     from dimos.control.coordinator import TaskConfig
     from dimos.control.hardware_interface import ConnectedHardware
     from dimos.msgs.geometry_msgs.Twist import Twist
 
-POLICY_JOINTS = tuple(
-    f"{leg}_{joint}_joint" for leg in ("fl", "fr", "hl", "hr") for joint in ("hipx", "hipy", "knee")
-) + tuple(f"{leg}_wheel_joint" for leg in ("fl", "fr", "hl", "hr"))
-HOME = (0.0, -0.3, 0.6) * 2 + (0.0, 0.3, -0.6) * 2 + (0.0,) * 4
-KP = (80.0,) * 12 + (0.0,) * 4
-KD = (2.0,) * 12 + (0.6,) * 4
 ACTION_SCALE = (0.125, 0.25, 0.25) * 4 + (5.0,) * 4
 
 

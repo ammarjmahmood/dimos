@@ -14,12 +14,11 @@
 
 """M20 public SDK robot with ideal sensors; locomotion lives in ControlCoordinator."""
 
-from math import pi
 from pathlib import Path
 
-from dimos.control.tasks.m20_locomotion_task.m20_locomotion_task import HOME, KD, KP, POLICY_JOINTS
+from dimos.robot.deeprobotics.m20.constants import HOME, KD, KP, POLICY_JOINTS
 from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
-from dimos.sim2.sensors.spec import Camera, Imu, Lidar, Mount
+from dimos.sim2.sensors.spec import Camera, Imu, Lidar
 from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
 from dimos.utils.data import LfsPath
 
@@ -44,13 +43,13 @@ M20 = RobotConfig(
         for name, home, kp, kd in zip(POLICY_JOINTS, HOME, KP, KD, strict=True)
     ),
     sensors=(
-        Imu("imu", Mount("base_link", xyz=(0.0632, -0.0268, 0.0435))),
+        Imu("imu", site="imu_site"),
         Lidar(
             "lidar",
-            Mount("base_link", xyz=(0.2, 0, 0.15)),
+            "lidar_site",
             Fibonacci(elevation_min=-45, elevation_max=45, max_range=25),
             output_frame="sensor",
         ),
-        Camera("camera", Mount("base_link", xyz=(0.39, 0, 0.08), rpy=(pi / 2, 0, -pi / 2))),
+        Camera("camera", camera="front_camera"),
     ),
 )

@@ -49,13 +49,6 @@ from typing import Any, cast
 
 from dimos.control.components import HardwareComponent, HardwareType
 from dimos.control.coordinator import TaskConfig
-from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
-    G1_GROOT_KD,
-    G1_GROOT_KP,
-    g1_arms,
-    g1_joints,
-    g1_legs_waist,
-)
 from dimos.control.tasks.trajectory_task.trajectory_task import joint_trajectory_task
 from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import autoconnect
@@ -75,6 +68,13 @@ from dimos.msgs.sensor_msgs.MotorCommandArray import MotorCommandArray
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.robot.unitree.g1.config import G1
+from dimos.robot.unitree.g1.control_config import (
+    G1_GROOT_KD,
+    G1_GROOT_KP,
+    g1_arms,
+    g1_joints,
+    g1_legs_waist,
+)
 from dimos.robot.unitree.g1.g1_rerun import (
     G1_RERUN_ROOT,
     g1_costmap,
@@ -92,7 +92,6 @@ from dimos.visualization.vis_module import vis_module
 # whole CLI on a multi-GB download every time the module is imported.
 _GROOT_MODEL_DIR = LfsPath("groot")
 
-_adapter_address: str | Path
 _cmd_vel_topic = "/cmd_vel" if global_config.simulation else "/g1/cmd_vel"
 _G1_NAV_VOXEL_RESOLUTION = 0.05
 # go2 nav_3d resolution; 0.05 saturates the raytracer on the Orin.
@@ -119,19 +118,17 @@ if global_config.simulation and global_config.simulation != "mujoco":
 if global_config.simulation == "mujoco":
     from dimos.mapping.voxels.module import VoxelGridMapper
     from dimos.robot.unitree.g1.sim2 import G1_GROOT
-    from dimos.sim2.blueprint import simulated_hardware, simulation_blueprint
+    from dimos.sim2.blueprint import simulation
     from dimos.sim2.scene import scene_path, scene_robot
 
     _scene = scene_path(global_config.scene_package, "logistics.xml")
-    _backend = simulation_blueprint(
+    _simulation = simulation(
         scene=_scene,
         robots={"g1": scene_robot(_scene, G1_GROOT, default=(0.0, 0.0, 0.0))},
         sim_id="g1-groot",
     )
-    _sim_hardware = simulated_hardware(G1_GROOT, sim_id="g1-groot", robot_id="g1")
-    _adapter_type = _sim_hardware.adapter_type
-    _adapter_address = _sim_hardware.address
-    _adapter_kwargs = _sim_hardware.adapter_kwargs
+    _backend = _simulation.blueprint
+    _hardware = _simulation.hardware["g1"]
     _tick_rate = 50.0
     _auto_arm = True
     _auto_dry_run = False
@@ -168,9 +165,14 @@ else:
 
     # Real-hw backend: DDS connection module + transport_lcm adapter.
     _backend = G1WholeBodyConnection.blueprint(release_sport_mode=True)
-    _adapter_type = "transport_lcm"
-    _adapter_address = ""
-    _adapter_kwargs = {}
+    _hardware = HardwareComponent(
+        hardware_id="g1",
+        hardware_type=HardwareType.WHOLE_BODY,
+        joints=g1_joints,
+        adapter_type="transport_lcm",
+        address="",
+        wb_config=WholeBodyConfig(kp=tuple(G1_GROOT_KP), kd=tuple(G1_GROOT_KD)),
+    )
     # The onboard Jetson can't sustain a 500 Hz tick; it collapses to ~90 Hz
     # and starves the policy, so balance decays.
     _tick_rate = 100.0
@@ -365,17 +367,7 @@ _coordinator = _G1GrootCoordinator.blueprint(
     instance_name="ControlCoordinator",
     publish_robot_joint_states=True,
     tick_rate=_tick_rate,
-    hardware=[
-        HardwareComponent(
-            hardware_id="g1",
-            hardware_type=HardwareType.WHOLE_BODY,
-            joints=g1_joints,
-            adapter_type=_adapter_type,
-            address=_adapter_address,
-            adapter_kwargs=_adapter_kwargs,
-            wb_config=WholeBodyConfig(kp=tuple(G1_GROOT_KP), kd=tuple(G1_GROOT_KD)),
-        ),
-    ],
+    hardware=[_hardware],
     tasks=[
         TaskConfig(
             name="groot_wbc",

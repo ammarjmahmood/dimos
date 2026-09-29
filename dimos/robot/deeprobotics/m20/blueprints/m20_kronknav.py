@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from dimos.core.coordination.blueprints import autoconnect
@@ -48,9 +47,8 @@ if TYPE_CHECKING:
 
 if global_config.simulation == "mujoco":
     from dimos.control.coordinator import ControlCoordinator, TaskConfig
-    from dimos.hardware.whole_body.spec import WholeBodyConfig
     from dimos.robot.deeprobotics.m20.sim2 import ASSETS, M20, POLICY_PATH
-    from dimos.sim2.blueprint import simulated_hardware, simulation_blueprint
+    from dimos.sim2.blueprint import simulation
     from dimos.sim2.scene import scene_path, scene_robot
 
 VOXEL_SIZE_M = 0.1
@@ -181,20 +179,15 @@ if global_config.simulation == "mujoco":
         if global_config.scene_package
         else ASSETS / "stairs.xml"
     )
-    _sim = simulation_blueprint(
+    _sim = simulation(
         scene=_scene,
         robots={"m20": scene_robot(_scene, M20, default=(0, 0, 0))},
         sim_id="m20",
         timestep=0.001,
     )
-    _hardware = replace(
-        simulated_hardware(M20, sim_id="m20", robot_id="m20"),
-        wb_config=WholeBodyConfig(
-            kp=tuple(j.kp for j in M20.joints), kd=tuple(j.kd for j in M20.joints)
-        ),
-    )
+    _hardware = _sim.hardware["m20"]
     _backend = autoconnect(
-        _sim,
+        _sim.blueprint,
         ControlCoordinator.blueprint(
             tick_rate=50,
             hardware=[_hardware],
@@ -205,7 +198,11 @@ if global_config.simulation == "mujoco":
                     auto_start=True,
                     priority=50,
                     joint_names=[j.name for j in M20.joints],
-                    params={"model_path": POLICY_PATH, "hardware_id": "m20"},
+                    params={
+                        "model_path": POLICY_PATH,
+                        "hardware_id": "m20",
+                        "max_velocity": (1.5, 0.5, 0.7),
+                    },
                 )
             ],
         ).remappings([(ControlCoordinator, "twist_command", "cmd_vel")]),
@@ -273,6 +270,7 @@ deeprobotics_m20_kronknav_control = (
         ),
         DanHolonomicTC.blueprint(
             run_profile="walk",
+            speed_m_s=1.2 if global_config.simulation == "mujoco" else None,
             control_frequency=10.0,
         ),
         MovementManager.blueprint(),

@@ -43,18 +43,27 @@ class RayPattern(Protocol):
 @dataclass(frozen=True)
 class Camera:
     name: str
-    mount: Mount
+    camera: str | Mount
     width: int = 640
     height: int = 480
-    fovy: float = 60.0
+    # Named cameras retain their asset calibration. Only added cameras set fovy.
+    fovy: float | None = None
     rate_hz: float = 10.0
     depth: bool = True
+
+    def __post_init__(self) -> None:
+        if isinstance(self.camera, str) and self.fovy is not None:
+            raise ValueError("set named camera calibration in the MJCF asset, not RobotConfig")
+
+    @property
+    def model_name(self) -> str:
+        return self.camera if isinstance(self.camera, str) else f"sensor/{self.name}"
 
 
 @dataclass(frozen=True)
 class Lidar:
     name: str
-    mount: Mount
+    site: str | Mount
     model: RayPattern
     rate_hz: float = 10.0
     # Optional world-frame cutoff in degrees for ideal mapping scans.
@@ -62,12 +71,20 @@ class Lidar:
     # Sensor-frame clouds retain the ray origin for ray-tracing mappers.
     output_frame: Literal["world", "sensor"] = "world"
 
+    @property
+    def model_name(self) -> str:
+        return self.site if isinstance(self.site, str) else f"sensor/{self.name}"
+
 
 @dataclass(frozen=True)
 class Imu:
     name: str
-    mount: Mount
+    site: str | Mount
     rate_hz: float = 200.0
+
+    @property
+    def model_name(self) -> str:
+        return self.site if isinstance(self.site, str) else f"sensor/{self.name}"
 
 
 Sensor: TypeAlias = Camera | Lidar | Imu

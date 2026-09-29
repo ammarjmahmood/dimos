@@ -46,9 +46,10 @@ class SimCameraModule(SensorModule):
     def open(self) -> None:
         sensor = self.config.sensor
         self._renderer = MujocoCamera(self.reader.model, sensor.width, sensor.height)
-        self._camera = self.reader.model.camera(f"{self.config.robot_id}/sensor/{sensor.name}").id
+        self._camera = self.reader.model.camera(f"{self.config.robot_id}/{sensor.model_name}").id
         self._frame = f"{self.config.robot_id}/{sensor.name}_optical"
-        self._focal = sensor.height / (2 * math.tan(math.radians(sensor.fovy) / 2))
+        fovy = float(self.reader.model.cam_fovy[self._camera])
+        self._focal = sensor.height / (2 * math.tan(math.radians(fovy) / 2))
 
     def capture(self) -> None:
         sensor = self.config.sensor

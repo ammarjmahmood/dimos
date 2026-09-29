@@ -41,7 +41,7 @@ class LidarModule(SensorModule):
 
     def open(self) -> None:
         robot = self.config.robot_id
-        self._site = self.reader.model.site(f"{robot}/sensor/{self.config.sensor.name}").id
+        self._site = self.reader.model.site(f"{robot}/{self.config.sensor.model_name}").id
         self._frame = f"{robot}/{self.config.sensor.name}"
         self._rays = self.config.sensor.model.directions()
         self._raycaster = Raycaster(
