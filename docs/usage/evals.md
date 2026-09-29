@@ -354,11 +354,6 @@ print(first_number("around 12.5 m"), yes_no("Yes, clearly."), choice(["chairs", 
 A grader that raises (an unparseable reply, a missing stream) makes that case
 an **error**, not a score; the run continues.
 
-A grader may return a `Grade(score=..., details={...})` from `dimos.evals.types`
-instead of a float. The runner saves `details` (JSON values only) in that case's
-row of `results.jsonl`, so a partial score keeps its evidence: which milestones
-were reached and when, which final checks failed.
-
 ## Live environments
 
 `Sim` is the abstract base for simulator environments. Use `DimSimEnvironment`
@@ -432,13 +427,14 @@ The metadata's `point_cloud_source` describes how Habitat scans are generated
 
 For MuJoCo, the blueprint brings its own `MujocoSimModule` and scene, so the
 environment only launches `dimos --simulation mujoco --record run <blueprint>
-<modules>` headless. Manipulation graders need ground-truth object poses:
+<modules>` headless; `MUJOCOSIMMODULE__HEADLESS=false` in the shell opens the viewer on
+Linux. Manipulation graders need ground-truth object poses:
 `tracked_bodies` names free bodies in the MJCF, and the simulator publishes
 `world -> <body>` on `tf` next to its camera frames. `first_body_transform` and
 `last_body_transform` read them back from the recording:
 
 ```python session=evals ansi=false no-result
-from dimos.evals.environments.lib.body_poses import first_body_transform, last_body_transform
+from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 
 
@@ -463,71 +459,18 @@ lift_apple = EvalCase(
 ```
 
 A fixed-base arm has no odometry, so readiness waits for fresh `color_image`
-and `coordinator_joint_state` (`ready_streams`) plus a pose for every tracked
-body, and settling waits until every joint is slower than `at_rest_rad_s`.
-Floating-base robots still settle on `odom`. `module_env` passes extra
+and `coordinator_joint_state` plus a pose for every tracked body, and settling
+waits until every joint is slower than `at_rest_rad_s`. Floating-base robots
+still settle on `odom`. The recording keeps color, camera info, joint state,
+`tf` and `odom`; depth frames are float32, which the JPEG recorder rejects. `module_env` passes extra
 `MODULE__FIELD` overrides to the launched dimos, which beat blueprint-pinned
 values, so a case can retune a module without a new blueprint.
-`dimos.evals.suites.mujoco_xarm` is the xArm7 table scene: an observation
-smoke, a lift and a move; `mujoco_xarm_pick_cylinder` is its one-question
-form with the viewer open.
-
-### R1 Pro classical manipulation
-
-`R1ProScene` runs the R1 Pro classical MuJoCo scenes (GraspGenX grasps,
-reachability, IK, collision-checked trajectories; no scripted motion). A case
-pins the scene `seed`, which fixes which object, color and size starts on which
-platform. Before the agent starts, the environment compares the live
-`get_scene` with the case's `expected_objects` and fails the case on any
-difference. While the agent works it writes the simulator's own view (which
-hand holds what, what each object rests on, the tray's cargo, the base pose)
-to `scene_truth.jsonl` about once a second. Graders read that file, never the
-agent's reply. Settling waits for a skill the agent left running. Only
-`record_topics` (odom and the head camera by default) are recorded.
-
-`dimos.evals.suites.r1pro_open_space` has six cases per seed, from one skill to
-the whole job: go to a platform, pick with a named hand, move an object between
-platforms, a second pick with a hand that is already full, loading and carrying
-the tray, and the full task (two picks, a forced hand swap, both items into the
-tray, the tray to another platform). Milestones count only in the order they
-are listed; the score is the fraction of milestones and final checks passed.
-Layouts are generated once per seed into `r1pro_open_space.json`:
-
-```bash skip
-python -m dimos.evals.suites.lib.r1pro_layouts 5000 5001 5002
-```
-
-Two agents exist for these scenes. `scripted_plan` runs each case's reference
-skill list with no model, which measures the robot stack alone and is the
-ceiling for model-driven agents. `jev_planner` asks TypeSafe's Jev one
-multiple-choice question per turn: which of the skill calls possible right now
-comes next (needs `TYPESAFE_API_KEY`). dimOS's own agent joins with
-`--set 'modules=["r1pro-classical-open-space-sim-agent"]'`.
-
-```bash skip
-dimos evals run dimos.evals.suites.r1pro_open_space --agent dimos.evals.agents.scripted_plan \
-    --case s5000_pick_cup_left --case s5000_full_tray_delivery
-dimos evals run dimos.evals.suites.r1pro_open_space --agent dimos.evals.agents.mcp_client_adapter \
-    --set 'modules=["r1pro-classical-open-space-sim-agent"]' --tags seed5000
-dimos evals compare --latest 2
-```
-
-Cases run headless; set `R1PRO_EVAL_VIEWER=1` to watch them in the MuJoCo window.
-Cases with the same seed share one simulator: between them the environment calls
-`reset_scene` and checks that every object, the tray and the base are back where
-they started, relaunching if not. `reuse=False` launches a simulator per case.
-Every launch serves MCP on the same port, so `R1ProScene` refuses to start
-while another dimos answers there; otherwise the case would drive that robot.
+`dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
+modules disabled: pick up the cylinder, then put the red ball on top of it.
 
 ## Running
 
-- **CLI**: `dimos evals run <dotted.suite> --agent <agent-module> [--set model=gpt-4o] [--tags nav] [--limit 5] [--case <id> ...]`
-- **Compare**: `dimos evals compare <run-dir> ... [--latest N]` prints one
-  column per run and one row per case (pass/fail, score, milestones reached).
-- **Repeats**: `--repeat N` runs every case N times, round by round, with IDs
-  ending `.r1` to `.rN`; `compare` folds them into one row (`3/5 pass · 0.72`).
-  Use it wherever runs are not deterministic, such as grasps sampled by a
-  diffusion model or controllers running on wall time.
+- **CLI**: `dimos evals run <dotted.suite> --agent <agent-module> [--set model=gpt-4o] [--tags nav] [--limit 5]`
 - **Python**: `EvalRunner().run(SUITE, agent, tags=frozenset({"encoding"}))`
 - **pytest**: suites are importable lists. Use
   `@pytest.mark.parametrize("case", SUITE)` and assert on `passed`

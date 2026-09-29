@@ -55,15 +55,10 @@ def _globs(topics: str) -> list[str]:
     return [g.strip().strip("/") for g in topics.split(",")]
 
 
-def slug(name: str) -> str:
-    """The stream a topic is recorded as: ``/a/b`` becomes ``a_b``."""
-    return name.strip("/").replace("/", "_")
-
-
 def matching(topics: str, names: Iterable[str]) -> set[str]:
     """Stream *names* selected by the comma-separated ``--record-topics`` globs."""
     globs = _globs(topics)
-    return {n for n in names if any(fnmatch.fnmatch(slug(n), g) for g in globs)}
+    return {n for n in names if any(fnmatch.fnmatch(n, g) for g in globs)}
 
 
 def check_topics(topics: str, names: Iterable[str]) -> None:
@@ -113,11 +108,7 @@ class TransportRecorder:
         if not hasattr(stream_type, "lcm_encode"):
             logger.info("--record: %s (%s) is not a dimos message type, skipped", name, stream_type)
             return None
-        try:
-            stream: Stream[Any] = self.store.stream(slug(name), stream_type)
-        except ValueError as e:
-            logger.info("--record: %s cannot be recorded (%s), skipped", name, e)
-            return None
+        stream: Stream[Any] = self.store.stream(name, stream_type)
 
         def on_msg(msg: Any) -> None:
             try:

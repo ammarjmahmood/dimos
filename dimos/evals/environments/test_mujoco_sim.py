@@ -39,45 +39,51 @@ def _tf(ts: float, child: str, z: float) -> TFMessage:
     )
 
 
-def test_launch_flags():
+def test_launch_flags(monkeypatch):
+    monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
     env = environment(tracked_bodies=("apple", "cup"))
     proc = DimosCliCall()
     env.configure_launch(proc)
     assert proc.simulator == "mujoco"
     assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
     assert json.loads(proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"]) == ["apple", "cup"]
+    assert proc.global_args == [
+        "--record-topics",
+        "color_image,camera_info,coordinator_joint_state,tf,odom",
+    ]
 
     proc = DimosCliCall()
-    environment(headless=False).configure_launch(proc)
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "false"
+    environment().configure_launch(proc)
     assert "MUJOCOSIMMODULE__TRACKED_BODIES" not in proc.extra_env
 
+    monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")
     proc = DimosCliCall()
     environment(
-        module_env={
-            "OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe",
-            "MUJOCOSIMMODULE__HEADLESS": "false",  # the explicit headless field wins
-        }
+        module_env={"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}
     ).configure_launch(proc)
+    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "false"
     assert proc.extra_env["OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND"] == "yoloe"
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
 
 
-def test_module_env_reaches_blueprint_parser():
+def test_module_env_reaches_blueprint_parser(monkeypatch):
+    monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
     from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
-    from dimos.evals.suites.mujoco_xarm import LOCAL_PERCEPTION
     from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
 
     proc = DimosCliCall()
     environment(
-        headless=False, tracked_bodies=("apple", "cup"), module_env=LOCAL_PERCEPTION
+        tracked_bodies=("apple", "cup"),
+        module_env={
+            "OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "owlv2",
+            "OBJECTSCENEREGISTRATIONMODULE__SEGMENTATION_BACKEND": "yolo",
+        },
     ).configure_launch(proc)
     parsed = BlueprintConfigParser(xarm_perception_sim).parse(environ=proc.extra_env)
     perception = parsed.module_kwargs("objectsceneregistrationmodule")
     assert perception["detector_backend"] == "owlv2"
     assert perception["segmentation_backend"] == "yolo"
     sim = parsed.module_kwargs("mujocosimmodule")
-    assert sim["headless"] is False  # the environment beats the blueprint's pinned value
+    assert sim["headless"] is True
     assert sim["tracked_bodies"] == ["apple", "cup"]
 
 
@@ -104,23 +110,28 @@ def test_ready_needs_fresh_streams_and_tracked_body_poses():
         )
         store.stream("tf", TFMessage).append(_tf(now, "apple", 0.17))
         env.wait_ready(store, deadline=time.monotonic() + 2.0)
-        assert env.episode_metadata()["initial_body_positions"] == {"apple": [0.4, 0.08, 0.17]}
 
 
 def test_settle_waits_for_joints_to_stop():
     env = environment(at_rest_s=0.0, settle_poll_s=0.01)
+    env.settle(1.0)
     with MemoryStore() as store:
+        env._recording = store
+        started = time.monotonic()
+        env.settle(1.0)
         joints = store.stream("coordinator_joint_state", JointState)
+        env.settle(1.0)
+        assert time.monotonic() - started < 0.5
         joints.append(JointState(ts=1.0, name=["j1"], position=[0.0], velocity=[0.5]))
         env._recording = store
         started = time.monotonic()
         env.settle(0.2)
-        assert time.monotonic() - started >= 0.2  # still moving: waits out the budget
+        assert time.monotonic() - started >= 0.2
 
         joints.append(JointState(ts=2.0, name=["j1"], position=[0.0], velocity=[0.0]))
         started = time.monotonic()
         env.settle(5.0)
-        assert time.monotonic() - started < 1.0  # at rest: returns early
+        assert time.monotonic() - started < 1.0
     env._recording = None
 
 
@@ -138,7 +149,7 @@ def test_launch_and_cleanup(tmp_path, mocker):
     try:
         result = env.start(("speak-skill",))
         assert proc.simulator == "mujoco"
-        assert proc.global_args == ["--record"]
+        assert proc.global_args[0] == "--record-topics" and proc.global_args[-1] == "--record"
         assert proc.demo_args == [
             "run",
             "xarm-perception-sim",
@@ -147,11 +158,9 @@ def test_launch_and_cleanup(tmp_path, mocker):
             "--disable",
             "rerun-bridge-module",
         ]
-        assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
+        assert "MUJOCOSIMMODULE__HEADLESS" in proc.extra_env
         ready.assert_called_once()
-        episode = json.loads(result.artifacts["episode"].read_text())
-        assert episode["backend"] == "mujoco"
-        assert episode["tracked_bodies"] == ["apple"]
+        assert set(result.artifacts) == {"recording"}
     finally:
         env.stop()
     proc.stop.assert_called_once()

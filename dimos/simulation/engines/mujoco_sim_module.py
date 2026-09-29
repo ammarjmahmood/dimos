@@ -307,8 +307,6 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     viewer_elevation: float | None = Field(default=None, ge=-90, le=90)
     # Render sensor snapshots separately so GPU waits do not block motor physics.
     background_camera_rendering: bool = False
-    # Free bodies whose world pose is published on ``tf`` (``world -> <body>``)
-    # next to the camera frames, so a recording holds ground-truth object poses.
     tracked_bodies: list[str] = Field(default_factory=list)
     dof: int = 7
 
@@ -1217,15 +1215,16 @@ class MujocoSimModule(
                     child_frame_id=self._camera_link,
                     ts=ts,
                 ),
-                *self._body_transforms(ts),
+                *self._body_transforms(),
             )
         )
 
-    def _body_transforms(self, ts: float) -> list[Transform]:
+    def _body_transforms(self) -> list[Transform]:
         """World poses of ``tracked_bodies``; a name missing from the model is skipped after one warning."""
         engine = self._engine
         if engine is None or not self.config.tracked_bodies:
             return []
+        ts = time.time()
         transforms: list[Transform] = []
         for name in self.config.tracked_bodies:
             pose = engine.get_body_pose(name)

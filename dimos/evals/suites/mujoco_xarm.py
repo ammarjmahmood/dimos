@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""xArm7 at a table with an apple, an orange and a cup — MuJoCo manipulation cases.
+"""xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): two picks,
+planner skills and the wrist camera only, graded on the bodies' recorded poses.
 
-Ground truth comes from the simulator: ``MujocoEnvironment(tracked_bodies=...)``
-has MujocoSimModule publish ``world -> <body>`` on ``tf``, and graders read the
-first and last recorded pose of each object. The scene is ``data/xarm7/scene.xml``.
-
-    dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.mcp_client_adapter
+    dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi
 """
 
 from __future__ import annotations
@@ -26,64 +23,35 @@ from __future__ import annotations
 from collections.abc import Callable
 import math
 
-from dimos.evals.environments.lib.body_poses import first_body_transform, last_body_transform
+from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 from dimos.evals.scorers import ramp
 from dimos.evals.types import EvalCase, Outcome, Suite, recording
 
-TRACKED = ("apple", "orange", "cup")
+TRACKED = ("apple", "cup")
 
-
-# The blueprint's Moondream detector and EdgeTAM segmenter need a 3.85 GB download and
-# the ``dimos[perception]`` extra; OWLv2 plus YOLOE box segmentation run from LFS data.
-LOCAL_PERCEPTION = {
-    "OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "owlv2",
-    "OBJECTSCENEREGISTRATIONMODULE__SEGMENTATION_BACKEND": "yolo",
-}
-
-
-# Detector, segmenter, grasp ranking and the pick pipeline.
 PERCEPTION_MODULES = (
     "object-scene-registration-module",
     "pick-and-place-module",
     "heuristic-grasp-module",
 )
 
-
-def arm_only_environment(*, headless: bool = True, rerun: bool = False) -> MujocoEnvironment:
-    """The xArm7 table scene with no perception: planner skills plus wrist-camera frames.
-
-    ``rerun=True`` keeps the Rerun bridge, the way to watch on macOS where MuJoCo's
-    own viewer needs mjpython and the sim therefore runs headless.
-    """
-    return MujocoEnvironment(
-        blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
-        disable=(*PERCEPTION_MODULES, *(() if rerun else ("rerun-bridge-module",))),
-        tracked_bodies=TRACKED,
-        headless=headless,
-    )
+SCENE = (
+    "The table top is at z=0.13 m in the world frame and spans roughly x=0.30 to 0.60 m "
+    "ahead of the arm base. On it are a red ball about 8 cm wide, an orange ball about 9 cm "
+    "wide and a cylinder about 7 cm wide and 12 cm tall; find where they are by looking "
+    "through the wrist camera. The gripper starts pointing straight down: for top-down moves "
+    "omit roll/pitch/yaw in move_to_pose to keep the current orientation, or pass "
+    "roll=3.1416, pitch=0. roll=pitch=yaw=0 points the gripper up."
+)
 
 
 def environment() -> MujocoEnvironment:
     return MujocoEnvironment(
-        blueprint=["xarm-perception-sim", "mcp-server"],
-        disable=("rerun-bridge-module",),
+        blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
+        disable=PERCEPTION_MODULES,
         tracked_bodies=TRACKED,
-        module_env=LOCAL_PERCEPTION,
     )
-
-
-def sensor_score(outcome: Outcome) -> float:
-    """Require readable RGB, joint state and a pose for every tracked body."""
-    with recording(outcome) as store:
-        try:
-            store.streams.color_image.last().data  # noqa: B018 - force lazy decoding
-            store.streams.coordinator_joint_state.last().data  # noqa: B018
-            for body in TRACKED:
-                last_body_transform(store, body)
-        except (LookupError, AttributeError):
-            return 0.0
-    return 1.0
 
 
 def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
@@ -101,50 +69,42 @@ def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
     return grade
 
 
-def _ended_near(body: str, x: float, y: float, *, band_m: float) -> Callable[[Outcome], float]:
-    """Where the body ended up on the table plane: 1.0 at the target, 0.0 at ``band_m`` away."""
+def stacked_on(
+    top: str, base: str, *, rise_m: tuple[float, float], band_m: float
+) -> Callable[[Outcome], float]:
+    """``top`` ended resting on ``base``: its centre ``rise_m`` above the base's, 1.0 centred and
+    0.0 at ``band_m`` off. A body held higher than the resting height scores 0.0."""
 
     def grade(outcome: Outcome) -> float:
         with recording(outcome) as store:
             try:
-                t = last_body_transform(store, body).translation
+                t = last_body_transform(store, top).translation
+                b = last_body_transform(store, base).translation
             except LookupError:
                 return 0.0
-        return ramp(math.hypot(t.x - x, t.y - y), band=band_m)
+        if not rise_m[0] <= t.z - b.z <= rise_m[1]:
+            return 0.0
+        return ramp(math.hypot(t.x - b.x, t.y - b.y), band=band_m)
 
     return grade
 
 
 SUITE: Suite = [
     EvalCase(
-        id="xarm_observe",
-        inputs=(
-            "Use the available observation tool to look at the table in front of you. "
-            "Briefly list what you see."
-        ),
+        id="xarm_pick_cylinder",
+        inputs=f"Pick up the cylinder from the table and hold it in the air. {SCENE}",
         environment=environment(),
-        grade=sensor_score,
-        timeout_s=300.0,
-        tags=frozenset({"mujoco", "manipulation", "smoke"}),
-    ),
-    EvalCase(
-        id="xarm_lift_apple",
-        inputs="Pick up the apple and hold it in the air above the table.",
-        environment=environment(),
-        grade=lifted("apple", by_m=0.05),
+        grade=lifted("cup", by_m=0.05),
         timeout_s=600.0,
         tags=frozenset({"mujoco", "manipulation", "pick"}),
     ),
     EvalCase(
-        id="xarm_move_orange",
-        inputs=(
-            "Move the orange to the other side of the table and release it there, "
-            "around x=0.45 m, y=0.12 m in the world frame."
-        ),
+        id="xarm_ball_on_cylinder",
+        inputs=f"Pick up the red ball and place it on top of the cylinder. {SCENE}",
         environment=environment(),
-        grade=_ended_near("orange", 0.45, 0.12, band_m=0.10),
-        timeout_s=600.0,
-        threshold=0.5,  # within 5 cm
+        grade=stacked_on("apple", "cup", rise_m=(0.08, 0.12), band_m=0.07),
+        timeout_s=900.0,
+        threshold=0.5,
         tags=frozenset({"mujoco", "manipulation", "pick", "place"}),
     ),
 ]

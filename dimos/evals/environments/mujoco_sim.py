@@ -17,15 +17,14 @@
 from __future__ import annotations
 
 import json
-import sys
+import os
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import Field
 
-from dimos.evals.environments.lib.body_poses import last_body_transform
+from dimos.evals.environments.lib.recorded_poses import last_body_transform
 from dimos.evals.environments.sim import Sim, SimConfig
-from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,83 +33,56 @@ if TYPE_CHECKING:
     from dimos.memory.store.base import Store
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
-logger = setup_logger()
+
+_READY_STREAMS = ("color_image", "coordinator_joint_state")
+_RECORDED_TOPICS = ("color_image", "camera_info", "coordinator_joint_state", "tf", "odom")
 
 
 class MujocoEnvironmentConfig(SimConfig):
-    # Run the simulator without its viewer window.
-    headless: bool = True
-    # Class name of the blueprint's MujocoSimModule (or subclass) that the
-    # ``<CLASS>__FIELD`` launch overrides below are addressed to.
-    sim_module: str = "MujocoSimModule"
-    # Free bodies whose world pose MujocoSimModule publishes on ``tf``, so graders
-    # read ground-truth object positions from the recording.
     tracked_bodies: tuple[str, ...] = ()
-    # Streams that must carry fresh samples before the agent starts.
-    ready_streams: tuple[str, ...] = ("color_image", "coordinator_joint_state")
-    # Joint speed below which the robot counts as at rest while settling.
     at_rest_rad_s: float = 0.02
-    # Extra ``MODULE__FIELD`` environment overrides for the launched dimos, e.g.
-    # ``{"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}``. They beat
-    # blueprint-pinned values, so a case can retune a module without a new blueprint.
     module_env: dict[str, str] = Field(default_factory=dict)
 
 
 class MujocoEnvironment(Sim):
-    """Run agent evaluations in a MuJoCo scene composed by the caller's blueprint.
-
-    A fixed-base arm has no odometry: readiness and settling use the
-    coordinator's joint state, and graders read tracked body poses from ``tf``.
-    """
+    """Run agent evaluations in a MuJoCo scene, with ground-truth object poses recorded on tf."""
 
     config: MujocoEnvironmentConfig
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._initial_body_positions: dict[str, list[float]] = {}
-
     def configure_launch(self, proc: DimosCliCall) -> None:
-        if not self.config.headless and sys.platform == "darwin":
-            # MuJoCo's passive viewer needs mjpython on macOS; the engine steps headless.
-            logger.warning(
-                "MuJoCo viewer needs mjpython on macOS: no window; the sim runs headless. "
-                "Keep rerun-bridge-module enabled to watch the camera and frames."
-            )
         proc.simulator = "mujoco"
+        proc.global_args = ["--record-topics", ",".join(_RECORDED_TOPICS)]
         proc.extra_env.update(self.config.module_env)
-        sim = self.config.sim_module.upper()
-        proc.extra_env[f"{sim}__HEADLESS"] = json.dumps(self.config.headless)
+        proc.extra_env.setdefault(
+            "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
+        )
         if self.config.tracked_bodies:
-            proc.extra_env[f"{sim}__TRACKED_BODIES"] = json.dumps(list(self.config.tracked_bodies))
+            proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"] = json.dumps(
+                list(self.config.tracked_bodies)
+            )
 
     def prepare_recording(self, recording: Store, path: Path, deadline: float) -> dict[str, Path]:
         self.wait_ready(recording, deadline=deadline)
-        metadata = path.parent / "mujoco_episode.json"
-        metadata.write_text(json.dumps(self.episode_metadata(), indent=2))
-        return {"episode": metadata}
+        return {}
 
     def wait_ready(self, recording: Store, *, deadline: float) -> None:
         """Wait for fresh samples on every ready stream and a pose for every tracked body."""
-        # Message timestamps are Unix wall-clock seconds; the deadline is monotonic.
         while time.monotonic() < deadline:
             try:
                 ages = [
                     time.time() - getattr(recording.streams, name).last().data.ts
-                    for name in self.config.ready_streams
+                    for name in _READY_STREAMS
                     if name in recording.streams
                 ]
-                poses = {
-                    body: last_body_transform(recording, body).translation
-                    for body in self.config.tracked_bodies
-                }
+                for body in self.config.tracked_bodies:
+                    last_body_transform(recording, body)
             except (LookupError, AttributeError):
-                ages, poses = [], {}
-            if len(ages) == len(self.config.ready_streams) and all(age < 10.0 for age in ages):
-                self._initial_body_positions = {body: [t.x, t.y, t.z] for body, t in poses.items()}
+                ages = []
+            if len(ages) == len(_READY_STREAMS) and all(age < 10.0 for age in ages):
                 return
             time.sleep(0.1)
         raise TimeoutError(
-            f"MuJoCo did not publish fresh {', '.join(self.config.ready_streams)}"
+            f"MuJoCo did not publish fresh {', '.join(_READY_STREAMS)}"
             + (
                 f" and poses for {', '.join(self.config.tracked_bodies)}"
                 if self.config.tracked_bodies
@@ -145,13 +117,3 @@ class MujocoEnvironment(Sim):
             elif now - rest_since >= self.config.at_rest_s:
                 return
             time.sleep(self.config.settle_poll_s)
-
-    def episode_metadata(self) -> dict[str, object]:
-        return {
-            "backend": "mujoco",
-            "blueprint": list(self.config.blueprint),
-            "headless": self.config.headless,
-            "tracked_bodies": list(self.config.tracked_bodies),
-            "module_env": dict(self.config.module_env),
-            "initial_body_positions": self._initial_body_positions,
-        }

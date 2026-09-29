@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -165,19 +165,11 @@ def recording(o: Outcome) -> Store:
 
 
 @dataclass(frozen=True, kw_only=True)
-class Grade:
-    """A score and what it was based on. The runner saves ``details`` in results.jsonl."""
-
-    score: float  # 0..1
-    details: dict[str, Any] = field(default_factory=dict)  # JSON values only
-
-
-@dataclass(frozen=True, kw_only=True)
 class EvalCase:
     id: str
     inputs: str  # the user message
     environment: Environment
-    grade: Callable[[Outcome], float | Grade]  # 0..1, called once after the agent finishes
+    grade: Callable[[Outcome], float]  # 0..1, called once after the agent finishes
     tags: frozenset[str] = frozenset()
     timeout_s: float = 60.0  # wall-clock is a task property; max_steps is the agent's
     threshold: float = 1.0  # passed = score >= threshold; the case knows its own pass bar
@@ -206,4 +198,3 @@ class EvalResult:
     cost_usd: float | None = None
     ended_by: str = ""
     trajectory: str = ""  # path of <case_id>/trajectory.json, when an agent ran
-    details: dict[str, Any] = field(default_factory=dict)  # from a Grade, when the grader gave one

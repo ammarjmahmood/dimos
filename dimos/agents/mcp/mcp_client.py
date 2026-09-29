@@ -309,12 +309,6 @@ class McpClient(Module):
         return self.config.trace_dir
 
     @rpc
-    def clear_history(self) -> None:
-        """Forget the conversation so far; the next message starts a new one."""
-        with self._lock:
-            self._history.clear()
-
-    @rpc
     def set_trace_dir(self, path: str | None) -> None:
         """Point raw LLM capture at *path* and rebuild the model to pick it
         up; ``None`` turns tracing off."""

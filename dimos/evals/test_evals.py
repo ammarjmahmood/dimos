@@ -66,7 +66,6 @@ from dimos.evals.suites.dimsim_pointcloud_mapping import N_ROOMS, ROOMS, grade_r
 from dimos.evals.types import (
     EvalCase,
     EvalResult,
-    Grade,
     Metrics,
     Observation,
     ObservationResult,
@@ -699,23 +698,6 @@ def test_count_rooms_grader_scores_reply_and_coverage(tmp_path: Path) -> None:
     assert score(written(tmp_path / "still.db", [(50.0, 50.0)]), str(N_ROOMS)) == 0.5
 
 
-def test_runner_saves_grade_details(tmp_path: Path) -> None:
-    env = FakeEnvironment(tmp_path / "recording.db", [])
-    (tmp_path / "recording.db").touch()
-    case = EvalCase(
-        id="c",
-        inputs="x",
-        environment=env,
-        grade=lambda o: Grade(score=0.5, details={"reached": ["first"]}),
-        threshold=0.5,
-    )
-    runner = EvalRunner(out_dir=tmp_path)
-    result = runner.run([case], FakeAgent(answer="ok"))[0]
-    assert result.passed and result.details == {"reached": ["first"]}
-    saved = json.loads((runner.run_dir / "results.jsonl").read_text())
-    assert saved["details"] == {"reached": ["first"]}
-
-
 def test_suites_and_agents_importable() -> None:
     """Modules construct without data or network (lambdas stay lazy)."""
 
@@ -728,8 +710,6 @@ def test_suites_and_agents_importable() -> None:
         "mcp_client_adapter",
         "pi",
         "dimcode",
-        "scripted_plan",
-        "jev_planner",
     }
     for module_name in agents:
         assert callable(load_agent(module_name).run), module_name
@@ -776,12 +756,8 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
     trace_dir.mkdir(parents=True)
 
     repointed: list[str] = []
-    cleared: list[bool] = []
     app = SimpleNamespace(
-        McpClient=SimpleNamespace(
-            set_trace_dir=repointed.append, clear_history=lambda: cleared.append(True)
-        ),
-        stop=lambda: None,
+        McpClient=SimpleNamespace(set_trace_dir=repointed.append), stop=lambda: None
     )
     monkeypatch.setattr("dimos.porcelain.dimos.Dimos.connect", lambda: app)
 
@@ -836,7 +812,6 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
             t.stop()
 
     assert repointed == [str(trace_dir)]
-    assert cleared == [True]  # each case starts a new conversation
     assert trajectory.extra.ended_by == ("answer" if goes_idle else "timeout")
     assert trajectory.final_answer == "I am at the bed"
     assert len(trajectory.steps) == 3 and trajectory.final_metrics.total_prompt_tokens == 10
