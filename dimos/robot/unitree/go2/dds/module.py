@@ -16,8 +16,8 @@
 
 The rust binary (``rust/``) terminates ``cmd_vel`` as sport ``Move`` and ``command`` verbs
 as sport requests, and streams the robot's own odometry (``odom -> base_link``, with the
-tf edge), the mount tree, the head L1 cloud, the front camera and its intrinsics. Same profile as :class:`GO2Zenoh`, so a
-blueprint written against one runs against the other.
+tf edge), the mount tree, the head L1 cloud, the front camera and its intrinsics. Same
+profile as :class:`GO2Zenoh`, so a blueprint written against one runs against the other.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class GO2DDSConfig(NativeModuleConfig, Go2BaseConfig):
     lowstate_hz: float = 50.0
     # h264 off the RTP multicast onto `video`, or jpeg polled at `video_fps` onto `image`.
     video_on: bool = True
-    video_encoding: Literal["h264", "jpeg"] = "h264"
+    video_encoding: Literal["h264", "jpeg"] = "jpeg"
     video_fps: float = 15.0
     video_group: str = "230.1.1.1"
     video_port: int = 1720

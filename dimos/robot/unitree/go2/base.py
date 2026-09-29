@@ -16,8 +16,8 @@
 
 The ports are the wire contract (``dimos/<port>/<msg.NAME>`` on zenoh), so remap in the
 blueprint rather than renaming. The verbs are the ``command`` vocabulary the robot side
-resolves (``topics::sport_id`` in go2web and in ``go2/dds/rust``). The mount tree and the
-camera intrinsics are the static data no robot-side process sends.
+resolves (``topics::sport_id`` in go2web and in ``go2/dds/rust``). The mount and camera
+calibration are config: GO2DDS publishes them natively, GO2Zenoh from python.
 """
 
 from __future__ import annotations
@@ -102,7 +102,6 @@ class Go2Base(Module):
         self.register_disposable(Disposable(timer.cancel))
 
     def _startup_pose(self) -> None:
-        self.set_lidar(False)
         self.standup()
 
     @rpc

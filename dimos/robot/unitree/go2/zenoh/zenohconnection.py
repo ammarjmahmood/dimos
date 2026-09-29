@@ -68,8 +68,8 @@ class GO2Zenoh(Go2Base, StaticTfPublisher):
 
     def _startup_pose(self) -> None:
         """Stand, and drop the head L1: Point-LIO runs off the MID-360, not that one."""
-        super()._startup_pose()
         self.set_lidar(False)
+        super()._startup_pose()
 
     @rpc
     def stop(self) -> None:
