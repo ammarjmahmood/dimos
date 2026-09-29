@@ -49,8 +49,13 @@ def hyperspace_topics_in(path: str | Path) -> list[str]:
 
 
 class McapSink:
-    def __init__(self, path: str | Path) -> None:
+    """*keep*: depth topics the recording already has. Their frames are someone else's
+    keyframes, and a second /depth2depth beside the first is not an option in an
+    append-only file, so they are left as they are and only the patches land."""
+
+    def __init__(self, path: str | Path, keep: set[str] | frozenset[str] = frozenset()) -> None:
         self.path = str(path)
+        self.keep = set(keep)
         self.appender = McapAppender(self.path)
         self._channels: dict[str, int] = {}
         self.written: dict[str, int] = {}
@@ -74,6 +79,8 @@ class McapSink:
         self.written[topic] = self.written.get(topic, 0) + 1
 
     def depth2depth(self, frame_id: str, ts: float, depth_mm: NDArray[np.uint16]) -> None:
+        if fmt.DEPTH2DEPTH_TOPIC in self.keep:
+            return
         channel = self._channel(fmt.DEPTH2DEPTH_TOPIC, fmt.IMAGE_TYPE, fmt.IMAGE_SCHEMA)
         at = stamp_ns(ts)
         self._write(
@@ -81,6 +88,8 @@ class McapSink:
         )
 
     def thumbnail(self, frame_id: str, ts: float, depth_mm: NDArray[np.uint16]) -> None:
+        if fmt.THUMBNAILS_TOPIC in self.keep:
+            return
         channel = self._channel(fmt.THUMBNAILS_TOPIC, fmt.IMAGE_TYPE, fmt.IMAGE_SCHEMA)
         at = stamp_ns(ts)
         self._write(

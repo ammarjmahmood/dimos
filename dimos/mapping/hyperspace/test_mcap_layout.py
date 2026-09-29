@@ -64,7 +64,9 @@ def _topics(path: Path) -> dict[str, tuple[int, str]]:
     return counts
 
 
-def _ingest_into(path: Path, poses: list[np.ndarray]) -> PatchIngestor:
+def _ingest_into(
+    path: Path, poses: list[np.ndarray], keep: frozenset[str] = frozenset()
+) -> PatchIngestor:
     """The flat ingest, written through a sink into *path*. Depth2depth is stood in for
     by the sensor depth itself: what is under test is where it lands, not the model."""
     model = StubModel()
@@ -81,7 +83,7 @@ def _ingest_into(path: Path, poses: list[np.ndarray]) -> PatchIngestor:
         flat=True,
         depth2depth_model="stub",
     )
-    sink = McapSink(path)
+    sink = McapSink(path, keep=keep)
     ingestor = PatchIngestor(None, model, config, copy_tf=False, sink=sink)  # type: ignore[arg-type]
     ingestor._fused_depth = lambda rgb, depth: depth  # type: ignore[method-assign]
     ingestor.add_camera_info(camera_info())
@@ -203,6 +205,15 @@ def test_an_ingest_into_an_mcap_writes_ros_messages_in_place(tmp_path: Path) -> 
     thumbnail = fmt.decode_depth_image(messages[fmt.THUMBNAILS_TOPIC].data).depth_mm
     assert thumbnail.shape == (HEIGHT // fmt.THUMBNAIL_STRIDE, WIDTH // fmt.THUMBNAIL_STRIDE)
     assert (thumbnail > 0).all()
+
+
+def test_adding_a_model_keeps_the_depth_already_there(tmp_path: Path) -> None:
+    path = tmp_path / "rec.mcap"
+    _recording(path)
+    _ingest_into(path, ring(2, 2.5), keep=frozenset({fmt.DEPTH2DEPTH_TOPIC, fmt.THUMBNAILS_TOPIC}))
+    topics = _topics(path)
+    assert "/siglip2_patches__m_stub" in topics
+    assert fmt.DEPTH2DEPTH_TOPIC not in topics and fmt.THUMBNAILS_TOPIC not in topics
 
 
 def test_a_query_reads_the_patches_and_depth_back_out_of_the_mcap(tmp_path: Path) -> None:

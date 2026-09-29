@@ -117,27 +117,37 @@ def embed_into_mcap(
 
     What lands is the layout :mod:`dimos.mapping.hyperspace.mcap_format` describes:
     ``/depth2depth``, ``/depth_thumbnails`` and one ``/siglip2_patches__m_<model>`` per
-    checkpoint. An mcap is only ever appended to, so an index that is already there
-    has to be removed first (``dtk mcap_edit --delete``); this never writes a second
-    copy beside it.
+    checkpoint. An mcap is only ever appended to, so a model that is already there has
+    to be removed first (``dtk mcap_edit --delete``); this never writes a second copy
+    beside it. Depth already there is kept, and only the new models' patches land.
     """
     from dimos.mapping.hyperspace.mcap_sink import McapSink, hyperspace_topics_in
 
     if index_name:
         raise typer.BadParameter("--index-name has no meaning for an .mcap: topics are per model")
-    present = hyperspace_topics_in(recording_path)
-    if present:
+    from dimos.mapping.hyperspace import mcap_format as fmt
+    from dimos.mapping.hyperspace.siglip_embedder import member_tag
+
+    # A model already there is refused rather than duplicated. Depth already there is
+    # kept, so a recording can take one more model without losing what it has: the new
+    # model's keyframes then have no /depth2depth frame of their own, which is the cost.
+    present = set(hyperspace_topics_in(recording_path))
+    clash = sorted(present & {fmt.patch_topic(member_tag(spec)) for spec in specs})
+    if clash:
         how = "--replace cannot remove topics from an .mcap; " if replace else ""
         typer.echo(
-            f"{recording_path.name} already holds {', '.join(present)}. Nothing was changed; "
+            f"{recording_path.name} already holds {', '.join(clash)}. Nothing was changed; "
             f"{how}remove them with `dtk mcap_edit {recording_path} --delete TOPIC` first."
         )
         raise typer.Exit(0)
+    keep = present & {fmt.DEPTH2DEPTH_TOPIC, fmt.THUMBNAILS_TOPIC}
+    if keep:
+        typer.echo(f"keeping the {', '.join(sorted(keep))} already there; adding patches only")
     refuse_unless_readable(source, (color, depth, color_info, depth_info, tf_stream))
     model = PatchEnsemble(specs, device=pick_device(device), towers="vision")
     model.start()
     typer.echo(f"embedding with {model.tags} on {pick_device(device)}, into {recording_path}")
-    sink = McapSink(recording_path)
+    sink = McapSink(recording_path, keep=keep)
     started = time.monotonic()
     try:
         stats = ingest(
