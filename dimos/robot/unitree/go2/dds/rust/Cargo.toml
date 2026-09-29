@@ -26,6 +26,7 @@ validator = { version = "0.21", features = ["derive"] }
 
 [dev-dependencies]
 cdr = "0.2.4"
+serde_json = "1"
 
 [package.metadata.dimos.module.go2_dds]
 path = "dimos_go2_dds::module::Go2Dds"

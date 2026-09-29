@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from pathlib import Path
 import re
 
 from dimos.robot.unitree.go2.dds.module import GO2DDSConfig
 
 RUST_MODULE = Path(__file__).parent / "rust" / "src" / "module.rs"
+RUST_FIXTURE = Path(__file__).parent / "rust" / "tests" / "config.json"
 
 
 def test_config_fields_match_the_rust_struct():
@@ -25,3 +27,9 @@ def test_config_fields_match_the_rust_struct():
     body = re.search(r"pub struct Config \{(.*?)\n\}", RUST_MODULE.read_text(), re.S).group(1)
     rust = set(re.findall(r"^\s*pub (\w+):", body, re.M))
     assert set(GO2DDSConfig(executable="x").to_config_dict()) == rust
+
+
+def test_rust_fixture_is_the_default_config():
+    """The rust tests parse this dump; regenerate it when a default changes."""
+    dump = json.loads(json.dumps(GO2DDSConfig(executable="x").to_config_dict()))
+    assert json.loads(RUST_FIXTURE.read_text()) == dump

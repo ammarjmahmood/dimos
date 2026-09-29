@@ -35,17 +35,11 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher
 from dimos.robot.unitree.go2.base import Go2Base, Go2BaseConfig
-from dimos.robot.unitree.go2.connection import _camera_info_static
-from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
-    CAMERA_XYZ,
-    MID360_XYZ,
-    OPTICAL_RPY,
-)
+from dimos.robot.unitree.go2.go2_mid360_static_transforms import OPTICAL_RPY
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -63,9 +57,6 @@ class GO2Zenoh(Go2Base, StaticTfPublisher):
 
     lidar: Out[PointCloud2]  # per-scan, in the LIO's own sensor frame
     pointlio_map: Out[PointCloud2]  # accumulated world map, frame `odom`
-
-    # Nothing on the robot emits intrinsics.
-    _camera_info: CameraInfo = _camera_info_static()
 
     @rpc
     def start(self) -> None:
@@ -120,12 +111,12 @@ class GO2Zenoh(Go2Base, StaticTfPublisher):
     def mount_edges(self) -> dict[str, Transform]:
         """The mount tree by child frame, measured outward from base_link."""
         base_to_camera = Transform(
-            translation=Vector3(*CAMERA_XYZ),
+            translation=Vector3(*self.config.camera_xyz),
             frame_id="base_link",
             child_frame_id="front_camera",
         )
         camera_to_mid360 = Transform(
-            translation=Vector3(*MID360_XYZ),
+            translation=Vector3(*self.config.mid360_xyz),
             rotation=Quaternion.from_euler(
                 Vector3(*(math.radians(float(d)) for d in self.config.mid360_mount))
             ),
@@ -148,6 +139,5 @@ class GO2Zenoh(Go2Base, StaticTfPublisher):
     async def _publish_camera_info(self) -> None:
         period = 1.0 / self.config.camera_info_hz
         while self._running:
-            self._camera_info.ts = time.time()
-            self.camera_info.publish(self._camera_info)
+            self.camera_info.publish(self.config.camera_info.with_ts(time.time()))
             await asyncio.sleep(period)

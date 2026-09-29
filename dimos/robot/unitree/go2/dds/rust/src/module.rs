@@ -53,9 +53,7 @@ const CAMERA_FRAME: &str = "camera_optical";
 const BODY_FRAME: &str = "base_link";
 const MOUNT_FRAME: &str = "front_camera";
 const MID360_FRAME: &str = "mid360_link";
-/// The mount tree, as in `go2_mid360_static_transforms.py`.
-const CAMERA_XYZ: [f64; 3] = [0.32715, -0.00003, 0.04297];
-const MID360_XYZ: [f64; 3] = [-0.032, 0.0, 0.12];
+/// The optical axes off the camera mount: x right, y down, z forward.
 const OPTICAL_RPY: [f64; 3] = [-FRAC_PI_2, 0.0, -FRAC_PI_2];
 /// The first 12 of LowState's 20 motors, in Unitree order.
 const JOINTS: [&str; 12] = [
@@ -89,8 +87,14 @@ pub struct Config {
     /// The frame the live odometry moves; the odom tf edge is ours only for base_link,
     /// and the mount edges above it are inverted so it never gets two parents.
     pub tf_root: String,
+    /// base_link -> front_camera, and front_camera -> mid360_link, in metres.
+    pub camera_xyz: [f64; 3],
+    pub mid360_xyz: [f64; 3],
     /// front_camera -> mid360_link, fixed-axis rpy in degrees.
     pub mid360_mount: [f64; 3],
+    /// The front camera's calibration, published at `camera_info_hz`.
+    #[serde(with = "camera_info_dict")]
+    pub camera_info: CameraInfo,
     /// Mount tree rate on `tf`.
     #[validate(range(exclusive_min = 0.0))]
     pub publish_hz: f64,
@@ -116,6 +120,58 @@ pub struct Config {
     /// StopMove once `cmd_vel` has been silent this long.
     #[validate(range(min = 1))]
     pub deadman_ms: u64,
+}
+
+/// python's `CameraInfo` config dict <-> the message; the stamp is set per publish.
+mod camera_info_dict {
+    use lcm_msgs::sensor_msgs::CameraInfo;
+    use lcm_msgs::std_msgs::Header;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    #[allow(non_snake_case)]
+    struct Dict {
+        frame_id: String,
+        height: i32,
+        width: i32,
+        distortion_model: String,
+        D: Vec<f64>,
+        K: [f64; 9],
+        R: [f64; 9],
+        P: [f64; 12],
+    }
+
+    pub fn deserialize<'de, De: Deserializer<'de>>(d: De) -> Result<CameraInfo, De::Error> {
+        let c = Dict::deserialize(d)?;
+        Ok(CameraInfo {
+            header: Header {
+                frame_id: c.frame_id,
+                ..Default::default()
+            },
+            height: c.height,
+            width: c.width,
+            distortion_model: c.distortion_model,
+            D: c.D,
+            K: c.K,
+            R: c.R,
+            P: c.P,
+            ..Default::default()
+        })
+    }
+
+    pub fn serialize<S: Serializer>(c: &CameraInfo, s: S) -> Result<S::Ok, S::Error> {
+        Dict {
+            frame_id: c.header.frame_id.clone(),
+            height: c.height,
+            width: c.width,
+            distortion_model: c.distortion_model.clone(),
+            D: c.D.clone(),
+            K: c.K,
+            R: c.R,
+            P: c.P,
+        }
+        .serialize(s)
+    }
 }
 
 fn known_encoding(v: &str) -> Result<(), validator::ValidationError> {
@@ -634,47 +690,27 @@ fn inverse(t: Transform) -> Transform {
 }
 
 /// base_link -> front_camera -> {mid360_link, camera_optical}, re-rooted at `tf_root`.
-pub fn mount_tree(mid360_mount_deg: [f64; 3], tf_root: &str, ts: f64) -> Vec<Transform> {
-    let camera = edge(BODY_FRAME, MOUNT_FRAME, CAMERA_XYZ, [0.0; 3], ts);
+pub fn mount_tree(c: &Config, ts: f64) -> Vec<Transform> {
+    let camera = edge(BODY_FRAME, MOUNT_FRAME, c.camera_xyz, [0.0; 3], ts);
     let mid360 = edge(
         MOUNT_FRAME,
         MID360_FRAME,
-        MID360_XYZ,
-        mid360_mount_deg.map(f64::to_radians),
+        c.mid360_xyz,
+        c.mid360_mount.map(f64::to_radians),
         ts,
     );
     let optical = edge(MOUNT_FRAME, CAMERA_FRAME, [0.0; 3], OPTICAL_RPY, ts);
-    if tf_root == MID360_FRAME {
+    if c.tf_root == MID360_FRAME {
         vec![inverse(mid360), inverse(camera), optical]
     } else {
         vec![camera, mid360, optical]
     }
 }
 
-/// The front camera's 720p calibration, `go2/front_camera_720.yaml`.
-pub fn camera_info(ts: f64) -> CameraInfo {
-    let (fx, cx, fy, cy) = (
-        797.4756164864929,
-        643.5352167821186,
-        796.4872112769983,
-        349.2783605343087,
-    );
-    CameraInfo {
-        header: header(CAMERA_FRAME, ts),
-        height: 720,
-        width: 1280,
-        distortion_model: "equidistant".into(),
-        D: vec![
-            -0.07309428880537933,
-            -0.02341140740909078,
-            -0.0069305931780026956,
-            0.009238684474464793,
-        ],
-        K: [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
-        R: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-        P: [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0],
-        ..Default::default()
-    }
+fn stamped(info: &CameraInfo, ts: f64) -> CameraInfo {
+    let mut info = info.clone();
+    info.header.stamp = time_of_secs(ts);
+    info
 }
 
 /// What the robot never sends: the mount tree and the camera intrinsics, re-stamped.
@@ -694,13 +730,14 @@ impl StaticLoop {
         while !self.stop.load(Ordering::Relaxed) {
             let now = Instant::now();
             if tf_tick.due(now) {
-                let tree = mount_tree(c.mid360_mount, &c.tf_root, now_secs());
+                let tree = mount_tree(c, now_secs());
                 let _ = self.handle.block_on(self.tf.publish(&tree));
             }
             if info_tick.due(now) {
-                let _ = self
-                    .handle
-                    .block_on(self.camera_info.publish(&camera_info(now_secs())));
+                let _ = self.handle.block_on(
+                    self.camera_info
+                        .publish(&stamped(&c.camera_info, now_secs())),
+                );
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1096,25 +1133,32 @@ mod tests {
         assert!(c.due(t0 + Duration::from_millis(67)));
     }
 
+    /// `GO2DDSConfig().to_config_dict()`, as python sends it.
+    fn config() -> Config {
+        serde_json::from_str(include_str!("../tests/config.json"))
+            .expect("python's config dump parses")
+    }
+
     #[test]
-    fn camera_info_matches_the_calibration_yaml() {
-        let yaml = include_str!("../../../front_camera_720.yaml");
-        let info = camera_info(1.0);
-        for v in info.K.iter().chain(&info.D).chain(&info.P) {
-            assert!(yaml.contains(&format!("- {v:?}")), "{v} not in the yaml");
-        }
+    fn camera_info_parses_from_the_python_dump() {
+        let info = config().camera_info;
         assert_eq!((info.width, info.height), (1280, 720));
+        assert_eq!(info.header.frame_id, CAMERA_FRAME);
+        assert_eq!(info.K[0], 797.4756164864929);
+        assert_eq!(info.D.len(), 4);
     }
 
     #[test]
     fn mount_tree_reroots_at_the_lidar() {
-        let body = mount_tree([0.0, 60.0, 0.0], BODY_FRAME, 1.0);
+        let mut c = config();
+        let body = mount_tree(&c, 1.0);
         let optical = body[2].rotation();
         let q = optical.quaternion();
         assert!(
             (q.coords - dimos_module::nalgebra::Vector4::new(-0.5, 0.5, -0.5, 0.5)).norm() < 1e-9
         );
-        let lidar = mount_tree([0.0, 60.0, 0.0], MID360_FRAME, 1.0);
+        c.tf_root = MID360_FRAME.into();
+        let lidar = mount_tree(&c, 1.0);
         let parents: Vec<_> = lidar
             .iter()
             .map(|t| (t.parent.as_str(), t.child.as_str()))

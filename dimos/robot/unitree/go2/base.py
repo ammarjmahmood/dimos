@@ -39,13 +39,23 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.String import String
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.tf.static_tf_publisher import StaticTfPublisherConfig
-from dimos.robot.unitree.go2.go2_mid360_static_transforms import MID360_MOUNT_PRESETS
+from dimos.robot.unitree.go2.connection import _camera_info_static
+from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
+    CAMERA_XYZ,
+    MID360_MOUNT_PRESETS,
+    MID360_XYZ,
+)
 
 
 class Go2BaseConfig(StaticTfPublisherConfig):
+    # base_link -> front_camera, and front_camera -> mid360_link, in metres.
+    camera_xyz: tuple[float, float, float] = CAMERA_XYZ
+    mid360_xyz: tuple[float, float, float] = MID360_XYZ
     # front_camera -> mid360_link, fixed-axis rpy in degrees. Either a raw (roll, pitch,
     # yaw) tuple or a name from MID360_MOUNT_PRESETS.
     mid360_mount: tuple[float, float, float] | str = MID360_MOUNT_PRESETS["SF"]
+    # The front camera's calibration, published at camera_info_hz.
+    camera_info: CameraInfo = Field(default_factory=_camera_info_static)
     camera_info_hz: float = Field(default=1.0, gt=0.0)
     # The frame the live odometry moves; the mount edges above it are inverted so it
     # never gets two parents. GO2DDS publishes its own odom edge only for base_link.

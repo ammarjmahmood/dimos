@@ -670,6 +670,7 @@ dependencies = [
  "lcm-msgs",
  "serde",
  "serde-big-array",
+ "serde_json",
  "tokio",
  "tracing",
  "validator",
