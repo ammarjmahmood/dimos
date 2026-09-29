@@ -63,6 +63,8 @@ class GlobalConfig(BaseSettings):
     simulation: str = ""
     replay: bool = False
     replay_db: str = "go2_short"
+    # Exit once every subscribed replay stream finishes (with --replay).
+    replay_exit: bool = False
     record: Literal["", "sqlite", "mcap"] = ""
     record_engine: Literal["python", "rust"] = Field(default="python", validate_default=True)
     record_topics: str = "*"  # comma-separated globs on the topic slug (/a/b -> a_b)
@@ -110,6 +112,10 @@ class GlobalConfig(BaseSettings):
     mujoco_global_map_from_pointcloud: str | None = None
     mujoco_start_pos: str = "-1.0, 1.0"
     mujoco_steps_per_frame: int = 7
+    # Shadow-mapping the office scene costs ~4x per offscreen render on
+    # integrated GPUs (e.g. Apple Silicon), dropping the sim below realtime.
+    # "auto" keeps shadows and turns them off if the sim falls behind realtime.
+    mujoco_shadows: Literal["auto", "on", "off"] = "auto"
     scene_package: str | None = None
     robot_model: str | None = None
     robot_id: str | None = None
