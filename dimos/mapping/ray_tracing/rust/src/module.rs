@@ -71,6 +71,16 @@ impl RayTracingVoxelMap {
         // Register with the transform nearest the cloud stamp, waiting briefly
         // for one still in flight rather than dropping the cloud.
         let stamp = time_secs(&msg.header.stamp);
+        // Age against the newest transform for this frame rather than the wall clock, so a replay ages the same way.
+        let latest = self
+            .tf
+            .get_latest(&self.config.world_frame, &msg.header.frame_id)
+            .map_or(stamp, |latest| latest.ts);
+        let age = latest - stamp;
+        if self.config.max_cloud_age_s > 0.0 && age > self.config.max_cloud_age_s {
+            warn_throttled!(Duration::from_secs(5), age_s = age, cloud_frame = %msg.header.frame_id, "Skipped a cloud older than max_cloud_age_s: the map is behind and catching up.");
+            return;
+        }
         let tolerance = self.config.tf_match_tolerance_s;
         let lookup = self
             .tf
@@ -331,6 +341,7 @@ mod tests {
             region_percentile: 95.0,
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
+            max_cloud_age_s: 0.0,
             worker_threads: 4,
         };
         let mut map = VoxelMap::default();
