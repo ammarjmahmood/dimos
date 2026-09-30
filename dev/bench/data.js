@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790690302965,
+  "lastUpdate": 1790786698279,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -915,6 +915,102 @@ window.BENCHMARK_DATA = {
             "value": 0.163,
             "unit": "MB",
             "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "69774903+aclauer@users.noreply.github.com",
+            "name": "Andrew Lauer",
+            "username": "aclauer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "006e0a0cd4420565ac94eede3f430315a1a8ee36",
+          "message": "chore: deprecate nav record flag (#4319)",
+          "timestamp": "2026-09-30T19:41:06+03:00",
+          "tree_id": "def5dd54c9cebdd293ad4a98754b96eb92984ebd",
+          "url": "https://github.com/dimensionalOS/dimos/commit/006e0a0cd4420565ac94eede3f430315a1a8ee36"
+        },
+        "date": 1790786697210,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 5.883,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 11.828,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "run cpu",
+            "value": 19.489,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 13.822,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 5.667,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "peak memory",
+            "value": 2684.922,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "peak threads",
+            "value": 403,
+            "unit": "threads",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "disk read",
+            "value": 24.371,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "disk write",
+            "value": 11.016,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "network (transport)",
+            "value": 2739.473,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "network (external rx)",
+            "value": 0.099,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          },
+          {
+            "name": "network (external tx)",
+            "value": 0.14,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
           }
         ]
       }
