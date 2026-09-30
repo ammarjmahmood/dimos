@@ -43,7 +43,7 @@ from dimos.experimental.memory.rust_recorder import (
 from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
-from dimos.imitation.dataprep.core import SyncConfig
+from dimos.imitation.dataprep.core import EpisodeExtractor, SyncConfig, extract_episodes
 from dimos.memory.codecs.lcm import LcmCodec
 from dimos.memory.codecs.lz4 import Lz4Codec
 from dimos.memory.store.mcap import McapStore
@@ -51,6 +51,7 @@ from dimos.memory.store.sqlite import SqliteStore
 from dimos.memory.type.observation import Observation
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
@@ -65,6 +66,7 @@ _MCAP_AVAILABLE = importlib.util.find_spec("mcap") is not None
 
 
 class InteropRustRecorder(RustRecorder):
+    status: In[EpisodeStatus]
     color_image: In[Image]
     imu: In[Imu]
 
@@ -252,6 +254,16 @@ def _capture_native_artifact(
         gossip=False,
         connect_timeout=5,
     )
+    status_publisher: ZenohTransport[EpisodeStatus] = ZenohTransport(
+        ZenohTopic(f"dimos/rr_status_{channel_suffix}", EpisodeStatus),
+        session_pool=session_pool,
+        mode="client",
+        connect=[endpoint],
+        multicast=False,
+        gossip=False,
+        connect_timeout=5,
+    )
+    recorder.status.transport = FakeTransport(status_publisher.channel)
     imu_topic = publisher.channel
     image_topic = image_publisher.channel
     recorder.imu.transport = FakeTransport(imu_topic)  # type: ignore[assignment]
@@ -291,6 +303,19 @@ def _capture_native_artifact(
             frame_id="camera",
             ts=12.75,
         )
+        for ts, event, state in [(12.0, "start", "recording"), (13.0, "save", "idle")]:
+            status_publisher.broadcast(
+                None,
+                EpisodeStatus(
+                    ts=ts,
+                    state=state,
+                    episodes_saved=int(event == "save"),
+                    episodes_discarded=0,
+                    last_event=event,
+                    task_label="拿起积木",
+                ),
+            )
+            _wait_for_log(process, "memory recorder batch written")
         publisher.broadcast(None, expected)
         image_publisher.broadcast(None, expected_image)
         _wait_for_log(process, "memory recorder batch written")
@@ -298,6 +323,7 @@ def _capture_native_artifact(
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=10.0) == 0
     finally:
+        status_publisher.stop()
         publisher.stop()
         image_publisher.stop()
         session_pool.close_all()
@@ -311,9 +337,14 @@ def _capture_native_artifact(
     else:
         memory = McapStore(
             path=str(artifact),
-            codecs={"imu": Lz4Codec(LcmCodec(Imu))},
+            codecs={"imu": Lz4Codec(LcmCodec(Imu)), "status": LcmCodec(EpisodeStatus)},
         )
     with memory:
+        episodes = extract_episodes(memory, EpisodeExtractor())
+        assert len(episodes) == 1
+        assert episodes[0].start_ts == 12.0
+        assert episodes[0].end_ts == 13.0
+        assert episodes[0].task_label == "拿起积木"
         observation = cast("Observation[Imu]", memory.stream("imu").first())
         assert observation.ts == 12.5
         assert observation.data.lcm_encode() == expected.lcm_encode()
