@@ -20,7 +20,7 @@ use nalgebra::linalg::SymmetricEigen;
 use nalgebra::{Matrix3, Vector3, U3};
 use rayon::prelude::*;
 
-use super::{Voxel, VoxelKey, VoxelMap};
+use super::{ChunkMap, VoxelKey, VoxelMap};
 
 pub(super) const NORMAL_MIN_POINTS: u32 = 3;
 const NORMAL_NEIGHBOR_RADIUS: i32 = 1;
@@ -76,7 +76,7 @@ struct Neighbor {
 
 /// Fit a voxel's normal from one scan of its neighborhood.
 pub(super) fn pooled_normal(
-    voxels: &AHashMap<VoxelKey, Voxel>,
+    voxels: &ChunkMap,
     key: VoxelKey,
     voxel_size: f32,
 ) -> Option<(Vector3<f32>, f32)> {

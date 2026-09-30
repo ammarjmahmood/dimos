@@ -52,7 +52,7 @@ fn update_map_drops_invalid_and_out_of_range_points() {
         (2.5, 0.5, 0.5),
     ];
     update_map(&mut map, origin, &points, &cfg);
-    let keys: Vec<VoxelKey> = map.voxels.keys().copied().collect();
+    let keys: Vec<VoxelKey> = map.voxels.keys().collect();
     assert_eq!(keys, vec![(2, 0, 0)], "only the valid in-range point lands");
 }
 
@@ -76,7 +76,7 @@ fn find_misses_along_ray_hits_correct_voxels() {
     ]
     .into_iter()
     .collect();
-    let mut map_voxels: AHashMap<VoxelKey, Voxel> = AHashMap::new();
+    let mut map_voxels = ChunkMap::default();
     for v in &expected {
         let mut voxel = Voxel::with_health(1);
         voxel.normal = NormalFit::Fitted(None);
@@ -333,12 +333,8 @@ fn ground_clipping_single_ray() {
     for &range in &ranges {
         let (mut map, _) = build_surface(&floor_points, voxel_size, cfg.max_health);
         // The ray walks the y=0, z=0 row, so only that row is ever at risk.
-        let center_row: Vec<VoxelKey> = map
-            .voxels
-            .keys()
-            .copied()
-            .filter(|k| k.1 == 0 && k.2 == 0)
-            .collect();
+        let center_row: Vec<VoxelKey> =
+            map.voxels.keys().filter(|k| k.1 == 0 && k.2 == 0).collect();
         let n_before = center_row.len();
 
         let origin = (0.0_f32, 0.0_f32, lidar_height);
@@ -752,12 +748,7 @@ fn grazing_ray_spares_planar_floor() {
         worker_threads: 4,
     };
     let (mut map, _) = build_surface(&floor, voxel_size, cfg.max_health);
-    let row: Vec<VoxelKey> = map
-        .voxels
-        .keys()
-        .copied()
-        .filter(|k| k.1 == 0 && k.2 == 0)
-        .collect();
+    let row: Vec<VoxelKey> = map.voxels.keys().filter(|k| k.1 == 0 && k.2 == 0).collect();
     update_map(&mut map, origin, &ray, &cfg);
     let clipped = row.iter().filter(|k| !map.voxels.contains_key(k)).count();
     assert_eq!(clipped, 0, "a planar floor keeps its grazing spare");
@@ -812,7 +803,7 @@ fn emit_points_naive(
 ) -> Vec<(f32, f32, f32)> {
     let in_bounds = |x, y, z| bounds.is_none_or(|b| b.contains(x, y, z));
     let mut out = Vec::with_capacity(map.voxels.len() + live.len());
-    for (&key, c) in map.voxels.iter() {
+    for (key, c) in map.voxels.iter() {
         if c.health <= 0 {
             continue;
         }
@@ -900,11 +891,9 @@ fn emit_points_matches_naive_scan_on_random_maps() {
     }
 }
 
-/// The healthy-chunk index must stay lean regardless of how many unhealthy
-/// entries pile up in `voxels`. Indexing on health transitions instead of
-/// scanning every entry at emit time is its whole point.
+/// Unhealthy voxels never reach an emitted cloud, however many there are.
 #[test]
-fn healthy_chunk_index_excludes_dead_entries_regardless_of_count() {
+fn emit_skips_unhealthy_voxels() {
     let mut map = VoxelMap::default();
     for i in 0..50_000_i32 {
         map.set_health((i % 500, (i / 500) % 500, 0), 0); // health=0, never healthy
@@ -918,25 +907,19 @@ fn healthy_chunk_index_excludes_dead_entries_regardless_of_count() {
     let live = AHashSet::new();
     let points = tuples(emit_points(&map, 1.0, None, 0, &live));
     assert_eq!(points.len(), 9, "only the healthy patch is emitted");
-
-    let indexed: usize = map.healthy_chunks.values().map(|s| s.len()).sum();
-    assert_eq!(
-        indexed, 9,
-        "dead entries never enter the healthy-chunk index"
-    );
 }
 
 /// `update_map` drives both `record_hit` (new voxel becomes healthy) and
-/// `record_miss` (healthy voxel cleared). The index must track both.
+/// `record_miss` (healthy voxel cleared). The emitted map must follow both.
 #[test]
-fn healthy_chunk_index_tracks_health_transitions_through_update_map() {
+fn emit_tracks_health_transitions_through_update_map() {
     let cfg = basic_config(); // min_health=0, max_health=1
     let mut map = VoxelMap::default();
     map.set_health((3, 0, 0), 1);
+    let live = AHashSet::new();
     assert_eq!(
-        map.healthy_chunks.values().map(|s| s.len()).sum::<usize>(),
-        1,
-        "set_health() indexes the healthy voxel"
+        tuples(emit_points(&map, 1.0, None, 0, &live)),
+        vec![(3.5, 0.5, 0.5)]
     );
 
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
@@ -945,15 +928,10 @@ fn healthy_chunk_index_tracks_health_transitions_through_update_map() {
         !map.voxels.contains_key(&(3, 0, 0)),
         "voxel on the ray is cleared"
     );
-    let indexed: Vec<VoxelKey> = map
-        .healthy_chunks
-        .values()
-        .flat_map(|s| s.iter().copied())
-        .collect();
     assert_eq!(
-        indexed,
-        vec![(5, 0, 0)],
-        "index drops the cleared voxel and gains the new hit"
+        tuples(emit_points(&map, 1.0, None, 0, &live)),
+        vec![(5.5, 0.5, 0.5)],
+        "emit drops the cleared voxel and gains the new hit"
     );
 }
 
@@ -998,7 +976,7 @@ fn support_field_matches_neighbor_scan_after_random_transitions() {
                 }
             }
 
-            let keys: Vec<VoxelKey> = map.voxels.keys().copied().collect();
+            let keys: Vec<VoxelKey> = map.voxels.keys().collect();
             for k in keys {
                 let want = map.count_healthy_neighbors(k);
                 let got = map.voxels[&k].support;
@@ -1202,7 +1180,7 @@ fn milestone_gated_normals_match_full_refit() {
     }
 
     let mut checked = 0;
-    for (&key, v) in map.voxels.iter() {
+    for (key, v) in map.voxels.iter() {
         if v.num_pts < 10 {
             continue;
         }
@@ -1275,7 +1253,7 @@ fn emit_points_fine_naive(
 ) -> Vec<(f32, f32, f32)> {
     let fine_size = voxel_size / divisor as f32;
     let mut out = Vec::new();
-    for (&key, v) in map.voxels.iter() {
+    for (key, v) in map.voxels.iter() {
         if v.health <= 0 {
             continue;
         }

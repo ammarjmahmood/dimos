@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn clear_mask_cloud_round_trips_to_the_voxels_it_covers() {
         let map = map_with_healthy(&[(3, -2, 1)]);
-        let occupied: Vec<VoxelKey> = map.voxels.keys().copied().collect();
+        let occupied: Vec<VoxelKey> = map.voxels.keys().collect();
         assert_eq!(occupied, vec![(3, -2, 1)]);
 
         // A mask cloud naming that voxel's center, encoded and decoded exactly
