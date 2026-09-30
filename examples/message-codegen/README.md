@@ -1311,3 +1311,13 @@ on the host and has not passed the current host's default-interface gate.
 The recording remains for viewer inspection; no producer or router remains.
 See [recording evidence](evidence/blueprint-recording.md) for the verified run
 and remaining viewer/transport acceptance gates.
+
+### Build the release wheel matrix without publishing
+
+The `release-build-check.yml` workflow accepts a manual `full-matrix=true`
+dispatch on the proposal branch. It builds and runs the installed-wheel smoke
+test for Python 3.10, 3.11 and 3.12 on Linux x86-64, Linux ARM64 and macOS ARM64,
+and checks the source archive. Successful wheels are retained as review artifacts.
+It has no package-publishing or release-tag jobs. Ordinary pull requests retain
+the single-wheel smoke check. The release workflow's `dry-run` publishes to
+TestPyPI and is not a substitute for this build-only check.
