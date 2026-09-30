@@ -106,6 +106,15 @@ def occupancy_from_file(path: Path, *, header: Header, resolution: float = 0.05)
         cells[cells == 255] = -1
     else:
         raise ValueError(f"Unsupported occupancy file format: {path.suffix}")
+    return occupancy_from_array(cells, header=header, resolution=resolution)
+
+
+def occupancy_from_array(
+    cells: NDArray[Any], *, header: Header, resolution: float, origin: Pose | None = None
+) -> OccupancyGrid:
+    """Copy a 2D ROS occupancy array with explicit map metadata."""
+    if not math.isfinite(resolution) or resolution <= 0:
+        raise ValueError("OccupancyGrid resolution must be finite and positive")
     if cells.ndim != 2 or cells.dtype.kind not in "iu":
         raise ValueError("Occupancy cells must be a 2D integer array")
     if np.any((cells < -1) | (cells > 100)):
@@ -117,7 +126,7 @@ def occupancy_from_file(path: Path, *, header: Header, resolution: float = 0.05)
             resolution=resolution,
             height=cells.shape[0],
             width=cells.shape[1],
-            origin=Pose(orientation=Quaternion(w=1)),
+            origin=origin if origin is not None else Pose(orientation=Quaternion(w=1)),
         ),
         data=cells.astype(np.int8).reshape(-1),
     )

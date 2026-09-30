@@ -80,3 +80,16 @@ Image file/selection tests use deterministic temporary pixels and real sharpness
 calculation in virtual-time windows. The manual pickle tool retains only its
 raw-array input path, converting to generated images after loading; no old typed
 message decoding was added. Manual publishers and hardware tools were not run.
+
+## Geometry and map follow-up
+
+Local checks: 42 wrench/geometry, 12 odometry, 78 point-cloud/viewer and 32 occupancy
+tests passed. Strict scoped mypy passed geometry.py, pointcloud.py, occupancy.py
+and the Rerun helper. Force/torque arrays and axis-aligned finite cloud bounds
+are external functions; generated types stay value containers. Point-field tests
+retain intensity, zero offset_time, tag, line and all original overlap scenarios.
+Occupancy tests retain unknown/free/occupied counts, threshold filtering, origin
+yaw, coordinate conversion and obstacle-preserving reduction. Borrowed views
+remain read-only; tests mutate declared message data explicitly. ROS float32
+resolution is compared with numerical tolerances instead of assuming Python
+float64 storage.

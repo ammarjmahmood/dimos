@@ -337,3 +337,12 @@ def pointcloud_to_open3d(message: PointCloud2) -> Any:
     if colors is not None:
         result.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
     return result
+
+
+def cloud_bounds_intersect(first: PointCloud2, second: PointCloud2) -> bool:
+    """Test closed axis-aligned bounds; empty or entirely nonfinite clouds do not intersect."""
+    a, b = pointcloud_xyz(first), pointcloud_xyz(second)
+    a, b = a[np.isfinite(a).all(axis=1)], b[np.isfinite(b).all(axis=1)]
+    if len(a) == 0 or len(b) == 0:
+        return False
+    return bool(np.all(a.min(axis=0) <= b.max(axis=0)) and np.all(a.max(axis=0) >= b.min(axis=0)))

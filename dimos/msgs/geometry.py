@@ -14,6 +14,7 @@
 
 """Geometry operations on generated ROS value types."""
 
+from collections.abc import Sequence
 import math
 
 from dimos_generated.geometry_msgs.msg import (
@@ -24,6 +25,7 @@ from dimos_generated.geometry_msgs.msg import (
     Transform,
     TransformStamped,
     Vector3,
+    Wrench,
 )
 from dimos_generated.nav_msgs.msg import Odometry
 from dimos_generated.std_msgs.msg import Header
@@ -222,3 +224,29 @@ def point_distance(first: Point, second: Point) -> float:
 def quaternion_angle(first: Quaternion, second: Quaternion) -> float:
     """Return the shortest angular separation in radians, normalizing inputs."""
     return float((_rotation(first).inv() * _rotation(second)).magnitude())
+
+
+def wrench_from_array(values: Sequence[float] | NDArray[np.float64]) -> Wrench:
+    """Copy force in N and torque in Nm from [fx, fy, fz, tx, ty, tz]."""
+    array = np.asarray(values, dtype=np.float64)
+    if array.shape != (6,):
+        raise ValueError("Expected 6 elements [fx, fy, fz, tx, ty, tz]")
+    return Wrench(
+        force=Vector3(x=array[0], y=array[1], z=array[2]),
+        torque=Vector3(x=array[3], y=array[4], z=array[5]),
+    )
+
+
+def wrench_array(message: Wrench) -> NDArray[np.float64]:
+    """Return an independent numeric force/torque array for arithmetic."""
+    return np.array(
+        [
+            message.force.x,
+            message.force.y,
+            message.force.z,
+            message.torque.x,
+            message.torque.y,
+            message.torque.z,
+        ],
+        dtype=np.float64,
+    )

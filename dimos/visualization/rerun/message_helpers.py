@@ -154,6 +154,7 @@ def cloud_archetype(
     voxel_size: float = 0.05,
     mode: str = "spheres",
     colors: Sequence[int] | NDArray[np.uint8] | None = None,
+    rgb: bool = True,
     bottom_cutoff: float | None = None,
     ui_radius: float = 2.0,
     fill_mode: Literal["solid", "majorwireframe", "densewireframe"] = "solid",
@@ -163,7 +164,7 @@ def cloud_archetype(
 
     points = pointcloud_xyz(message)
     if colors is None:
-        colors = pointcloud_rgb(message)
+        colors = pointcloud_rgb(message) if rgb else None
     else:
         color_array = np.asarray(colors)
         if color_array.shape in {(3,), (4,)}:
