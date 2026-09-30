@@ -360,7 +360,6 @@ go2_viewer = autoconnect(
             "topics": [
                 "tf",
                 "odometry",
-                "local_map",
                 "path",
                 "planner_path",
                 "nodes",
@@ -376,8 +375,8 @@ go2_viewer = autoconnect(
                 "image",
                 "camera_info",
             ],
-            # the map's own rate is the lidar's, more than a screen or a bad link needs
-            "max_hz": {"world/local_map": 4.0, "world/surface_map": 1.0},
+            # throttled after receipt: the link still carries every message
+            "max_hz": {"world/surface_map": 1.0},
         },
     ),
 ).global_config(
