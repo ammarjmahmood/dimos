@@ -93,3 +93,25 @@ yaw, coordinate conversion and obstacle-preserving reduction. Borrowed views
 remain read-only; tests mutate declared message data explicitly. ROS float32
 resolution is compared with numerical tolerances instead of assuming Python
 float64 storage.
+
+## Generated geometry regression continuation
+
+The Vector3, Quaternion, Pose, Transform, and Twist suites now use generated
+values and explicit external math. Non-unit Hamilton products/inverses, zero
+errors, rotated local offsets, frame composition, independent ROS decoding,
+and original numerical tolerances remain covered. Constructor coverage now
+checks explicit nested fields, deep-copy isolation, covariance lengths and
+layout, zero/default timestamps, exact nanoseconds, and rejection of retired
+polymorphic fields. Stamped values are distinct from their payloads.
+
+Offline message-directory validation: **614 passed** with only
+`tf2_msgs/test_TFMessage_lcmpub.py` excluded. The attempted whole-directory run
+also produced 614 passes, but that real multicast test failed host LCM self-test
+and thread teardown; this remains an environment-dependent gate, not a pass.
+No host routing/firewall configuration was changed. Strict scoped mypy for
+`dimos/msgs/geometry.py` and repository hooks passed.
+
+Published commit `0bac7f454bcd2f61766c0246e38a40016c62746c` has terminal success
+for main CI 36765815202 and codegen CI 36765824915. Self-hosted lanes were
+skipped. These results do not cover subsequent local commits until their own
+exact-HEAD workflows complete.
