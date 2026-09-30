@@ -1249,3 +1249,40 @@ this batch or the entire migration complete.
 WebXR control-path edits and full memory-document execution remain paused after
 automatic approval rejection. Eight pending files are excluded from this batch.
 No hardware, network configuration, or live-control acceptance test was performed.
+
+
+### Generated relocalization and offline memory viewers
+
+The next batch completes runtime CDR premap loading (`.pc2.cdr`), generated TF
+publication/placement, lidar scan-window merging, and Go2 premap/live-map merging.
+Matching thresholds and native algorithms remain unchanged. Offline tuning and
+map viewing now use generated point-cloud APIs. The existing synthetic map-view
+case moved out of the self-hosted asset suite and writes an RRD in ordinary tests.
+Go2 DDS offline odometry/IMU integration and path/camera/cloud rendering use
+nested generated values; measured extrinsics retain the previous SciPy
+normalization of the six-decimal rotation.
+
+Memory-store Rerun output dispatches through generated-message helpers outside
+message classes and keeps explicit application adapters. Camera pairing and
+first-TF timing are preserved. Space camera rendering and near queries now use
+generated calibration/image/nested pose fields. Query radius boundary behavior
+is unchanged, and prior path/image/cloud snapshots remain unmodified.
+
+**55 focused checks passed** in the batch: 29 relocalization/DDS/map-view/CLI and
+camera/cloud bridge tests, 12 memory-render tests, 8 generated near-query cases,
+2 actual Rerun scene/camera tests, and 4 PGO/codebase-constructor checks. The pure
+memory tests were run with scoped confcutdir to avoid unrelated parent CLIP
+fixtures; they do not establish full model-dependent memory behavior. Two SVG
+cases remain locally blocked by missing numba. Strict scoped mypy passed for
+15 production files. Native mesh/perception fixtures still require CI because
+Open3D/hydra are absent locally.
+
+Previous exact published commit 31800fc679ecd5e904ca860ca49bd1cab511d191 passed
+message-codegen, Native C++/Rust, Rust and Web CI. Main CI failed: lint had 5 errors
+in 2 files; ARM had 6057 passed, 229 skipped and 3 failed. Other Python lanes were
+cancelled by fail-fast. This batch repairs those five consumer type errors and
+three identified fixture failures; the new exact-commit CI remains required.
+md-babel still fails on old memory documentation codecs; the paused eight files
+are excluded again. Historical `.pc2.lcm` map assets must be regenerated or
+explicitly migrated before using the CDR loader; none was downloaded or rewritten.
+Final legacy API/dependency retirement and viewer UI acceptance remain open.

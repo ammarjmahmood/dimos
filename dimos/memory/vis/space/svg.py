@@ -201,8 +201,8 @@ def _render_camera(el: Camera, b: Bounds) -> str:
     yaw = message_yaw(el.pose)
     stroke, alpha = _style(el)
 
-    if el.camera_info and el.camera_info.K[4] > 0:
-        fy = el.camera_info.K[4]
+    if el.camera_info and el.camera_info.k[4] > 0:
+        fy = el.camera_info.k[4]
         fov_y = 2 * math.atan(el.camera_info.height / (2 * fy))
         fov_half = fov_y / 2
         wedge_len = 0.8

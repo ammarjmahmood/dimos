@@ -13,12 +13,14 @@
 # limitations under the License.
 
 import math
+import sys
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 
-from dimos.mapping.loop_closure.pgo import Keyframe, PoseGraph, _KeyPose, _PGOState
+from dimos.mapping.loop_closure.pgo import Keyframe, PGOConfig, PoseGraph, _KeyPose, _PGOState
 from dimos.memory.type.observation import Observation
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -49,7 +51,7 @@ def test_pose_graph_retains_poseless_observations_without_constructing_correctio
     assert list(PoseGraph()(iter([source]))) == [source]
 
 
-def test_pgo_submap_places_generated_body_clouds_before_merging():
+def test_pgo_submap_places_generated_body_clouds_before_merging(monkeypatch):
     class MatrixPose:
         def __init__(self, x):
             self.value = np.eye(4)
@@ -58,8 +60,22 @@ def test_pgo_submap_places_generated_body_clouds_before_merging():
         def matrix(self):
             return self.value
 
-    state = object.__new__(_PGOState)
-    state._cfg = SimpleNamespace(submap_resolution=0.2)
+    solver = SimpleNamespace(
+        **{
+            name: MagicMock(name=name)
+            for name in (
+                "Pose3",
+                "ISAM2Params",
+                "ISAM2",
+                "NonlinearFactorGraph",
+                "Values",
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "gtsam", solver)
+    state = _PGOState(PGOConfig(submap_resolution=0.2))
+    solver.ISAM2Params.return_value.setRelinearizeThreshold.assert_called_once_with(0.01)
+    assert solver.ISAM2Params.return_value.relinearizeSkip == 1
     clouds = [
         pointcloud_from_xyz(
             np.array([[1.0, 0.0, 0.0]]), header=Header(frame_id="body", stamp=time_from_seconds(ts))

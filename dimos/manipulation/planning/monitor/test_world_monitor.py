@@ -19,7 +19,7 @@ from typing import Any
 
 from dimos_generated.builtin_interfaces.msg import Time
 from dimos_generated.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion, Vector3
-from dimos_generated.sensor_msgs.msg import JointState
+from dimos_generated.sensor_msgs.msg import Image, JointState
 from dimos_generated.std_msgs.msg import Header
 from dimos_generated.trajectory_msgs.msg import JointTrajectory
 from dimos_generated.vision_msgs.msg import BoundingBox3D, Detection3D
@@ -43,8 +43,7 @@ from dimos.manipulation.planning.spec.models import (
 from dimos.manipulation.planning.spec.protocols import VisualizationSpec
 from dimos.manipulation.planning.utils import mesh_utils
 from dimos.msgs.geometry import quaternion_from_matrix
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.pointcloud import pointcloud_from_xyz, pointcloud_to_open3d
 from dimos.msgs.time import header_now
 from dimos.perception.experimental.object import Object
 from dimos.robot.assets.model import RobotModel
@@ -933,10 +932,10 @@ def test_mesh_obstacle_is_placed_at_the_hull_centroid_without_the_bbox_rotation(
     add_obstacle = mocker.patch.object(parent, "add_obstacle", return_value="parent-id")
 
     points = _tilted_box_cloud()
-    cloud = PointCloud2.from_numpy(points, frame_id="world")
+    cloud = pointcloud_from_xyz(points, header=Header(frame_id="world"))
     # Mirrors Object.from_detections with use_aabb=False: pose carries the
     # oriented-box center and rotation.
-    obb = cloud.pointcloud.get_oriented_bounding_box()
+    obb = pointcloud_to_open3d(cloud).get_oriented_bounding_box()
     obj = Object(
         object_id="tilted-box",
         name="box",

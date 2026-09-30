@@ -220,7 +220,8 @@ def test_owlv2_yolo_constructs_box_prompt_segmenter(mocker: Any) -> None:
 def test_moondream_queries_each_configured_prompt(monkeypatch: Any) -> None:
     module = ObjectSceneRegistrationModule(target_frame="camera", detector_backend="moondream")
     module._camera_info = MagicMock()
-    module._detector = MagicMock()
+    detector = MagicMock()
+    module._detector = detector
     module._text_prompts = ["cup", "bottle"]
     module.detections_2d = MagicMock()
     color = image_from_array(
@@ -230,7 +231,7 @@ def test_moondream_queries_each_configured_prompt(monkeypatch: Any) -> None:
     )
     cup = Detection2DBBox((0, 0, 1, 1), 0, -1, 0.9, "cup", 4.0, color)
     bottle = Detection2DBBox((1, 1, 2, 2), 0, -1, 0.8, "bottle", 4.0, color)
-    module._detector.query_detections.side_effect = [
+    detector.query_detections.side_effect = [
         ImageDetections2D(color, [cup]),
         ImageDetections2D(color, [bottle]),
     ]
@@ -242,7 +243,7 @@ def test_moondream_queries_each_configured_prompt(monkeypatch: Any) -> None:
     finally:
         module.stop()
 
-    assert module._detector.query_detections.call_args_list == [
+    assert detector.query_detections.call_args_list == [
         call(color, "cup"),
         call(color, "bottle"),
     ]
@@ -250,7 +251,6 @@ def test_moondream_queries_each_configured_prompt(monkeypatch: Any) -> None:
     assert combined.detections == [cup, bottle]
     assert (cup.track_id, cup.class_id) == (-1, 0)
     assert (bottle.track_id, bottle.class_id) == (-1, 1)
-    module.stop()
 
 
 def test_edgetam_refines_detector_output(monkeypatch: Any) -> None:

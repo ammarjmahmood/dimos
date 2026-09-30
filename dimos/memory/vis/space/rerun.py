@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from dimos_generated.geometry_msgs.msg import Quaternion, Transform, TransformStamped, Vector3
 from dimos_generated.nav_msgs.msg import OccupancyGrid
-from dimos_generated.sensor_msgs.msg import PointCloud2
+from dimos_generated.sensor_msgs.msg import Image, PointCloud2
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 
@@ -38,6 +38,7 @@ from dimos.msgs.geometry import (
 )
 from dimos.msgs.occupancy import occupancy_extent, occupancy_view
 from dimos.msgs.pointcloud import pointcloud_rgb, pointcloud_xyz
+from dimos.visualization.rerun.message_helpers import camera_pinhole, image_archetype
 
 if TYPE_CHECKING:
     from dimos.memory.vis.space.space import Space
@@ -268,11 +269,11 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
         matrix = pose_matrix(el.pose.pose)
         rr.log(path, rr.Transform3D(translation=matrix[:3, 3], mat3x3=matrix[:3, :3]), static=True)
         if el.camera_info:
-            pinhole = el.camera_info.to_rerun()
+            pinhole = camera_pinhole(el.camera_info)
             assert not isinstance(pinhole, list)
             rr.log(path, pinhole, static=True)
         elif el.image:
-            h, w = el.image.shape[:2]
+            h, w = el.image.height, el.image.width
             focal = max(w, h)
             rr.log(
                 path,
@@ -280,7 +281,7 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
                 static=True,
             )
         if el.image:
-            rr.log(f"{path}/image", el.image.to_rerun(), static=True)
+            rr.log(f"{path}/image", image_archetype(el.image), static=True)
 
     for i, obs in enumerate(observations):
         path = f"scene/observations/{i}"
@@ -298,7 +299,7 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
             rr.log(
                 path, rr.Transform3D(translation=matrix[:3, 3], mat3x3=matrix[:3, :3]), static=True
             )
-            h, w = img.shape[:2]
+            h, w = img.height, img.width
             focal = max(w, h)
             rr.log(
                 path,
@@ -310,7 +311,7 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
                 ),
                 static=True,
             )
-            rr.log(f"{path}/image", img.to_rerun(), static=True)
+            rr.log(f"{path}/image", image_archetype(img), static=True)
         elif isinstance(data, PointCloud2):
             matrix = pose_matrix(ps.pose)
             rr.log(
@@ -375,12 +376,11 @@ def render(space: Space, app_id: str = "space", spawn: bool = True) -> None:
     for i, obs in enumerate(panels):
         img = _as_image(obs.data)
         if img is not None:
-            rr.log(f"scene/panels/{i}", img.to_rerun(), static=True)
+            rr.log(f"scene/panels/{i}", image_archetype(img), static=True)
 
 
 def _as_image(data: Any) -> Any | None:
     """Return an Image if data is an Image or ImageDetections, else None."""
-    from dimos.msgs.sensor_msgs.Image import Image
     from dimos.perception.detection.type.imageDetections import ImageDetections
 
     if isinstance(data, Image):

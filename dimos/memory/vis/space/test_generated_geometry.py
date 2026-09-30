@@ -28,7 +28,9 @@ import rerun as rr
 from dimos.memory.vis.space.elements import Arrow, Camera, Point, Polyline, Pose
 from dimos.memory.vis.space.rerun import render
 from dimos.memory.vis.space.space import Space
+from dimos.msgs.camera_info import camera_info_from_intrinsics
 from dimos.msgs.geometry import quaternion_from_euler
+from dimos.msgs.image import image_from_array
 from dimos.msgs.pointcloud import pointcloud_from_xyz
 
 
@@ -122,3 +124,32 @@ def test_generated_cloud_renders_in_svg_and_rerun(mocker):
         logged["scene/pointcloud/0"].positions.as_arrow_array().to_pylist(),
         [[0, 0, 0], [0.2, 0.3, 1], [1, 1, 0]],
     )
+
+
+def test_rerun_camera_uses_generated_calibration_and_image_helpers(mocker):
+    calibration = camera_info_from_intrinsics(20, 30, 2, 2, 4, 4, header=Header(frame_id="optical"))
+    image = image_from_array(
+        np.zeros((4, 4, 3), dtype=np.uint8), encoding="rgb8", header=calibration.header
+    )
+    pose = PoseStamped(
+        pose=GeoPose(position=GeoPoint(x=2), orientation=quaternion_from_euler(0, 0, 0))
+    )
+    space = Space().add(Camera(pose=pose, image=image, camera_info=calibration))
+    original = (calibration.encode(), image.encode())
+    mocker.patch("dimos.visualization.rerun.init.rerun_init")
+    log = mocker.spy(rr, "log")
+    with rr.RecordingStream("generated-camera-test") as recording:
+        recording.memory_recording()
+        try:
+            render(space, spawn=False)
+        finally:
+            recording.disconnect()
+    values = [call.args[1] for call in log.call_args_list if call.args[0] == "scene/cameras/0"]
+    assert any(isinstance(value, rr.Pinhole) for value in values)
+    pinhole = next(value for value in values if isinstance(value, rr.Pinhole))
+    assert pinhole.parent_frame.as_arrow_array().to_pylist() == ["tf#/optical"]
+    assert any(
+        call.args[0] == "scene/cameras/0/image" and isinstance(call.args[1], rr.EncodedImage)
+        for call in log.call_args_list
+    )
+    assert (calibration.encode(), image.encode()) == original

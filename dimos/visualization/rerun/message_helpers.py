@@ -181,6 +181,8 @@ def cloud_archetype(
 
 def navigation_archetype(
     message: PointStamped | PoseStamped | Odometry | Path,
+    *,
+    color: tuple[int, int, int] = (0, 255, 128),
 ) -> rr.Points3D | rr.Transform3D | rr.LineStrips3D:
     """Render generated navigation values in their declared parent frame."""
     import rerun as rr
@@ -192,7 +194,7 @@ def navigation_archetype(
         points = [
             [p.pose.position.x, p.pose.position.y, p.pose.position.z + 0.5] for p in message.poses
         ]
-        return rr.LineStrips3D([points] if points else [], colors=[0, 255, 128], radii=0.05)
+        return rr.LineStrips3D([points] if points else [], colors=color, radii=0.05)
     pose = message.pose.pose if isinstance(message, Odometry) else message.pose
     p, q = pose.position, pose.orientation
     return rr.Transform3D(
