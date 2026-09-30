@@ -94,4 +94,12 @@ def _make_one(name: str, payload_module: str, inner: Codec[Any] | None = None) -
         return CdrCodec(resolve_payload_type(payload_module))
     if name == "pickle":
         return PickleCodec()
+    if name in {"lcm", "jpeg"}:
+        raise ValueError(
+            f"Legacy recording codec {name!r} is unsupported after the CDR cutover. "
+            "Create a new CDR recording with the installed generated message package; "
+            "historical recordings must be exported with their original compatible checkout. "
+            "No legacy payload fallback or in-place conversion is provided. "
+            "See docs/development/messages.md."
+        )
     raise ValueError(f"Unknown codec: {name!r}")

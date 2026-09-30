@@ -81,7 +81,7 @@ def test_sqlite_reopen_uses_cdr_and_preserves_exact_message(message, wrapped, tm
 
 @pytest.mark.parametrize("identifier", ["lcm", "lz4+lcm", "jpeg"])
 def test_obsolete_storage_codecs_are_rejected(identifier):
-    with pytest.raises(ValueError, match="Unknown codec"):
+    with pytest.raises(ValueError, match="Legacy recording codec.*unsupported after the CDR"):
         codec_from_id(identifier, "builtins.dict")
 
 
@@ -116,3 +116,8 @@ def test_observation_pose_metadata_accepts_nested_generated_values(stamped_trans
 def test_cdr_rejects_a_message_of_the_wrong_type():
     with pytest.raises(TypeError, match="Expected geometry_msgs/msg/PoseStamped"):
         CdrCodec(PoseStamped).encode(Image())
+
+
+def test_unknown_storage_codec_is_not_misdiagnosed_as_historical_recording():
+    with pytest.raises(ValueError, match="Unknown codec: 'misspelled'"):
+        codec_from_id("misspelled", "builtins.dict")

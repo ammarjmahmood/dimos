@@ -127,3 +127,19 @@ This is an intentional API and wire break. LCM remains a raw transport; its old
 message encoding and recordings are not a supported interchange format for the
 new stack. Mixed old/new deployments, automatic legacy recording conversion,
 ROS graph integration and runtime schema-hash enforcement are outside this change.
+
+## I have a recording from before the CDR cutover
+
+Historical SQLite `lcm`, `lz4+lcm`, and private `jpeg` codec streams are an
+intentional compatibility break. The current reader rejects them with an
+actionable error; it does not reinterpret those bytes as CDR or silently
+substitute a legacy decoder. MCAP channels using `cdr` with complete `ros2msg`
+schemas and new SQLite `cdr`/`lz4+cdr` streams are the supported message paths.
+
+Preserve the old recording. Export its contents using the original compatible
+checkout, or record the source again with the installed generated message
+package. This branch does not provide an in-place legacy recording converter.
+For an offline example, use
+[`write_demo_recording`](/dimos/memory/demo_data.py) to create a new deterministic
+CDR image/pose/cloud recording; it refuses to overwrite an existing file and
+does not download data or models. It contains no learned embedding stream.
