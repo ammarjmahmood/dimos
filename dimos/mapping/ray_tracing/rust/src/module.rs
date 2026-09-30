@@ -62,6 +62,12 @@ pub struct RayTracingVoxelMap {
     last_clear_mask_stamp: f64,
 }
 
+/// Whether transforms have already moved past a cloud's stamp, so the one it needs will never
+/// arrive: waiting on it would cap a backed-up queue's drain rate at 1/TF_WAIT_TIMEOUT.
+fn transform_is_past(stamp: f64, latest_tf: Option<f64>, tolerance: f64) -> bool {
+    latest_tf.is_some_and(|latest| latest > stamp + tolerance)
+}
+
 impl RayTracingVoxelMap {
     async fn init_mapper(&mut self) {
         self.mapper = Some(Mapper::new(self.config.clone()));
@@ -71,14 +77,22 @@ impl RayTracingVoxelMap {
         // Register with the transform nearest the cloud stamp, waiting briefly
         // for one still in flight rather than dropping the cloud.
         let stamp = time_secs(&msg.header.stamp);
-        let Some(tf_pose) = self
+        let tolerance = self.config.tf_match_tolerance_s;
+        let lookup = self
             .tf
             .lookup(&self.config.world_frame, &msg.header.frame_id)
             .at(stamp)
-            .tolerance(self.config.tf_match_tolerance_s)
-            .within(TF_WAIT_TIMEOUT)
-            .await
-        else {
+            .tolerance(tolerance);
+        let latest = self
+            .tf
+            .get_latest(&self.config.world_frame, &msg.header.frame_id)
+            .map(|latest| latest.ts);
+        let found = if transform_is_past(stamp, latest, tolerance) {
+            lookup.get()
+        } else {
+            lookup.within(TF_WAIT_TIMEOUT).await
+        };
+        let Some(tf_pose) = found else {
             warn!(
                 stamp,
                 world_frame = %self.config.world_frame,
@@ -349,6 +363,13 @@ mod tests {
             (ky as f32 + 0.5).to_bits(),
             (kz as f32 + 0.5).to_bits(),
         )
+    }
+
+    #[test]
+    fn a_cloud_waits_for_its_transform_only_while_it_could_still_arrive() {
+        assert!(!transform_is_past(100.0, None, 0.1));
+        assert!(!transform_is_past(100.0, Some(100.05), 0.1));
+        assert!(transform_is_past(100.0, Some(100.5), 0.1));
     }
 
     /// The clear-mask handler names voxels by decoding a cloud and quantizing
