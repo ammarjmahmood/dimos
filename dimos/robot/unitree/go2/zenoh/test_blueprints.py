@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The camera pane has to follow the encoder: jpeg lands on `image`, h264 on `video`."""
+"""One camera entity whichever encoding GO2DDS serves: jpeg `image` is redirected onto `video`."""
 
 from typing import Any
 
+import rerun as rr
+
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+from dimos.msgs.sensor_msgs.CompressedImage import CompressedImage
 from dimos.robot.unitree.go2.zenoh.blueprints import (
-    _dds_camera,
+    CAMERA_ENTITY,
     go2_dds_motion_pointlio,
     go2_viewer,
     go2_zenoh_basic,
@@ -29,34 +33,19 @@ def _rerun_kwargs(blueprint: Any) -> dict[str, Any]:
     return atom.kwargs
 
 
-def _camera_entity(blueprint: Any) -> str:
-    kwargs = _rerun_kwargs(blueprint)
-    (pane,) = kwargs["blueprint"].args
-    # the pinhole must land on the same entity or the frustum draws empty
-    assert kwargs["visual_override"]["world/camera_info"].keywords["camera"] == pane
-    return str(pane)
-
-
-def test_camera_entity_follows_the_encoder() -> None:
-    assert _dds_camera({"GO2DDS__VIDEO_ENCODING": "jpeg"}) == "world/image"
-    assert _dds_camera({"go2dds__video_encoding": "jpeg"}) == "world/image"
-    assert _dds_camera({"GO2DDS__VIDEO_ENCODING": "h264"}) == "world/video"
-    assert _dds_camera({}) == "world/image"
-
-
-def test_dds_pointlio_pins_no_encoding() -> None:
-    # jpeg is the default; the robot's .env is what flips it to h264
-    for atom in go2_dds_motion_pointlio.active_blueprints:
-        assert "video_encoding" not in atom.kwargs
-        assert "video_fps" not in atom.kwargs
-    assert _camera_entity(go2_dds_motion_pointlio) == _dds_camera()
+def test_both_encodings_land_on_the_pane() -> None:
+    for blueprint in (go2_zenoh_basic, go2_dds_motion_pointlio, go2_viewer):
+        kwargs = _rerun_kwargs(blueprint)
+        overrides = kwargs["visual_override"]
+        assert kwargs["blueprint"]().root_container is not None
+        info = CameraInfo(width=640, height=480, frame_id="camera_optical")
+        [(pinhole_path, _)] = overrides["world/camera_info"](info)
+        jpeg = CompressedImage(data=b"\xff\xd8", format="jpeg", frame_id="camera_optical")
+        [(image_path, archetype)] = overrides["world/image"](jpeg)
+        assert pinhole_path == image_path == CAMERA_ENTITY
+        assert isinstance(archetype, rr.EncodedImage)
 
 
 def test_viewer_subscribes_both_encodings() -> None:
-    assert _camera_entity(go2_viewer) == _dds_camera()
     topics = _rerun_kwargs(go2_viewer)["topics"]
     assert {"video", "image", "camera_info"} <= set(topics)
-
-
-def test_h264_stacks_keep_the_video_pane() -> None:
-    assert _camera_entity(go2_zenoh_basic) == "world/video"

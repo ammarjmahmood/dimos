@@ -35,12 +35,9 @@ failure can be bisected by dropping down a level:
   zenoh router the viewer dials.
 """
 
-from collections.abc import Mapping
-from functools import partial
 import os
 from typing import Any
 
-from dimos.core.coordination.blueprint_config.sources import configuration_environment
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.lidar.pointlio.module import PointLioRust
@@ -63,7 +60,7 @@ from dimos.robot.unitree.go2.constants import (
     ROBOT_LENGTH,
     ROBOT_WIDTH,
 )
-from dimos.robot.unitree.go2.dds.module import GO2DDS, GO2DDSConfig
+from dimos.robot.unitree.go2.dds.module import GO2DDS
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.vis_module import vis_module
 
@@ -88,7 +85,11 @@ def _static_robot_body(rr: Any) -> list[Any]:
     ]
 
 
-def _camera_info_to_pinhole(camera_info: Any, camera: str = "world/video") -> Any:
+# h264 lands here off `video`; jpeg is redirected onto it, whichever the robot serves
+CAMERA_ENTITY = "world/video"
+
+
+def _camera_info_to_pinhole(camera_info: Any) -> Any:
     """Log the pinhole onto the camera image's entity instead of camera_info's own.
 
     Entities are named after topics, so the two land on sibling paths, and a Pinhole only
@@ -96,22 +97,22 @@ def _camera_info_to_pinhole(camera_info: Any, camera: str = "world/video") -> An
     No ``optical_frame``: the video's frame_id already anchors it, a second parent is
     rejected.
     """
-    return camera_info.to_rerun(image_topic=camera)
+    return camera_info.to_rerun(image_topic=CAMERA_ENTITY)
 
 
-def _rerun_blueprint(camera: str = "world/video") -> Any:
-    """Split layout: camera feed + 3D world, as the WebRTC go2 blueprint has.
+def _image_to_camera(image: Any) -> Any:
+    """GO2DDS's jpeg `image` onto the h264 `video` entity, so the pane is encoder-blind."""
+    return [(CAMERA_ENTITY, image.to_rerun())]
 
-    The 2D view sits on the camera's own entity, not ``world/color_image``: over zenoh the
-    camera arrives as H.264 on the ``video`` port, and off GO2DDS in jpeg mode as
-    ``CompressedImage`` on ``image``. Either way that entity is where the pinhole is logged.
-    """
+
+def _rerun_blueprint() -> Any:
+    """Split layout: camera feed + 3D world, as the WebRTC go2 blueprint has."""
     import rerun as rr
     import rerun.blueprint as rrb
 
     return rrb.Blueprint(
         rrb.Horizontal(
-            rrb.Spatial2DView(origin=camera, name="Camera"),
+            rrb.Spatial2DView(origin=CAMERA_ENTITY, name="Camera"),
             rrb.Spatial3DView(
                 origin="world",
                 name="3D",
@@ -136,25 +137,10 @@ def _render_map(msg: Any) -> Any:
     return msg.to_rerun(voxel_size=0.01)
 
 
-def _dds_camera(environ: Mapping[str, str] | None = None) -> str:
-    """The entity GO2DDS puts the camera on, off the same knob GO2DDS reads.
-
-    h264 off the RTP multicast lands on `video`, jpeg polled off the videohub on `image`,
-    so one `.env` line (``GO2DDS__VIDEO_ENCODING=h264``, or ``GO2DDS__VIDEO_FPS``) moves
-    the robot's encoder and the pane watching it together.
-    """
-    env = {key.lower(): value for key, value in configuration_environment(environ).items()}
-    default = GO2DDSConfig.model_fields["video_encoding"].default
-    encoding = env.get("go2dds__video_encoding", default)
-    return "world/image" if encoding == "jpeg" else "world/video"
-
-
-def _rerun_config(
-    visual_override: dict[str, Any] | None = None, camera: str = "world/video"
-) -> dict[str, Any]:
+def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, Any]:
     """The bridge's own view, plus whatever the layer above it adds."""
     return {
-        "blueprint": partial(_rerun_blueprint, camera),
+        "blueprint": _rerun_blueprint,
         "tf_axes": 0.5,
         # The robot box hangs off base_link on its own entity: a static transform
         # under world/tf would override the live one.
@@ -162,7 +148,8 @@ def _rerun_config(
             "world/robot_body": _static_robot_body,
         },
         "visual_override": {
-            "world/camera_info": partial(_camera_info_to_pinhole, camera=camera),
+            "world/camera_info": _camera_info_to_pinhole,
+            "world/image": _image_to_camera,
             "world/pointlio_map": _render_map,
             "world/lidar": _render_map,
             "world/local_map": _render_map,
@@ -356,7 +343,6 @@ go2_dds_motion_pointlio = autoconnect(
                 "world/lidar_raw": None,
                 "world/region_bounds": None,
             },
-            camera=_dds_camera(),
         ),
     ),
     _go2_dds_pointlio,
@@ -388,9 +374,7 @@ go2_viewer = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config={
-            # the camera pane follows the encoder of the stack it dials: set
-            # GO2DDS__VIDEO_ENCODING here too when the robot is serving h264
-            **_rerun_config(camera=_dds_camera()),
+            **_rerun_config(),
             "topics": [
                 "tf",
                 "odometry",
