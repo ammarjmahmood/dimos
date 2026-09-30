@@ -221,9 +221,9 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             self._set_goal_locked(goal)
         if goal is not None:
             self.agent.publish(HumanMessage(content=goal))
-        self.agent_idle.publish(goal is None)
 
     def _set_goal_locked(self, goal: str | None) -> None:
+        """Under the lock, so `agent_idle` goes out in the order the goal changed."""
         self._goal = goal
         self._goal_gen += 1
         self._robot = {"motion": "idle"}
@@ -231,6 +231,7 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         self._zero_since = None
         if goal is None:
             self.cmd_vel.publish(Twist.zero())
+        self.agent_idle.publish(goal is None)
 
     def _clear_goal(self, gen: int) -> bool:
         """Clear goal generation `gen`; False when a later goal has replaced it."""
@@ -238,7 +239,6 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             if gen != self._goal_gen:
                 return False
             self._set_goal_locked(None)
-        self.agent_idle.publish(True)
         return True
 
     def _gave_up(self, gen: int) -> bool:

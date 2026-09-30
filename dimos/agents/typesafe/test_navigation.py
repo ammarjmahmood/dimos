@@ -252,3 +252,17 @@ def test_2d_target_filling_the_view_counts_as_arrival(rig: Rig) -> None:
     assert until(lambda: fake.calls > 0)
     assert until(lambda: (odom(a), a.current_goal() is None)[1])
     assert not moving(twists)
+
+
+def test_idle_follows_goal_changes_in_order(rig: Rig) -> None:
+    a, _fake, _twists = rig
+    idle: list[bool] = []
+    unsub = a.agent_idle.transport.subscribe(idle.append)
+    a.set_goal("go to the chair")
+    old = a._goal_gen
+    a._set_target((0.0, 0.0, 0.0))
+    time.sleep(0.4)
+    a.set_goal("go to the door")
+    assert a._gave_up(old) is False
+    assert until(lambda: idle[-2:] == [False, False])  # chair, then door; no idle in between
+    unsub()
