@@ -23,6 +23,7 @@ import time
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, create_autospec, patch
 
+from dimos_generated.sensor_msgs.msg import Image
 import numpy as np
 import pytest
 from reactivex import operators as ops
@@ -33,7 +34,7 @@ from dimos.core.module import Module
 from dimos.core.stream import Out
 from dimos.core.transport import LCMTransport
 from dimos.models.vl.base import VlModel
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.image import image_from_array
 from dimos.perception.experimental.temporal_memory.entity_graph_db import EntityGraphDB
 from dimos.perception.experimental.temporal_memory.frame_window_accumulator import (
     Frame,
@@ -60,7 +61,7 @@ logger = setup_logger()
 
 def _make_image(value: int = 128, shape: tuple[int, ...] = (64, 64, 3)) -> Image:
     data = np.full(shape, value, dtype=np.uint8)
-    return Image.from_numpy(data)
+    return image_from_array(data, encoding="rgb8")
 
 
 class TestFrameWindowAccumulator:

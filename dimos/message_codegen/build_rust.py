@@ -15,6 +15,7 @@
 """Cargo entry point using only this source package and Python's standard library."""
 
 import importlib
+import importlib.machinery
 import importlib.util
 from pathlib import Path
 import shutil
@@ -29,13 +30,10 @@ def main() -> None:
     parent = ModuleType("dimos")
     parent.__path__ = []
     sys.modules["dimos"] = parent
-    spec = importlib.util.spec_from_file_location(
-        "dimos.message_codegen", root / "__init__.py", submodule_search_locations=[str(root)]
-    )
-    assert spec is not None and spec.loader is not None
+    spec = importlib.machinery.ModuleSpec("dimos.message_codegen", loader=None, is_package=True)
+    spec.submodule_search_locations = [str(root)]
     package = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = package
-    spec.loader.exec_module(package)
     definitions_module = importlib.import_module("dimos.message_codegen.definitions")
     rust_module = importlib.import_module("dimos.message_codegen.rust")
     definitions = definitions_module.Definitions([])

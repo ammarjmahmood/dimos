@@ -179,7 +179,9 @@ from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.core.transport import LCMTransport
-from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos_generated.sensor_msgs.msg import Image
+from dimos_generated.std_msgs.msg import Header
+from dimos.msgs.image import image_from_array, image_view
 
 class TickerCameraConfig(ModuleConfig):
     frequency_hz: float = 2.0
@@ -195,10 +197,10 @@ class TickerCameraModule(Module):
         super().start()
 
         def emit(_: int) -> None:
-            img = Image.from_numpy(
+            img = image_from_array(
                 np.zeros((480, 640, 3), dtype=np.uint8),
-                format=ImageFormat.RGB,
-                frame_id="synthetic",
+                encoding="rgb8",
+                header=Header(frame_id="synthetic"),
             )
             self.color_image.publish(img)
 
@@ -209,7 +211,7 @@ class ImageListener(Module):
     image: In[Image]
 
     async def handle_image(self, img: Image) -> None:
-        print(f"Received: {img.shape}")
+        print(f"Received: {image_view(img).shape}")
 
 if __name__ == "__main__":
     # Start local cluster and deploy modules to separate processes
