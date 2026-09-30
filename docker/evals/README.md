@@ -198,6 +198,8 @@ skip what you have.
    cd ~/dimos && docker compose run --rm worker /app/target/habitat/env/bin/python -m habitat_sim.utils.datasets_download --uids hm3d_example --data-path /app/target/habitat/data --no-replace
    uv tool install huggingface_hub && huggingface-cli login   # after accepting the terms on the hssd/hssd-hab dataset page
    huggingface-cli download hssd/hssd-hab --repo-type dataset --local-dir /data/habitat/hssd-hab
+   # The navigation cases run in hssd-opendoors: the same scenes with their door objects removed.
+   uv run python misc/habitat/opendoors.py --hssd /data/habitat/hssd-hab --out /data/habitat/hssd-opendoors --ground-truth misc/habitat/ground_truth/hssd
    ```
 
 9. Check a container sees everything, then run:

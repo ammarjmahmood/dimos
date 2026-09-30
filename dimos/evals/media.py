@@ -66,27 +66,25 @@ def caption_runs(runs: list[Path], out: Path) -> dict[tuple[str, str], Path]:
         label = arm_label(run)
         for row in (run / "results.jsonl").read_text().splitlines():
             r = json.loads(row)
+            trial = r["case_id"]
             src = run / r["case_id"] / "viewer.mp4"
-            if not src.exists():  # a parallel run keeps each case's files in its job's own run
+            if "job_dir" in r:  # a parallel run: each trial's files are in its own job's run
+                job = Path(r["job_dir"])
+                trial = job.name  # <case>-<k>: repeats stay apart
                 src = next(
-                    iter(
-                        run.glob(
-                            f"{r['case_id']}-*/state/dimos/evals/run-*/{r['case_id']}/viewer.mp4"
-                        )
-                    ),
-                    src,
+                    iter(job.glob(f"state/dimos/evals/run-*/{r['case_id']}/viewer.mp4")), src
                 )
             if not src.exists():
                 continue
             metrics_path = src.parent / "nav_metrics.json"
-            lines = [label, r["case_id"], f"score {r['score']:.2f}"]
+            lines = [label, trial, f"score {r['score']:.2f}"]
             if metrics_path.exists():
                 m = json.loads(metrics_path.read_text())
                 lines[-1] += (
                     f"  reached {m['reached']}  t {m['time_to_object_s']:.0f}s  bumps {m['bumps']}"
                 )
             slug = label.replace(" ", "_").replace("/", "_")
-            done[(r["case_id"], label)] = caption(src, out / f"{r['case_id']}-{slug}.mp4", lines)
+            done[(trial, label)] = caption(src, out / f"{trial}-{slug}.mp4", lines)
     return done
 
 
