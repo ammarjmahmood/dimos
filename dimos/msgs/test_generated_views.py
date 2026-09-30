@@ -24,12 +24,14 @@ from dimos_generated.nav_msgs.msg import MapMetaData, OccupancyGrid, Path
 from dimos_generated.sensor_msgs.msg import Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
+from PIL import Image as PILImage
 import pytest
 
 from dimos.msgs.geometry import yaw
 from dimos.msgs.image import (
     image_brightness,
     image_from_array,
+    image_from_file,
     image_sharpness,
     image_to_jpeg,
     image_to_rgb,
@@ -202,3 +204,16 @@ def test_brightness_ignores_padding_and_normalizes_big_endian_u16() -> None:
     depth = image_from_array(np.array([[1.0]], dtype=np.float32), encoding="32FC1")
     with pytest.raises(ValueError, match="unsigned integer"):
         image_brightness(depth)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGBA"])
+def test_image_file_decodes_rgb_and_preserves_source_header(tmp_path, mode):
+    path = tmp_path / "frame.png"
+    pixels = np.array([[7, 19]], dtype=np.uint8)
+    source = PILImage.fromarray(pixels).convert(mode)
+    source.save(path)
+    header = Header(stamp=time_from_nanoseconds(1234567890), frame_id="camera")
+    message = image_from_file(path, header=header)
+    assert message.encoding == "rgb8"
+    assert message.header.encode() == header.encode()
+    np.testing.assert_array_equal(image_view(message), [[[7, 7, 7], [19, 19, 19]]])

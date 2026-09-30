@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from dimos_generated.sensor_msgs.msg import CompressedImage, Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from numpy.typing import NDArray
+from PIL import Image as PILImage
 
 _FORMATS = {
     "rgb8": ("u1", 3),
@@ -230,3 +232,9 @@ def image_resize_to_fit(message: Image, max_width: int, max_height: int) -> tupl
         interpolation=cv2.INTER_LINEAR,
     )
     return image_from_array(pixels, encoding=message.encoding, header=message.header), scale
+
+
+def image_from_file(path: str | Path, *, header: Header | None = None) -> Image:
+    """Decode an image file as generated RGB8 with an explicit optional source header."""
+    with PILImage.open(path) as image:
+        return image_from_array(np.asarray(image.convert("RGB")), encoding="rgb8", header=header)

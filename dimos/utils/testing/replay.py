@@ -184,7 +184,12 @@ class MemoryReplayAdapter(Generic[T]):
     """
 
     def __init__(self, name: str | Path, autocast: Callable[[Any], T] | None = None) -> None:
-        parts = str(name).split("/", 1)
+        value = str(name)
+        if ".db/" in value:
+            dataset, stream = value.rsplit(".db/", 1)
+            parts = [dataset + ".db", stream]
+        else:
+            parts = value.split("/", 1)
         if len(parts) != 2:
             raise ValueError(
                 f"Expected '<dataset>/<stream>' name, got {name!r}. "

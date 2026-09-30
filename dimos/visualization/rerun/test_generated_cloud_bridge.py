@@ -92,3 +92,27 @@ def test_cloud_modes_filter_height_without_losing_rgb_alignment(mode):
     if mode == "points":
         assert rendered.radii.as_arrow_array().to_pylist() == [-2.0]
     assert cloud.encode() == before
+
+
+@pytest.mark.parametrize("mode", ["points", "boxes"])
+def test_explicit_cloud_colors_follow_finite_and_height_filters(mode):
+    cloud = pointcloud_from_xyz(
+        np.array([[0, 0, -1], [np.nan, 0, 1], [1, 2, 3]], dtype=np.float32),
+        header=Header(),
+    )
+    rendered = cloud_archetype(
+        cloud,
+        mode=mode,
+        bottom_cutoff=0,
+        colors=np.array([[255, 0, 0, 255], [0, 255, 0, 255], [18, 52, 86, 120]], dtype=np.uint8),
+    )
+    assert rendered.colors.as_arrow_array().to_pylist() == [0x12345678]
+    uniform = cloud_archetype(cloud, bottom_cutoff=0, colors=[18, 52, 86])
+    assert uniform.colors.as_arrow_array().to_pylist() == [0x123456FF]
+
+
+@pytest.mark.parametrize("colors", [[256, 0, 0], [-1, 0, 0], [0.5, 0, 0], [[1, 2]]])
+def test_explicit_cloud_colors_reject_invalid_channels(colors):
+    cloud = pointcloud_from_xyz(np.array([[0, 0, 1]], dtype=np.float32), header=Header())
+    with pytest.raises(ValueError, match="color"):
+        cloud_archetype(cloud, colors=colors)

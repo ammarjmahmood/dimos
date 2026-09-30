@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 from dimos_generated.dimos_msgs.msg import EntityMarkers
@@ -27,6 +28,7 @@ from dimos_generated.tf2_msgs.msg import TFMessage
 from dimos_generated.vision_msgs.msg import Detection3DArray
 import matplotlib
 import numpy as np
+from numpy.typing import NDArray
 
 from dimos.msgs.image import image_to_jpeg, image_view
 from dimos.msgs.occupancy import grid_to_world, occupancy_view
@@ -149,6 +151,7 @@ def cloud_archetype(
     *,
     voxel_size: float = 0.05,
     mode: str = "spheres",
+    colors: Sequence[int] | NDArray[np.uint8] | None = None,
     bottom_cutoff: float | None = None,
     ui_radius: float = 2.0,
     fill_mode: Literal["solid", "majorwireframe", "densewireframe"] = "solid",
@@ -157,7 +160,17 @@ def cloud_archetype(
     import rerun as rr
 
     points = pointcloud_xyz(message)
-    colors = pointcloud_rgb(message)
+    if colors is None:
+        colors = pointcloud_rgb(message)
+    else:
+        color_array = np.asarray(colors)
+        if color_array.shape in {(3,), (4,)}:
+            color_array = np.broadcast_to(color_array, (len(points), color_array.shape[0]))
+        if color_array.shape not in {(len(points), 3), (len(points), 4)}:
+            raise ValueError("colors must be RGB/RGBA or one RGB/RGBA row per point")
+        if color_array.dtype.kind not in "iu" or np.any((color_array < 0) | (color_array > 255)):
+            raise ValueError("color channels must be integers in [0, 255]")
+        colors = np.asarray(color_array, dtype=np.uint8)
     keep = np.isfinite(points).all(axis=1)
     if mode not in {"points", "boxes", "spheres"}:
         raise ValueError("cloud mode must be points, boxes or spheres")
