@@ -6,6 +6,82 @@ This is a working alternative for comparison, not an accepted migration.
 The original worktree, user changes, running simulator and upstream source
 were not modified.
 
+## G1 GR00T: Full Blueprint Run (2026-09-30)
+
+The existing G1 integration at `fe48ee062` now has a real deployed-blueprint
+check, not just the earlier standing-policy harness. **No new robot definition,
+blueprint, runtime changes, policy changes or upstream patches were needed.**
+
+For a manual session in this worktree:
+
+```bash
+cd ~/Desktop/dimos-robosuite-emulator-spike
+uv run --no-sync python -m dimos.sim2.demo_smoke g1 \
+  --local-router --viewer --rerun --seconds 3600
+```
+
+This loads the actual `unitree-g1-groot-wbc` blueprint and its logistics scene.
+Use the existing Rerun drive controls; the MuJoCo window displays the world.
+No `--move` means the launcher sends no automatic walking commands. The
+duration is a one-hour inspection limit, not a sampling/reset interval.
+Close the Rerun window before Ctrl-C; see the shutdown caveat below.
+
+The existing smoke launcher creates a private local Zenoh router using normal
+configuration, avoiding this branch's stock Zenoh 1.9/macOS discovery problem.
+It is a direct Python blueprint launch, not a registered `dimos run` session.
+`uv run --no-sync` uses the already provisioned worktree environment and puts
+its viewer binaries on PATH. Run `uv sync --extra sim --inexact --frozen` first
+on a fresh checkout. No transport implementation was patched.
+
+The exercised control path is:
+
+```text
+Rerun twist message -> tele_cmd_vel -> MovementManager -> cmd_vel
+  -> ControlCoordinator / G1GrootWBCTask at 50 Hz
+  -> WholeBodyAdapter / existing motor SHM
+  -> MotorLegged / MotorFirmware / EmulatorEnvironment.step at 200 Hz
+  -> MuJoCo joint + IMU feedback -> the same GR00T policy
+
+World snapshots -> independent RGB-D / lidar workers
+                -> ordinary DimOS streams -> mapping / Rerun
+```
+
+Measured on the local Mac, with already downloaded assets:
+
+| Run | Startup | Real-time factor | Result |
+|---|---:|---:|---|
+| Headless, 10 simulated seconds, `--move` | 7.45 s | 0.99975 | Walked; 640x480 RGB-D and lidar published; exited normally |
+| Rerun + MuJoCo viewer, 45 simulated seconds | 5.46 s | 0.99989 | Rerun connected; control-endpoint messages moved G1 about 1.2 m; final pelvis height 0.745 m |
+
+The visible run received eight seconds of forward commands, four seconds of
+turn commands and then stop, through the same WebSocket endpoint used by the
+Rerun controls. Translation and final standing height were measured; yaw
+tracking accuracy was not. Mapping/planning modules deployed, but this was
+not an autonomous-navigation or task-success test. These short runs do not
+establish long-run stability, stairs or a speed advantage over native sim2.
+
+Issues actually encountered:
+
+- Running `.venv/bin/python` directly without activating the environment left
+  `dimos-viewer` and `rerun` off PATH. Using `uv run --no-sync` fixed the viewer
+  launch without a code change. Viewer connection is confirmed by the server;
+  desktop capture did not expose the windows, so no visual-inspection claim.
+- With Rerun left open, the simulation workers shut down, but the launcher
+  waited during Python interpreter finalization in `waitpid`. Closing only
+  that run's detached Rerun process let it exit with status zero. This is an
+  open process-lifetime issue on the older comparison branch, not a stalled
+  physics loop. It was not hidden with forced parent exit or a new cleanup
+  abstraction.
+- Optional robosuite-models/GR1-IK warnings, macOS GLFW/Open3D duplicate-class
+  warnings and empty Rerun-root warnings remain. They did not prevent this
+  G1 run. G1 uses DimOS's existing GR00T policy, not upstream GR1 IK.
+
+The robot still has its authored rigid hands. The two massless wrist frames
+are robosuite end-effector metadata, not working grippers. This proves G1
+hardware emulation with robosuite's robot/environment lifecycle, not automatic
+compatibility with arbitrary RoboCasa tasks. The native core worktree was
+not changed; this prototype still predates its configuration/shutdown fixes.
+
 ## What Changed
 
 The earlier raw-MjModel probe is retained in Git at `d92e83f0f`. It did not
@@ -237,10 +313,11 @@ Behavior evidence:
   Its `<3.10` cap changes this branch's sim requirement to MuJoCo 3.9;
   the resolver also lowers the dm-control and mujoco-mjx versions. No upstream
   patch is used. Moving all DimOS back to this version is a team decision.
-- In the preceding comparison, cross-worker RPC timed out on macOS with stock Zenoh
-  1.9 loopback discovery. Model/config deployment itself succeeded. A separate
-  forkserver/Actor test proves construction/reset; full network blueprint
-  acceptance is **not** established. No transport workaround is included.
+- In the September 9 comparison, cross-worker RPC timed out on macOS with
+  stock Zenoh 1.9 loopback discovery. Model/config deployment itself succeeded.
+  The September 30 full G1 runs above supersede that network-test gap using
+  the existing explicit local-router configuration. Default multicast
+  discovery remains unverified; no transport code was patched.
 
 ## Code Size
 
