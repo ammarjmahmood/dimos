@@ -147,7 +147,7 @@ def _accumulate(
             if graph is not None:
                 if obs.pose_tuple is None:
                     continue
-                correction = graph.correction_at(obs.ts).to_matrix()
+                correction = transform_matrix(graph.correction_at(obs.ts).transform)
                 matrix = np.eye(4) if tf is None else transform_matrix(tf.transform)
                 tf = TransformStamped(
                     header=Header(stamp=obs.data.header.stamp, frame_id="world_corrected"),
@@ -210,7 +210,7 @@ def _log_reconstruction(
     import rerun.blueprint as rrb
 
     from dimos.memory.vis.color import Color
-    from dimos.msgs.geometry import pose_from_matrix, pose_matrix
+    from dimos.msgs.geometry import pose_from_matrix, pose_matrix, transform_matrix
     from dimos.visualization.rerun.message_helpers import cloud_archetype
 
     rr.send_blueprint(rrb.Blueprint(rrb.Spatial3DView(origin="world")))
@@ -252,8 +252,16 @@ def _log_reconstruction(
     if graph is not None and graph.loops:
         loop_strips = [
             [
-                (lc.source.translation.x, lc.source.translation.y, lc.source.translation.z),
-                (lc.target.translation.x, lc.target.translation.y, lc.target.translation.z),
+                (
+                    lc.source.transform.translation.x,
+                    lc.source.transform.translation.y,
+                    lc.source.transform.translation.z,
+                ),
+                (
+                    lc.target.transform.translation.x,
+                    lc.target.transform.translation.y,
+                    lc.target.transform.translation.z,
+                ),
             ]
             for lc in graph.loops
         ]
@@ -302,7 +310,7 @@ def _log_reconstruction(
                     orientation=d.data.orientation,
                 )
                 corrected = pose_from_matrix(
-                    graph.correction_at(d.ts).to_matrix() @ pose_matrix(raw_pose)
+                    transform_matrix(graph.correction_at(d.ts).transform) @ pose_matrix(raw_pose)
                 )
                 pgo_centers.append(
                     (corrected.position.x, corrected.position.y, corrected.position.z)
@@ -594,7 +602,11 @@ def main(
             graph = lidar.tap(bar).transform(PGO()).last().data
 
         pgo_path = [
-            (kf.optimized.translation.x, kf.optimized.translation.y, kf.optimized.translation.z)
+            (
+                kf.optimized.transform.translation.x,
+                kf.optimized.transform.translation.y,
+                kf.optimized.transform.translation.z,
+            )
             for kf in graph.keyframes
         ]
 

@@ -1295,3 +1295,6 @@ Recorder/graph boundaries and the isolated Python example are covered in
 
 [Unitree/Spot/camera runtime evidence](evidence/unitree-spot-camera-runtime.md)
 covers the next consumer batch.
+
+[Camera/export, PGO, approved WebXR and memory documentation evidence](evidence/camera-export-runtime.md)
+covers the subsequent offline consumer batch.

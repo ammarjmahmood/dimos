@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 import attrs
 from dimos_generated.geometry_msgs.msg import Pose, PoseStamped
-from dimos_generated.std_msgs.msg import Header
+from dimos_generated.std_msgs.msg import Header, UInt32
 
 from dimos.control.task import CoordinatorState
 from dimos.control.tasks.pose_target_ik import (
@@ -184,11 +184,12 @@ class TeleopIKTask(PoseTargetIKTask):
             state.last_update_time = t_now
         return True
 
-    def on_teleop_buttons(self, msg: Buttons, t_now: float) -> bool:
+    def on_teleop_buttons(self, msg: UInt32, t_now: float) -> bool:
         """Update the all-bound-hands deadman condition."""
+        buttons = Buttons(data=msg.data)
         grip_by_hand = {
-            OperatorHand.LEFT: msg.left_grip,
-            OperatorHand.RIGHT: msg.right_grip,
+            OperatorHand.LEFT: buttons.left_grip,
+            OperatorHand.RIGHT: buttons.right_grip,
         }
         with self._lock:
             self._last_button_update_time = t_now

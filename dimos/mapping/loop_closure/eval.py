@@ -40,6 +40,7 @@ from dimos.memory.store.sqlite import SqliteStore
 from dimos.memory.stream import Stream
 from dimos.memory.transform import QualityWindow, SpeedLimit
 from dimos.memory.type.observation import Observation
+from dimos.msgs.geometry import transform_matrix
 from dimos.msgs.image import image_sharpness
 from dimos.perception.fiducial.marker_transformer import DetectMarkers
 from dimos.robot.unitree.go2.camera_calibration import front_camera_calibration
@@ -108,7 +109,7 @@ def _eval_recording(
         by_marker: dict[int, list[tuple[float, float, float]]] = {}
         for d in tracks:
             center = d.data.center
-            corrected = graph.correction_at(d.ts).to_matrix() @ np.array(
+            corrected = transform_matrix(graph.correction_at(d.ts).transform) @ np.array(
                 [center.x, center.y, center.z, 1.0]
             )
             by_marker.setdefault(d.data.marker_id, []).append(

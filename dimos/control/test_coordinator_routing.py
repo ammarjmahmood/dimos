@@ -312,7 +312,7 @@ class TestButtonsRouting:
         )
         coordinator.start()
 
-        taps["teleop_buttons"].emit(Buttons())
+        taps["teleop_buttons"].emit(Buttons().to_message())
 
         assert len(coordinator.get_task("teleop1").buttons_calls) == 1
 
@@ -668,7 +668,7 @@ class TestCardRoutingContract:
         coordinator.add_task(cardless)
         coordinator.start()
 
-        taps["teleop_buttons"].emit(Buttons())
+        taps["teleop_buttons"].emit(Buttons().to_message())
 
         assert len(coordinator.get_task("teleop1").buttons_calls) == 1
         assert cardless.buttons_calls == []

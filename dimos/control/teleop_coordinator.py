@@ -15,11 +15,10 @@
 """Control coordinator carrying spatial poses and keyboard end-effector twists."""
 
 from dimos_generated.geometry_msgs.msg import PoseStamped, TwistStamped
-from dimos_generated.std_msgs.msg import Float32
+from dimos_generated.std_msgs.msg import Float32, UInt32
 
 from dimos.control.coordinator import ControlCoordinator
 from dimos.core.stream import In
-from dimos.teleop.webxr.controller_types import Buttons
 
 
 class TeleopControlCoordinator(ControlCoordinator):
@@ -29,5 +28,5 @@ class TeleopControlCoordinator(ControlCoordinator):
     right_cartesian_command: In[PoseStamped]
     left_gripper_command: In[Float32]
     right_gripper_command: In[Float32]
-    teleop_buttons: In[Buttons]
+    teleop_buttons: In[UInt32]
     ee_twist_command: In[TwistStamped]

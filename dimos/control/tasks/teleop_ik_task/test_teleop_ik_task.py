@@ -19,7 +19,7 @@ from typing import cast
 
 from dimos_generated.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from dimos_generated.sensor_msgs.msg import JointState
-from dimos_generated.std_msgs.msg import Header
+from dimos_generated.std_msgs.msg import Header, UInt32
 import pytest
 from pytest_mock import MockerFixture
 
@@ -100,11 +100,11 @@ def _buttons(
     *,
     left: bool = False,
     right: bool = False,
-) -> Buttons:
+) -> UInt32:
     buttons = Buttons()
     buttons.left_grip = left
     buttons.right_grip = right
-    return buttons
+    return buttons.to_message()
 
 
 def test_face_buttons_do_not_engage_arm_teleop(mocker: MockerFixture) -> None:
@@ -116,7 +116,7 @@ def test_face_buttons_do_not_engage_arm_teleop(mocker: MockerFixture) -> None:
     buttons = Buttons()
     buttons.right_primary = True
 
-    task.on_teleop_buttons(buttons, 1.0)
+    task.on_teleop_buttons(buttons.to_message(), 1.0)
     task.on_right_cartesian_command(_pose(0.5), 1.0)
 
     assert task.compute(_state()) is None
@@ -313,7 +313,7 @@ def test_bimanual_timeout_clears_both_sides_and_reengagement_recaptures(
 def test_stale_deadman_stops_fresh_pose_streams(
     mocker: MockerFixture,
     bindings: tuple[TeleopHandBinding, ...],
-    buttons: Buttons,
+    buttons: UInt32,
 ) -> None:
     solver = _solver(mocker)
     task = TeleopIKTask("teleop", _config(bindings, timeout=0.2), solver=solver)

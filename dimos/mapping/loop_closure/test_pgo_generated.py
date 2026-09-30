@@ -17,24 +17,28 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from dimos_generated.geometry_msgs.msg import Quaternion, Transform, TransformStamped, Vector3
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
+import pytest
 
 from dimos.mapping.loop_closure.pgo import Keyframe, PGOConfig, PoseGraph, _KeyPose, _PGOState
 from dimos.memory.type.observation import Observation
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.pointcloud import pointcloud_from_xyz, pointcloud_xyz
-from dimos.msgs.time import time_from_seconds
+from dimos.msgs.time import time_from_nanoseconds, time_from_seconds
 
 
 def test_generated_observation_pose_correction_applies_rotation_after_translation():
-    local = Transform(ts=1.0)
-    optimized = Transform(
-        translation=Vector3(5.0, 0.0, 0.0),
-        rotation=Quaternion(0, 0, math.sqrt(0.5), math.sqrt(0.5)),
-        ts=1.0,
+    local = TransformStamped(
+        header=Header(frame_id="world_raw", stamp=time_from_seconds(1.0)), child_frame_id="body"
+    )
+    optimized = TransformStamped(
+        header=Header(frame_id="world_corrected", stamp=time_from_seconds(1.0)),
+        child_frame_id="body",
+        transform=Transform(
+            translation=Vector3(x=5.0),
+            rotation=Quaternion(z=math.sqrt(0.5), w=math.sqrt(0.5)),
+        ),
     )
     graph = PoseGraph(keyframes=(Keyframe(ts=1.0, local=local, optimized=optimized),))
     source = Observation(id=1, ts=1.0, _data="payload", pose=(1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0))
@@ -92,3 +96,48 @@ def test_pgo_submap_places_generated_body_clouds_before_merging(monkeypatch):
     assert result.header.frame_id == "world_corrected"
     assert result.header.stamp == time_from_seconds(2.0)
     assert [cloud.encode() for cloud in clouds] == before
+
+
+@pytest.mark.parametrize(
+    "query, expected_x", [(-5.0, 0.0), (1.0, 0.0), (6.0, 5.0), (11.0, 10.0), (100.0, 10.0)]
+)
+def test_generated_correction_interpolates_and_clips_without_solver(query, expected_x):
+    keyframes = []
+    for ts, x in ((1.0, 0.0), (11.0, 10.0)):
+        local = TransformStamped(
+            header=Header(frame_id="world_raw", stamp=time_from_seconds(ts)), child_frame_id="body"
+        )
+        optimized = TransformStamped(
+            header=Header(frame_id="world_corrected", stamp=time_from_seconds(ts)),
+            child_frame_id="body",
+            transform=Transform(translation=Vector3(x=x)),
+        )
+        keyframes.append(Keyframe(ts=ts, local=local, optimized=optimized))
+    graph = PoseGraph(keyframes=tuple(keyframes))
+    value = graph.correction_at(query)
+    assert value.header.frame_id == "world_corrected" and value.child_frame_id == "world_raw"
+    assert value.header.stamp == time_from_seconds(query)
+    assert value.transform.translation.x == pytest.approx(expected_x)
+    assert TransformStamped.decode(value.encode()) == value
+
+
+def test_generated_correct_preserves_exact_source_stamp_and_rejects_bad_frame():
+    local = TransformStamped(header=Header(frame_id="world_raw"), child_frame_id="body")
+    optimized = TransformStamped(
+        header=Header(frame_id="world_corrected"),
+        child_frame_id="body",
+        transform=Transform(translation=Vector3(x=5.0)),
+    )
+    graph = PoseGraph(keyframes=(Keyframe(ts=1.0, local=local, optimized=optimized),))
+    source = TransformStamped(
+        header=Header(frame_id="world_raw", stamp=time_from_nanoseconds(1700000000123456789)),
+        child_frame_id="camera",
+        transform=Transform(translation=Vector3(x=2.0)),
+    )
+    result = graph.correct(source)
+    assert result.header.stamp == source.header.stamp
+    assert result.header.frame_id == "world_corrected" and result.child_frame_id == "camera"
+    assert result.transform.translation.x == 7.0 and source.transform.translation.x == 2.0
+    source.header.frame_id = "unrelated"
+    with pytest.raises(ValueError, match="Cannot compose frames"):
+        graph.correct(source)
