@@ -56,6 +56,7 @@ def chair_publisher() -> Iterator[None]:
 
 
 @pytest.mark.self_hosted_large
+@pytest.mark.skipif_no_typesafe
 def test_go_to_the_chair(
     lcm_spy: Any,
     start_blueprint: Callable[..., Any],
