@@ -330,9 +330,18 @@ go2_dds_motion_pointlio = autoconnect(
 # odom -> map fix on tf and the placed premap on loaded_map, which the raycaster seeds
 # from and hands on to the planner region by region as seed_map. The republish covers a
 # raycaster that missed the one-shot loaded_map publish. The raw premap is millions of
-# points, so the view keeps the seeded voxels on seed_map instead.
+# points, so the view keeps the seeded voxels on seed_map instead. On a seeded office the
+# planner's surface_map and node_edges are 8 and 14 MB each, so their viz rate drops to what
+# a wifi viewer can drain. Re-declared right of the base stack, autoconnect keeps the last.
+_reloc_planner_viz_hz = 0.2
+
 go2_dds_motion_pointlio_relocalization = autoconnect(
     go2_dds_motion_pointlio,
+    MLSPlannerNative.blueprint(
+        **_planner_config.model_copy(update={"viz_publish_hz": _reloc_planner_viz_hz}).model_dump(
+            exclude_unset=True
+        )
+    ).remappings([(MLSPlannerNative, "global_map", "global_map_unused")]),
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config=_rerun_config({**_dds_pointlio_hidden, "world/loaded_map": None}),
