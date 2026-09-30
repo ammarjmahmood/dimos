@@ -13,16 +13,21 @@
 # limitations under the License.
 """Go2 driven by TypeSafe: `go to the <object>` on /human_input.
 
-Objects must arrive on `detections_3d` (world-frame boxes) or `detections_2d` from a
-detector run beside this blueprint; without them a goal is held, never driven. The
-DimSim e2e test publishes the target itself.
+A YOLO detector on the camera supplies `detections_2d`; world-frame boxes on
+`detections_3d`, from a 3D detector or a fixed scene, take precedence when present.
 """
 
 from dimos.agents.typesafe.agent import typesafe_api_key
 from dimos.agents.typesafe.navigation import TypeSafeNavigationAgent
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.perception.detection.module2D import Detection2DModule
 from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import unitree_go2_basic
+from dimos.robot.unitree.go2.connection import GO2Connection
 
 unitree_go2_typesafe = autoconnect(
-    unitree_go2_basic, TypeSafeNavigationAgent.blueprint()
+    unitree_go2_basic,
+    Detection2DModule.blueprint(
+        camera_info=GO2Connection.camera_info_static, publish_detection_images=False
+    ).remappings([(Detection2DModule, "detections", "detections_2d")]),
+    TypeSafeNavigationAgent.blueprint(),
 ).requirements(typesafe_api_key)

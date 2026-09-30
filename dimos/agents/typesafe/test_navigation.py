@@ -228,3 +228,27 @@ def test_lost_detections_give_up(rig: Rig) -> None:
     a.config.stale_s = 0.0  # every detection is now stale
     assert until(lambda: (odom(a), a.current_goal() is None)[1])
     assert twists[-1].is_zero()
+
+
+def test_timeout_clears_only_the_goal_that_timed_out(rig: Rig) -> None:
+    a, _fake, _twists = rig
+    a.set_goal("go to the chair")
+    old = a._goal_gen
+    a._set_target((0.0, 0.0, 0.0))
+    time.sleep(0.4)  # past give_up_s: the chair goal has stood still long enough
+    a.set_goal("go to the door")
+    assert a._gave_up(old) is False  # the door goal accepted meanwhile is left alone
+    assert a.current_goal() == "go to the door"
+    assert a._gave_up(a._goal_gen) is False  # the door goal has not stood still yet
+
+
+def test_2d_target_filling_the_view_counts_as_arrival(rig: Rig) -> None:
+    a, fake, twists = rig
+    fake.answers = answers(x="forward")
+    a.set_goal("go to the chair")
+    a.detections_2d.transport.publish(det2d("chair", 640.0, 1000, 600))  # 65% of the image
+    time.sleep(0.05)
+    odom(a)
+    assert until(lambda: fake.calls > 0)
+    assert until(lambda: (odom(a), a.current_goal() is None)[1])
+    assert not moving(twists)
