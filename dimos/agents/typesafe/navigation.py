@@ -105,7 +105,8 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # motion state; never held across a publish
+        self._goal_lock = threading.Lock()  # goal changes and the `agent_idle` they publish
         self._goal: str | None = None
         self._goal_gen = 0  # bumps on every set_goal; a late answer for an old goal is dropped
         self._robot: RobotState = {"motion": "idle"}
@@ -217,28 +218,31 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         goal = (goal or "").strip() or None
         if goal:
             goal = goal.splitlines()[-1].strip()  # a briefing may precede the goal
-        with self._lock:
-            self._set_goal_locked(goal)
+        with self._goal_lock:
+            self._change_goal(goal)
         if goal is not None:
             self.agent.publish(HumanMessage(content=goal))
 
-    def _set_goal_locked(self, goal: str | None) -> None:
-        """Under the lock, so `agent_idle` goes out in the order the goal changed."""
-        self._goal = goal
-        self._goal_gen += 1
-        self._robot = {"motion": "idle"}
-        self._target = self._current = ZERO
-        self._zero_since = None
+    def _change_goal(self, goal: str | None) -> None:
+        """Under `_goal_lock`, so `agent_idle` goes out in the order the goal changed; the
+        motion lock is released before anything is published."""
+        with self._lock:
+            self._goal = goal
+            self._goal_gen += 1
+            self._robot = {"motion": "idle"}
+            self._target = self._current = ZERO
+            self._zero_since = None
         if goal is None:
             self.cmd_vel.publish(Twist.zero())
         self.agent_idle.publish(goal is None)
 
     def _clear_goal(self, gen: int) -> bool:
         """Clear goal generation `gen`; False when a later goal has replaced it."""
-        with self._lock:
-            if gen != self._goal_gen:
-                return False
-            self._set_goal_locked(None)
+        with self._goal_lock:
+            with self._lock:
+                if gen != self._goal_gen:
+                    return False
+            self._change_goal(None)
         return True
 
     def _gave_up(self, gen: int) -> bool:
