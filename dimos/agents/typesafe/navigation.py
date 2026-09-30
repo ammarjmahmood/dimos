@@ -137,7 +137,8 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         return msg if time.time() - msg.ts <= self.config.stale_s else None
 
     def state(self, trigger: object) -> WorldState | None:
-        goal = self._goal
+        with self._lock:
+            goal, gen = self._goal, self._goal_gen
         if goal is None:
             return None
         assert isinstance(trigger, PoseStamped)
@@ -145,8 +146,7 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         if det3d is None and det2d is None and self._goal_xy is None:
             self._set_target(ZERO)
             self._say("holding: no detections")
-            if self._gave_up():
-                self.set_goal(None)
+            if self._gave_up(gen):
                 self._say("goal reached or unreachable; stopped")
             return None
         state = build_world_state(
@@ -160,7 +160,7 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             image_size=self.config.image_size,
             lidar_band=self.config.lidar_band,
         )
-        self._state_gen = self._goal_gen
+        self._state_gen = gen
         return state
 
     def questions(self, state: object) -> dict[str, Question]:
@@ -213,17 +213,32 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
     def set_goal(self, goal: str | None) -> None:
         goal = (goal or "").strip() or None
         with self._lock:
-            self._goal = goal
-            self._goal_gen += 1
-            self._goal_xy = None
-            self._target = self._current = ZERO
-            self._zero_since = None
-            self._motion = "idle"
-            if goal is None:
-                self.cmd_vel.publish(Twist.zero())
+            self._set_goal_locked(goal)
         if goal is not None:
             self.agent.publish(HumanMessage(content=goal))
         self.agent_idle.publish(goal is None)
+
+    def _set_goal_locked(self, goal: str | None) -> None:
+        self._goal = goal
+        self._goal_gen += 1
+        self._goal_xy = None
+        self._target = self._current = ZERO
+        self._zero_since = None
+        self._motion = "idle"
+        if goal is None:
+            self.cmd_vel.publish(Twist.zero())
+
+    def _gave_up(self, gen: int) -> bool:
+        """True when goal generation `gen` has stood still past `give_up_s`; it is then
+        cleared, unless a later goal has replaced it."""
+        with self._lock:
+            if gen != self._goal_gen or self._zero_since is None:
+                return False
+            if time.monotonic() - self._zero_since <= self.config.give_up_s:
+                return False
+            self._set_goal_locked(None)
+        self.agent_idle.publish(True)
+        return True
 
     @rpc
     def current_goal(self) -> str | None:
@@ -234,13 +249,6 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             self._last_said = text
             logger.info(text)
             self.agent.publish(AIMessage(content=text))
-
-    def _gave_up(self) -> bool:
-        with self._lock:
-            return (
-                self._zero_since is not None
-                and time.monotonic() - self._zero_since > self.config.give_up_s
-            )
 
     def _steer(self, state: WorldState, drive: Drive, gen: int) -> None:
         """The model picked directions; geometry to the goal point sets the magnitudes.
@@ -254,6 +262,13 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         else:
             dist, err = None, 0.0
         lin, ang = self.config.linear_speed, self.config.angular_speed
+        if target is not None and dist is None:
+            # A 2D target has no range: its size in the image says how close it is.
+            size = target.get("size")
+            if size == "filling_view":
+                drive = Drive(0.0, 0.0, 0.0, True, drive.confidence, drive.labels, drive.target)
+            elif size == "large":
+                lin *= 0.5
         if dist is not None:
             if dist <= self.config.reached_m:
                 drive = Drive(0.0, 0.0, 0.0, True, drive.confidence, drive.labels, drive.target)
@@ -266,12 +281,10 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         self._set_target(
             (drive.x * lin, drive.y * lin, drive.yaw * ang), immediate=drive.stop, gen=gen
         )
-        gave_up = self._gave_up()
         self._say(
             f"drive {'/'.join(drive.labels)} stop={drive.stop} target={drive.target} confidence={drive.confidence:.2f}"
         )
-        if gave_up:
-            self.set_goal(None)
+        if self._gave_up(gen):
             self._say("goal reached or unreachable; stopped")
 
     def _resolve_goal(self, x: float, y: float, gen: int) -> None:
