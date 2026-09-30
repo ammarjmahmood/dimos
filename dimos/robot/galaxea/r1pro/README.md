@@ -9,10 +9,26 @@ Everything in this section runs **on the robot's onboard computer**, over ssh,
 not on your workstation. The paths below are the robot's, and are the same on
 every R1 Pro.
 
-`galaxea-dimos` is Galaxea's own ROS 2 driver with local bug fixes applied; it
-is not part of dimos. `canfd.sh` ships with the robot and brings up the CAN FD
-interfaces the driver needs. Boot the driver with the standalone stack, which
-bypasses the stock `moca_adapter` and runs the chassis gatekeeper on-robot:
+The robot runs `galaxea-dimos`: Galaxea's own ROS 2 driver (firmware V2.3.0)
+with the changes dimos needs. It is not part of dimos. It is stored in dimos
+cloud as one tarball, `galaxea-dimos-v2.3.0-dimos.1.tar.zst`, upload id
+`56a9468a113444c5afa792a9c7877cd1`. Install and start it:
+
+```bash
+dimos login   # once per robot
+dimos data pull 56a9468a113444c5afa792a9c7877cd1 --dest ~/galaxea-dimos.tar.zst
+tar -I zstd -xf ~/galaxea-dimos.tar.zst -C ~
+~/galaxea-dimos/start.sh
+```
+
+The tree must end up at `~/galaxea-dimos`. `start.sh` runs `~/canfd.sh`, which
+ships with the robot and brings up the CAN FD interfaces, then restarts the
+driver and waits until it publishes. Restarting ends every tmux session on the
+robot, so the script lists them and stops unless you pass `--yes`.
+`~/galaxea-dimos/README-dimos.md` lists every change from stock and why, and
+`dimos-changes.diff` holds the exact diff.
+
+To restart the driver by hand:
 
 ```bash
 bash ~/canfd.sh
