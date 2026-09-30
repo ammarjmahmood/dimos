@@ -14,11 +14,14 @@
 
 import math
 
+from dimos_generated.builtin_interfaces.msg import Time
 from dimos_generated.nav_msgs.msg import MapMetaData, OccupancyGrid
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
+from PIL import Image
 import pytest
 
-from dimos.msgs.occupancy import occupancy_extent, occupancy_view
+from dimos.msgs.occupancy import occupancy_extent, occupancy_from_file, occupancy_view
 
 
 def test_occupancy_cells_keep_ros_row_order_and_do_not_alias_message():
@@ -50,3 +53,31 @@ def test_occupancy_rejects_invalid_resolution_for_nonempty_grid(resolution):
 
 def test_empty_default_occupancy_grid_has_no_cells():
     assert occupancy_view(OccupancyGrid()).shape == (0, 0)
+
+
+@pytest.mark.parametrize("suffix", [".npy", ".png"])
+def test_static_occupancy_loader_preserves_cells_header_and_identity(tmp_path, suffix):
+    cells = np.array([[-1, 0, 100], [25, 50, 75]], dtype=np.int8)
+    path = tmp_path / ("grid" + suffix)
+    if suffix == ".npy":
+        np.save(path, cells)
+    else:
+        Image.fromarray(cells.astype(np.uint8)).save(path)
+    header = Header(frame_id="map", stamp=Time(sec=123, nanosec=456))
+    output = OccupancyGrid.decode(occupancy_from_file(path, header=header, resolution=0.2).encode())
+    np.testing.assert_array_equal(occupancy_view(output), cells)
+    assert output.header == header
+    assert output.info.map_load_time == header.stamp
+    assert output.info.origin.orientation.w == 1
+    assert output.info.resolution == float(np.float32(0.2))
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [np.zeros((2, 2), dtype=float), np.zeros(3, dtype=int), np.array([[101]]), np.array([[-2]])],
+)
+def test_static_occupancy_loader_rejects_invalid_cells(tmp_path, cells):
+    path = tmp_path / "grid.npy"
+    np.save(path, cells)
+    with pytest.raises(ValueError):
+        occupancy_from_file(path, header=Header())

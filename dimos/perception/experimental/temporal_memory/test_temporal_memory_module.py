@@ -35,6 +35,7 @@ from dimos.core.stream import Out
 from dimos.core.transport import LCMTransport
 from dimos.models.vl.base import VlModel
 from dimos.msgs.image import image_from_array
+from dimos.msgs.time import time_from_seconds
 from dimos.perception.experimental.temporal_memory.entity_graph_db import EntityGraphDB
 from dimos.perception.experimental.temporal_memory.frame_window_accumulator import (
     Frame,
@@ -70,7 +71,7 @@ class TestFrameWindowAccumulator:
         acc.set_start_time(0.0)
         for i in range(10):
             img = _make_image(i * 25)
-            img.ts = float(i)
+            img.header.stamp = time_from_seconds(float(i))
             acc.add_frame(img, float(i))
         assert acc.buffer_size == 5
         assert acc.frame_count == 10
@@ -83,7 +84,7 @@ class TestFrameWindowAccumulator:
         # Add 3 frames
         for i in range(3):
             img = _make_image()
-            img.ts = float(i)
+            img.header.stamp = time_from_seconds(float(i))
             acc.add_frame(img, float(i))
         frames = acc.try_extract_window()
         assert frames is not None
@@ -94,7 +95,7 @@ class TestFrameWindowAccumulator:
         acc.set_start_time(0.0)
         for i in range(3):
             img = _make_image()
-            img.ts = float(i)
+            img.header.stamp = time_from_seconds(float(i))
             acc.add_frame(img, float(i))
         # First extraction should succeed
         frames = acc.try_extract_window()
@@ -113,7 +114,7 @@ class TestFrameWindowAccumulator:
         acc = FrameWindowAccumulator(max_buffer_frames=50, window_s=1.0, stride_s=1.0, fps=1.0)
         acc.set_start_time(0.0)
         img = _make_image()
-        img.ts = 0.0
+        img.header.stamp = time_from_seconds(0.0)
         acc.add_frame(img, 0.0)
         assert acc.buffer_size == 1
         acc.clear()
@@ -464,7 +465,7 @@ class TestWindowAnalyzer:
 
         analyzer = WindowAnalyzer(mock_vlm)
         img = _make_image()
-        img.ts = 0.0
+        img.header.stamp = time_from_seconds(0.0)
         frame = Frame(frame_index=0, timestamp_s=0.0, image=img)
         state_dict = {"entity_roster": [], "rolling_summary": ""}
 
@@ -482,7 +483,7 @@ class TestWindowAnalyzer:
 
         analyzer = WindowAnalyzer(mock_vlm)
         img = _make_image()
-        img.ts = 0.0
+        img.header.stamp = time_from_seconds(0.0)
         frame = Frame(frame_index=0, timestamp_s=0.0, image=img)
 
         result = analyzer.analyze_window([frame], {}, 0.0, 2.0)
@@ -531,7 +532,7 @@ class VideoReplayModule(Module):
         def emit_frames(observer, scheduler):
             for i in range(self.num_frames):
                 img = _make_image(value=min(50 + i * 30, 255))  # Varying brightness
-                img.ts = time.time()
+                img.header.stamp = time_from_seconds(time.time())
                 observer.on_next(img)
                 time.sleep(0.5)
             observer.on_completed()
@@ -643,3 +644,17 @@ class TestTemporalMemoryIntegration:
 
         video_module.stop()
         temporal_memory_module.stop()
+
+
+def test_scene_staleness_compares_pixels_not_padding():
+    from dimos.perception.experimental.temporal_memory.frame_window_accumulator import Frame
+    from dimos.perception.experimental.temporal_memory.temporal_utils.helpers import is_scene_stale
+
+    first = Image(
+        width=2, height=2, encoding="rgb8", step=8, data=[10] * 6 + [0, 0] + [10] * 6 + [0, 0]
+    )
+    last = Image.decode(first.encode())
+    last.data = [10] * 6 + [255, 255] + [10] * 6 + [255, 255]
+    assert is_scene_stale([Frame(0, 0, first), Frame(1, 1, last)], stale_threshold=1)
+    last.data = [30] * 6 + [255, 255] + [30] * 6 + [255, 255]
+    assert not is_scene_stale([Frame(0, 0, first), Frame(1, 1, last)], stale_threshold=1)

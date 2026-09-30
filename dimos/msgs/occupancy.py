@@ -15,9 +15,12 @@
 """Array operations on generated occupancy grids."""
 
 import math
+from pathlib import Path
+from typing import Any
 
-from dimos_generated.geometry_msgs.msg import Point
-from dimos_generated.nav_msgs.msg import OccupancyGrid
+from dimos_generated.geometry_msgs.msg import Point, Pose, Quaternion
+from dimos_generated.nav_msgs.msg import MapMetaData, OccupancyGrid
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from numpy.typing import NDArray
 
@@ -82,3 +85,39 @@ def grid_to_world(message: OccupancyGrid, coordinates: tuple[float, float]) -> P
         [x * message.info.resolution, y * message.info.resolution, 0.0, 1.0]
     )
     return Point(x=float(result[0]), y=float(result[1]), z=float(result[2]))
+
+
+def occupancy_from_file(path: Path, *, header: Header, resolution: float = 0.05) -> OccupancyGrid:
+    """Load a static .npy or grayscale PNG grid with explicit frame/time metadata.
+
+    Cells must be ROS occupancy values (-1 unknown, 0..100 known); PNG 255 is
+    unknown. NumPy object/pickle loading is disabled. Row order is unchanged.
+    """
+    if not math.isfinite(resolution) or resolution <= 0:
+        raise ValueError("OccupancyGrid resolution must be finite and positive")
+    cells: NDArray[Any]
+    if path.suffix == ".npy":
+        cells = np.load(path, allow_pickle=False)
+    elif path.suffix == ".png":
+        from PIL import Image
+
+        with Image.open(path) as image:
+            cells = np.asarray(image.convert("L")).astype(np.int16)
+        cells[cells == 255] = -1
+    else:
+        raise ValueError(f"Unsupported occupancy file format: {path.suffix}")
+    if cells.ndim != 2 or cells.dtype.kind not in "iu":
+        raise ValueError("Occupancy cells must be a 2D integer array")
+    if np.any((cells < -1) | (cells > 100)):
+        raise ValueError("Occupancy cells must be -1 or 0..100")
+    return OccupancyGrid(
+        header=header,
+        info=MapMetaData(
+            map_load_time=header.stamp,
+            resolution=resolution,
+            height=cells.shape[0],
+            width=cells.shape[1],
+            origin=Pose(orientation=Quaternion(w=1)),
+        ),
+        data=cells.astype(np.int8).reshape(-1),
+    )

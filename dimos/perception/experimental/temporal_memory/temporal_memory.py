@@ -29,6 +29,8 @@ import threading
 import time
 from typing import Any
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.sensor_msgs.msg import Image
 from reactivex import Subject, interval
 from reactivex.disposable import Disposable
 
@@ -38,10 +40,10 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.models.vl.base import VlModel
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.sensor_msgs.Image import Image, sharpness_barrier
+from dimos.msgs.image import image_sharpness
 from dimos.msgs.visualization_msgs.EntityMarkers import EntityMarkers, Marker
 from dimos.utils.logging_config import get_run_log_dir, setup_logger
+from dimos.utils.reactive import quality_barrier
 
 from .clip_filter import CLIP_AVAILABLE, adaptive_keyframes
 from .entity_graph_db import EntityGraphDB
@@ -295,7 +297,9 @@ class TemporalMemory(Module):
                 )
 
         self.register_disposable(
-            frame_subject.pipe(sharpness_barrier(self.config.fps)).subscribe(_on_frame)
+            frame_subject.pipe(quality_barrier(image_sharpness, self.config.fps)).subscribe(
+                _on_frame
+            )
         )
         unsub_image = self.color_image.subscribe(frame_subject.on_next)
         self.register_disposable(Disposable(unsub_image))
@@ -303,9 +307,9 @@ class TemporalMemory(Module):
         # Odometry tracking for entity world positioning (optional —
         # module works without it, entities just won't have world positions)
         def _on_odom(msg: PoseStamped) -> None:
-            self._robot_x = msg.position.x
-            self._robot_y = msg.position.y
-            self._robot_z = msg.position.z
+            self._robot_x = msg.pose.position.x
+            self._robot_y = msg.pose.position.y
+            self._robot_z = msg.pose.position.z
             self._odom_count += 1
 
         if self.odom.transport is not None:

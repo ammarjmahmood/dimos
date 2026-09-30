@@ -231,3 +231,34 @@ Linux/macOS builds; lint and md-babel failed, Python test jobs remain running.
 WebXR control migration and model-backed memory-doc execution remain held for
 specific approval after automatic review rejected those actions. Their existing
 uncommitted work is preserved and excluded from this repair batch.
+
+
+## Static maps, memory consumers and offline Spot viewer conversion
+
+Static occupancy NPY/PNG loading now returns generated OccupancyGrid values,
+with explicit header/map-load time, identity origin and ROS cell validation;
+object-array loading is disabled. The MuJoCo scene loader and occupancy demo
+use the standalone helper. No simulation/control loop or GUI was started.
+OSM marker drawing and PNG saving convert generated pixels explicitly, retain
+source metadata, and do not mutate cached tile images; its test mocks tile fetch.
+
+SpatialMemory reads nested generated TF fields and RGB/BGR conversions.
+TemporalMemory uses generated image/pose streams, quality selection and real
+header stamps in its fixtures. Scene-staleness ignores row padding.
+Inventory/localization use generated XYZ views and TF fields; source-point
+selection retains RGB and other fields when oversized supports split. Native
+Open3D clustering, plane fitting and oriented boxes are not locally validated.
+Inventory's strict check reports unavailable local torch; no model was loaded.
+Spot Rerun converters construct TF/calibration/capture-anchored depth archetypes
+from generated messages; offline construction passed without a viewer or robot.
+
+Combined selected offline regression: **195 passed, one external temporal-memory
+integration class deselected**. Full local mypy: **161 errors in 73 files**;
+original-CI-path intersection: **75 errors in 24 files**. No suppressions added.
+
+Published c690ef58a439b377cb6d9bb8eeb9bdc60e0128f6 message-codegen run
+36707053518 completed successfully for standalone and Jazzy reference.
+Main run 36707056720 completed fail-fast cancelled: Native/Rust/Web succeeded,
+lint reported 93 errors in 30 files, md-babel passed 126/128 blocks, ARM failed
+and other Python matrix jobs were cancelled. This consumer batch follows that
+run and still requires exact published-commit CI acceptance.
