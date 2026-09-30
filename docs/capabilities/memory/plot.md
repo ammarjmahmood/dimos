@@ -63,6 +63,7 @@ you can assign different axes to different time series, label them etc
 
 ```python session=robotdata output=none
 from dimos.memory.store.sqlite import SqliteStore
+from dimos.msgs.image import image_sharpness
 from dimos.memory.transform import smooth, speed, throttle
 from dimos.memory.vis import color
 from dimos.memory.vis.plot.elements import Series
@@ -338,7 +339,7 @@ meaningful_peak = meaningful_peaks.first()
 # load all images captured in the readius around the semantic peak
 near_images = images.near(meaningful_peak.pose_stamped, radius=2.5) \
     .filter(lambda obs: image_brightness(obs.data) > 0.1) \
-    .transform(QualityWindow(lambda img: img.sharpness, window=0.5))
+    .transform(QualityWindow(image_sharpness, window=0.5))
 
 # load all lidar frames captured in the readius around the semantic peak
 # feed them into a global mapper to get a single pointcloud around our area of interest
@@ -379,14 +380,15 @@ from dimos.robot.unitree.go2.connection import (
     BASE_TO_OPTICAL,
 )
 from dimos.memory.vis.space.elements import Box3D
-from dimos.msgs.geometry_msgs.Pose import Pose
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos_generated.geometry_msgs.msg import Point, Pose
+from dimos.msgs.geometry import compose_transforms, inverse_transform, transform_from_pose
+from dimos_generated.geometry_msgs.msg import Transform
+from dimos_generated.geometry_msgs.msg import Vector3
 
 # TODO We need a nicer way to get optical transform for image streams
 # depending on the source
 def world_to_optical(base_pose):
-    return -(Transform.from_pose("base_link", base_pose) + BASE_TO_OPTICAL)
+    return inverse_transform(compose_transforms(transform_from_pose(base_pose,child_frame_id="base_link"), BASE_TO_OPTICAL))
 
 drawing = Space()
 
@@ -411,8 +413,8 @@ for obs in detections3d:
         aabb = d3d.get_bounding_box()
         c, e = aabb.get_center(), aabb.get_extent()
         drawing.add(Box3D(
-            center=Pose(float(c[0]), float(c[1]), float(c[2])),
-            size=Vector3(float(e[0]), float(e[1]), float(e[2])),
+            center=Pose(position=Point(x=float(c[0]),y=float(c[1]),z=float(c[2]))),
+            size=Vector3(x=float(e[0]),y=float(e[1]),z=float(e[2])),
             color=color.green, label="plant",
         ))
 

@@ -14,6 +14,8 @@
 # limitations under the License.
 
 import cv2
+from dimos_generated.nav_msgs.msg import OccupancyGrid
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from open3d.geometry import PointCloud
 import pytest
@@ -25,9 +27,9 @@ from dimos.mapping.pointclouds.occupancy import (
     simple_occupancy,
 )
 from dimos.mapping.pointclouds.util import read_pointcloud
-from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.image import image_from_file, image_view
+from dimos.msgs.occupancy import occupancy_view
+from dimos.msgs.pointcloud import pointcloud_from_xyz
 from dimos.utils.data import get_data
 from dimos.utils.testing.moment import OutputMoment
 from dimos.utils.testing.test_moment import Go2Moment
@@ -53,12 +55,12 @@ def big_office() -> PointCloud:
 )
 def test_occupancy(apartment: PointCloud, occupancy_fn, output_name: str) -> None:
     expected_image = cv2.imread(str(get_data(output_name)), cv2.IMREAD_GRAYSCALE)
-    cloud = PointCloud2.from_numpy(np.asarray(apartment.points), frame_id="map")
+    cloud = pointcloud_from_xyz(np.asarray(apartment.points), header=Header(frame_id="map"))
 
     occupancy_grid = occupancy_fn(cloud)
 
     # Convert grid from -1..100 to 0..101 for PNG
-    computed_image = (occupancy_grid.grid + 1).astype(np.uint8)
+    computed_image = (occupancy_view(occupancy_grid) + 1).astype(np.uint8)
 
     np.testing.assert_array_equal(computed_image, expected_image)
 
@@ -71,14 +73,13 @@ def test_occupancy(apartment: PointCloud, occupancy_fn, output_name: str) -> Non
     ],
 )
 def test_occupancy2(big_office, occupancy_fn, output_name):
-    expected_image = Image.from_file(get_data(output_name))
-    cloud = PointCloud2.from_numpy(np.asarray(big_office.points), frame_id="")
+    expected_image = image_from_file(get_data(output_name))
+    cloud = pointcloud_from_xyz(np.asarray(big_office.points), header=Header())
 
     occupancy_grid = occupancy_fn(cloud)
 
     actual = visualize_occupancy_grid(occupancy_grid, "rainbow")
-    actual.ts = expected_image.ts
-    np.testing.assert_array_equal(actual, expected_image)
+    np.testing.assert_array_equal(image_view(actual), image_view(expected_image))
 
 
 class HeightCostMoment(Go2Moment):
@@ -116,15 +117,15 @@ def test_height_cost_occupancy_from_lidar(height_cost_moment) -> None:
     assert costmap is not None
 
     # Basic sanity checks
-    assert costmap.grid is not None
-    assert costmap.width > 0
-    assert costmap.height > 0
+    assert occupancy_view(costmap) is not None
+    assert costmap.info.width > 0
+    assert costmap.info.height > 0
 
     # Costs should be in range -1 to 100 (-1 = unknown)
-    assert costmap.grid.min() >= -1
-    assert costmap.grid.max() <= 100
+    assert occupancy_view(costmap).min() >= -1
+    assert occupancy_view(costmap).max() <= 100
 
     # Check we have some unknown, some known
-    known_mask = costmap.grid >= 0
+    known_mask = occupancy_view(costmap) >= 0
     assert known_mask.sum() > 0, "Expected some known cells"
     assert (~known_mask).sum() > 0, "Expected some unknown cells"

@@ -103,7 +103,7 @@ classifiers = [
 
 dependencies = [
     # Transport Protocols
-    "dimos-lcm>=0.1.3",
+    "lcm-dimos-fork>=1.5.2.post1", # Raw LCM transport; generated messages use CDR.
     "eclipse-zenoh>=1.10.1,<2.0",
     "PyTurboJPEG==1.8.2",
     "imagecodecs>=2024.6.1", # JPEG-XL for CompressedImage
@@ -279,7 +279,7 @@ unitree-dds = [
 control = [
     "piper-sdk",
     "xarm-python-sdk>=1.17.0",
-    "a750-control; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "a750-control; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "can-motor-control>=0.0.8",
     "python-can>=4",
     "pygame>=2.6.1",
@@ -519,7 +519,7 @@ dev = [
 required-version = ">=0.9.25"
 default-groups = ["tests"]
 exclude-newer = "7 days"
-exclude-newer-package = { dimos-viewer = false, dimos-lcm = false, lcm-dimos-fork = false, roboplan = false, md-babel-py = false, can-motor-control = false, edgetam-dimos = false, dim-odom = false, eclipse-zenoh = false }
+exclude-newer-package = { dimos-viewer = false, lcm-dimos-fork = false, roboplan = false, md-babel-py = false, can-motor-control = false, edgetam-dimos = false, dim-odom = false, eclipse-zenoh = false }
 constraint-dependencies = [
     # TODO(PY311): drop this fork. onnxruntime(-gpu) 1.24 dropped cp310
     # wheels, so 3.10 environments resolve 1.23.x (matching what a 3.10
@@ -606,7 +606,7 @@ ignore = [
 # (camelCase, pinned to the TS side by the golden fixtures).
 "dimos/web/relay_bridge/protocol.py" = ["N815"]
 "dimos/web/relay_bridge/manifest.py" = ["N815"]
-# Polyfill module: re-exports ROS message types (with a dimos_lcm fallback).
+# Polyfill module: re-exports optional ROS message types.
 "dimos/types/ros_polyfill.py" = ["F401"]
 
 [tool.ruff.lint.isort]
@@ -637,7 +637,6 @@ module = [
     "builtin_interfaces.*",
     "cyclonedds",
     "cyclonedds.*",
-    "dimos_lcm.*",
     "lz4",
     "lz4.*",
     "dimos_mls_planner",

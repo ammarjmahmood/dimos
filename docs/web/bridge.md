@@ -130,7 +130,7 @@ Two more need no registration:
 When `encoding` is not given, an rx dimOS message gets its CDR encoding and everything else (every tx channel included) gets `json.v1`. `Image` has no default: use `jpeg.v1` or an encoder of your own. The built-in names keep their codecs: `Channel("odom", PoseStamped)` in `cockpit(channels=[...])` raises, because `odom` is `pose.json.v1`. Any other name takes the default:
 
 ```python
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos_generated.geometry_msgs.msg import PoseStamped
 from dimos.web.cockpit import Channel
 
 print(Channel("pose", PoseStamped).encoding)
@@ -143,7 +143,7 @@ json.v1
 ```
 
 ```python
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos_generated.sensor_msgs.msg import Image
 from dimos.web.cockpit import Channel
 
 try:
@@ -163,14 +163,14 @@ sensor_msgs.Image has no default web encoding (raw pixel buffers; use encoding='
 ```python skip
 import struct
 
-from dimos.msgs.nav_msgs.Path import Path
+from dimos_generated.nav_msgs.msg import Path
 from dimos.web.cockpit import Channel, cockpit
 from dimos.web.codecs import EncodedPayload, web_encoder
 
 
 @web_encoder("path.points.v1")
 def encode_path_points(msg: Path) -> EncodedPayload:
-    payload = b"".join(struct.pack("<ff", p.position.x, p.position.y) for p in msg.poses)
+    payload = b"".join(struct.pack("<ff", p.pose.position.x, p.pose.position.y) for p in msg.poses)
     return EncodedPayload(payload, {"n": len(msg.poses)})
 
 

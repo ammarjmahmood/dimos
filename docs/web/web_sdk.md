@@ -232,14 +232,15 @@ The Go2's `lidar` stream is a `PointCloud2`. Its default CDR encoding costs 16 b
 In `web.py`, the encoder and the second channel:
 
 ```python skip
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos_generated.sensor_msgs.msg import PointCloud2
+from dimos.msgs.pointcloud import pointcloud_xyz
 from dimos.web.codecs import EncodedPayload, web_encoder
 
 
 # lidar.xy.v1: little-endian float32 (x, y) pairs, point count in meta.
 @web_encoder("lidar.xy.v1")
 def encode_lidar_xy(msg: PointCloud2) -> EncodedPayload:
-    points = msg.points_f32()[::4, :2]  # every 4th point, drop z
+    points = pointcloud_xyz(msg)[::4, :2]  # every 4th point, drop z
     return EncodedPayload(points.tobytes(), {"n": len(points)})
 ```
 

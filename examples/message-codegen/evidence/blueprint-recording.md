@@ -115,3 +115,40 @@ Published commit `0bac7f454bcd2f61766c0246e38a40016c62746c` has terminal success
 for main CI 36765815202 and codegen CI 36765824915. Self-hosted lanes were
 skipped. These results do not cover subsequent local commits until their own
 exact-HEAD workflows complete.
+
+## Python dependency retirement and remaining consumers
+
+The 47 obsolete Python message implementation files have been removed after
+migrating their remaining Python imports. The root project now declares raw
+`lcm-dimos-fork` directly and no longer depends on `dimos-lcm`. The task venv's
+installed `dimos-lcm` was also uninstalled: **624 offline message/voxel tests
+passed without it**. The lock removes only `dimos-lcm` and its unused
+`foxglove-websocket` dependency; no remaining package versions changed.
+Re-resolution required restricting the existing optional `a750-control` wheel
+to Python 3.12, its only published/locked ABI, instead of requesting it on 3.10/3.11.
+
+The retired typed-pickle voxel regression fixture is now deterministic CDR
+geometry, with exact voxel counts at three resolutions, repeated-ingestion
+invariance, numerical coordinates, and range preservation. Raw PLY/image
+occupancy fixtures remain supported. Full local test collection reached 6555
+tests with 16 collection errors for absent optional dependencies (coacd, h5py,
+open_clip, plotext, reportlab, requests_mock, trimesh, ultralytics, yourdfpy),
+not obsolete message imports. This is not a full-suite pass.
+
+Remaining examples and the optional LeRobot runtime use generated image,
+pose, point-cloud and UInt32 button fields. The runtime copies image pixels
+before retaining an observation. Its own scoped mypy configuration passes,
+but its behavioral suite still requires the absent LeRobot environment.
+The virtual robot's pure unicycle integration passed a numerical check;
+the C++ controller compiled against the installed CMake message package and
+raw LCM, without being run. The obsolete Lua and TypeScript LCM-codec demos
+are retired explicitly; Lua generation is deferred and the browser CDR SDK
+is the supported web path. Transform documentation passed 5 executable Python
+blocks; eval documentation passed all 6 blocks (4 no-result, 2 with results).
+
+Outstanding dependency gate: the M20 onboard DrDDS/Zenoh C++ bridge still
+fetches/uses old message headers. The local environment lacks the vendor DrDDS
+SDK, and its `sensor_msgs::msg`/`nav_msgs::msg` types collide with generated C++
+type names. A verified vendor boundary/codec migration is still required;
+no board build, deployment or robot operation has been performed. Historical
+manual replay fixtures and final viewer/transport acceptance also remain open.
