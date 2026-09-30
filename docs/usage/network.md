@@ -2,9 +2,9 @@
 
 `dimos network check` measures a bounded, synthetic Zenoh connection before you
 start a robot stack. Run it on the local computer. It uses existing SSH access
-to start an owned responder with the **absolute remote DimOS executable path**.
+to start an owned responder with the **absolute remote dimOS executable path**.
 Both endpoints must already contain this command and the same supported Zenoh
-version (`>=1.10.1,<2`, validated with 1.10.1). It never installs DimOS, transfers
+version (`>=1.10.1,<2`, validated with 1.10.1). It never installs dimOS, transfers
 a helper, starts a blueprint, or sends robot actions.
 
 For example, use `dimos network check robot@robot-host --remote-dimos
@@ -102,7 +102,7 @@ Ctrl-C stops owned traffic and requests peer cleanup. Stdin EOF on SSH disconnec
 also stops the responder; its independent duration lease remains in force if the
 disconnect is not immediately detected, with a final process deadline five seconds
 later. Cleanup can exceed the measurement cap by bounded teardown time. Existing
-DimOS processes and robot services are never targeted for termination. Results
+dimOS processes and robot services are never targeted for termination. Results
 from an interrupted run are partial and any requested verdict is inconclusive.
 
 Rerun and distributed multi-machine orchestration are deferred. The MVP owns one

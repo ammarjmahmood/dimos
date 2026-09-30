@@ -133,7 +133,7 @@ def test_peer_unavailable_reports_failure_without_leaking_process():
 
 
 def test_session_cap_returns_partial_result_and_cleanup():
-    settings = Settings(max_seconds=0.8, idle_seconds=0.1, step_seconds=5)
+    settings = Settings(max_seconds=3, idle_seconds=0.1, step_seconds=5)
     report = run_check(
         "127.0.0.1", "/test/dimos", settings, peer_command=PEER, listen_host="127.0.0.1"
     )
@@ -227,3 +227,16 @@ def test_malformed_peer_json_is_reported_as_protocol_failure():
             peer.read()
     finally:
         peer.close()
+
+
+def test_timeout_at_session_deadline_is_capped_even_before_lease_callback(mocker):
+    peer = mocker.patch("dimos.cli.network.runner.RemotePeer").return_value
+    peer.request.side_effect = TimeoutError("SSH responder did not reply before deadline")
+    peer.close.return_value = "confirmed"
+    clock = mocker.patch("dimos.cli.network.runner.time.monotonic")
+    clock.side_effect = [100, 100, 190]
+    mocker.patch("dimos.cli.network.runner.threading.Timer")
+    report = run_check("localhost", "/test/dimos", Settings(max_seconds=90))
+    assert report.status == "capped"
+    assert report.cleanup == "confirmed"
+    assert report.error == "SSH responder did not reply before deadline"

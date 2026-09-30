@@ -342,7 +342,10 @@ def run_check(
         report.error = "cancelled by user"
         report.verdict = "inconclusive" if settings.has_thresholds else "not_requested"
     except (OSError, RuntimeError, ValueError, TimeoutError, zenoh.ZError) as error:
-        report.status = "capped" if stop.is_set() or isinstance(error, SessionCapError) else "error"
+        budget_expired = stop.is_set() or time.monotonic() >= deadline
+        report.status = (
+            "capped" if budget_expired or isinstance(error, SessionCapError) else "error"
+        )
         report.error = str(error)
         report.verdict = "inconclusive" if settings.has_thresholds else "not_requested"
     finally:
