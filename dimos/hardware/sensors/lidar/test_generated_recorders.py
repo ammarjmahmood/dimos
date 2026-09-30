@@ -29,6 +29,7 @@ from dimos.mapping.relocalization.blueprints import RecordingPlayer, _fine_point
 from dimos.msgs.geometry import transform_matrix
 from dimos.msgs.pointcloud import pointcloud_from_xyz
 from dimos.robot.assembly.mid360_realsense_30 import Mid360RealsenseRecorder
+from dimos.robot.unitree.g1.g1_recorder import G1Recorder, G1RecorderConfig
 
 
 @pytest.mark.asyncio
@@ -82,3 +83,11 @@ def test_realsense_mount_is_an_identity_and_generated_cloud_views_are_typed():
     assert _cloud(cloud).positions is not None
     assert _fine_points(cloud).positions is not None
     assert cloud.encode() == before
+
+
+def test_g1_depth_recorder_declares_generated_lossless_cdr():
+    config = G1RecorderConfig()
+    assert config.stream_codecs["realsense_depth_image"] == "lz4+cdr"
+    streams = {s.name: s.type for s in G1Recorder.blueprint().blueprints[0].streams}
+    assert streams["realsense_depth_image"] is Image
+    assert streams["realsense_camera_info"] is CameraInfo

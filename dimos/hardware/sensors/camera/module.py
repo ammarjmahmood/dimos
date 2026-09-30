@@ -38,7 +38,11 @@ from dimos.visualization.vis_module import vis_module
 
 
 def default_transform() -> TransformStamped:
-    return TransformStamped(header=Header(frame_id="base_link"), child_frame_id="camera_link")
+    return TransformStamped(
+        header=Header(frame_id="base_link"),
+        child_frame_id="camera_link",
+        transform=Transform(rotation=Quaternion(w=1.0)),
+    )
 
 
 class CameraModuleConfig(ModuleConfig):

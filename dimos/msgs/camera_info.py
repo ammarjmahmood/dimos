@@ -17,6 +17,7 @@
 from copy import deepcopy
 import math
 from pathlib import Path
+import re
 from typing import Any, Literal
 
 from dimos_generated.builtin_interfaces.msg import Time
@@ -125,3 +126,44 @@ def camera_info_with_stamp(message: CameraInfo, stamp: Time) -> CameraInfo:
     result = deepcopy(message)
     result.header.stamp = deepcopy(stamp)
     return result
+
+
+class CalibrationProvider:
+    """Lazily load named YAML calibrations as plain generated CameraInfo values.
+
+    Both SingleWebcam and single_webcam resolve single_webcam.yaml. This
+    helper lives outside generated messages; calibration files stay local.
+    """
+
+    def __init__(self, calibration_dir: str | Path, *, frame_id: str = "camera_optical") -> None:
+        self._calibration_dir = Path(calibration_dir)
+        self._frame_id = frame_id
+        self._cache: dict[str, CameraInfo] = {}
+
+    @staticmethod
+    def _to_snake_case(name: str) -> str:
+        first = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+        return re.sub("([a-z0-9])([A-Z])", r"\1_\2", first).lower()
+
+    def __getattr__(self, name: str) -> CameraInfo:
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
+            raise AttributeError(f"No calibration file found for: {name}")
+        snake = self._to_snake_case(name)
+        for key in (name, snake):
+            if key in self._cache:
+                return self._cache[key]
+        for key in (name, snake):
+            path = self._calibration_dir / f"{key}.yaml"
+            if path.is_file():
+                value = camera_info_from_yaml(path, header=Header(frame_id=self._frame_id))
+                self._cache[name] = value
+                self._cache[snake] = value
+                return value
+        raise AttributeError(f"No calibration file found for: {name}")
+
+    def __dir__(self) -> list[str]:
+        names: set[str] = set()
+        for path in self._calibration_dir.glob("*.yaml"):
+            names.add(path.stem)
+            names.add("".join(word.capitalize() for word in path.stem.split("_")))
+        return sorted(names)

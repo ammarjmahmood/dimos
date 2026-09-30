@@ -13,10 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dimos_generated.sensor_msgs.msg import CameraInfo as GeneratedCameraInfo
 import numpy as np
 
 from dimos.constants import DIMOS_PROJECT_ROOT
-from dimos.msgs.sensor_msgs.CameraInfo import CalibrationProvider, CameraInfo
+from dimos.msgs.camera_info import CalibrationProvider
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 
 
 def test_lcm_encode_decode() -> None:
@@ -266,13 +268,13 @@ def test_calibration_provider() -> None:
 
     # Test lazy loading of single_webcam.yaml using snake_case
     camera_info = Calibrations.single_webcam
-    assert isinstance(camera_info, CameraInfo)
+    assert isinstance(camera_info, GeneratedCameraInfo)
     assert camera_info.width == 640
     assert camera_info.height == 376
 
     # Test PascalCase access to same calibration
     camera_info2 = Calibrations.SingleWebcam
-    assert isinstance(camera_info2, CameraInfo)
+    assert isinstance(camera_info2, GeneratedCameraInfo)
     assert camera_info2.width == 640
     assert camera_info2.height == 376
 

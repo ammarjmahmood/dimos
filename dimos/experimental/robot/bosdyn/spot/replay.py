@@ -31,6 +31,7 @@ from pathlib import Path
 
 from dimos_generated.geometry_msgs.msg import TransformStamped
 from dimos_generated.nav_msgs.msg import Odometry
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image
 from dimos_generated.tf2_msgs.msg import TFMessage
 
 from dimos.constants import RECORDINGS_DIR
@@ -43,8 +44,6 @@ from dimos.experimental.robot.bosdyn.spot.config import (
 from dimos.experimental.robot.bosdyn.spot.utils import roll_optical_frame
 from dimos.memory.replay import resolve_db_path
 from dimos.memory.store.sqlite import SqliteStore
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()

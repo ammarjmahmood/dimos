@@ -54,6 +54,7 @@ from dimos_generated.geometry_msgs.msg import (
     Vector3,
 )
 from dimos_generated.nav_msgs.msg import Odometry
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image
 from dimos_generated.std_msgs.msg import Header
 from dimos_generated.tf2_msgs.msg import TFMessage
 
@@ -86,9 +87,7 @@ from dimos.experimental.robot.bosdyn.spot.utils import (
     rotate_image_quarter_turns,
 )
 from dimos.msgs.geometry import transform_from_odometry
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.time import time_from_seconds
+from dimos.msgs.time import time_from_seconds, to_seconds
 from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher, StaticTfPublisherConfig
 from dimos.utils.logging_config import setup_logger
 
@@ -419,10 +418,12 @@ class SpotHighLevel(StaticTfPublisher):
                 image = decode_image(response, frame_id, time_converter)
                 if image is None:
                     continue
-                if last_published_ts.get(source_name) == image.ts:
+                if last_published_ts.get(source_name) == to_seconds(image.header.stamp):
                     continue
-                last_published_ts[source_name] = image.ts
-                camera_info = camera_info_from_response(response, frame_id, image.ts)
+                last_published_ts[source_name] = to_seconds(image.header.stamp)
+                camera_info = camera_info_from_response(
+                    response, frame_id, to_seconds(image.header.stamp)
+                )
                 if quarter_turns:
                     image = rotate_image_quarter_turns(image, quarter_turns)
                     if camera_info is not None:

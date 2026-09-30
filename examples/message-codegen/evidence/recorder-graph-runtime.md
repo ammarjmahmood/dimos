@@ -5,7 +5,7 @@ PointCloud2 producers. Their existing last-odometry pose anchoring is unchanged.
 The RealSense/Mid360 assembly recorder and relocalization replay ports also
 use generated message identities. Offline camera/relocalization viewer overrides
 call external cloud helpers, and the standalone RealSense mount has an explicit
-identity quaternion instead of the ROS default all-zero quaternion. No devices,
+identity quaternion, with an offline identity-matrix check. No devices,
 SLAM native processes or dataset replays were started.
 
 Strict scoped mypy passed for these five production files. Three existing

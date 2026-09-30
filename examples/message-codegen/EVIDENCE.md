@@ -1292,3 +1292,6 @@ For the subsequent compressed-image/runtime adapter batch, see
 
 Recorder/graph boundaries and the isolated Python example are covered in
 [evidence/recorder-graph-runtime.md](evidence/recorder-graph-runtime.md).
+
+[Unitree/Spot/camera runtime evidence](evidence/unitree-spot-camera-runtime.md)
+covers the next consumer batch.

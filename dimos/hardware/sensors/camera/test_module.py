@@ -16,10 +16,12 @@
 
 from dimos_generated.sensor_msgs.msg import CameraInfo
 from dimos_generated.tf2_msgs.msg import TFMessage
+import numpy as np
 import pytest
 
 from dimos.hardware.sensors.camera.module import CameraModule
 from dimos.hardware.sensors.camera.webcam import Webcam
+from dimos.msgs.geometry import transform_matrix
 
 
 @pytest.fixture
@@ -54,3 +56,4 @@ def test_metadata_preserves_calibration_and_does_not_mutate_mount_template(modul
     ]
     assert all(edge.header.stamp == info.header.stamp for edge in transforms)
     assert module.config.transform.encode() == original
+    np.testing.assert_allclose(transform_matrix(transforms[0].transform), np.eye(4))
