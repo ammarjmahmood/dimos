@@ -38,6 +38,7 @@ from dimos.manipulation.planning.spec.models import (
     CollisionObjectMessage,
     Obstacle,
 )
+from dimos.msgs.pointcloud import pointcloud_xyz
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -640,8 +641,8 @@ class WorldObstacleMonitor:
                     pointcloud_to_convex_hull_obj,
                 )
 
-                points, _ = obj.pointcloud.as_numpy()
-                if points is not None and points.shape[0] >= 4:
+                points = pointcloud_xyz(obj.pointcloud)
+                if points.shape[0] >= 4:
                     # Keyed on the object's stable unique id: rescans overwrite
                     # in place, and no two objects share a file.
                     hull = pointcloud_to_convex_hull_obj(points, cache_key=name)

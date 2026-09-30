@@ -184,6 +184,15 @@ def pose_from_matrix(matrix: NDArray[np.float64]) -> Pose:
     )
 
 
+def transform_from_matrix(matrix: NDArray[np.float64]) -> Transform:
+    """Copy a finite rigid homogeneous matrix into a generated transform."""
+    pose = pose_from_matrix(matrix)
+    return Transform(
+        translation=Vector3(x=pose.position.x, y=pose.position.y, z=pose.position.z),
+        rotation=pose.orientation,
+    )
+
+
 def quaternion_euler(rotation: Quaternion) -> tuple[float, float, float]:
     """Return fixed-axis XYZ Euler angles in radians for a generated quaternion."""
     roll, pitch, yaw = _rotation(rotation).as_euler("xyz")

@@ -1217,3 +1217,35 @@ is a message/projection check, not physical navigation or TF-frame validation.
 
 Recent holonomic, MLS, ray-tracing, and evaluation results are in
 [EVIDENCE-navigation.md](EVIDENCE-navigation.md).
+
+
+### Offline replay, PGO cloud inputs, recorder and metadata consumers
+
+The generated-message batch converts B1 odometry forwarding, M20 video/camera/TF
+metadata, offline replay and marker rendering, map reconstruction/CDR export,
+pose-fill mounts, and PGO point-cloud input/submap/ICP boundaries. Existing
+GTSAM and Open3D numerical algorithms remain; their internal numeric transforms
+still require retirement review. CollectionRecorder now records generated image
+and joint-state values and preserves the timestamp of application EpisodeStatus
+messages instead of substituting wall-clock time. ObjectDB cleanup and convex
+hull extraction use generated point buffers. Moondream fixtures use real bbox
+values so generated Detection2DArray construction exercises the actual conversion.
+
+The local synthetic regression batch passed **51 tests**, covering geometry,
+pose-fill rotation/unmatched frames, PGO body-to-world submap placement and merge,
+CLI import cost, B1 forwarding, M20 metadata, and Rerun camera/cloud modes. Scoped
+pre-commit hooks passed. Local perception/collection test collection is blocked
+by missing hydra, torch and h5py; no extra model or dataset was downloaded. Native
+GTSAM/Open3D full-pipeline validation remains dependent on CI.
+
+Before this batch, exact published commit
+42c3f4411a4d19135952dc22df8cdee927dff235 passed message-codegen standalone and
+Jazzy-reference jobs, C++/Rust native builds, Rust and Web CI. Main CI still failed:
+lint reported 34 errors in 12 files; Python 3.12 reported 6267 passed, 82 skipped,
+3 failed and 3 errors. Other matrix jobs were cancelled by fail-fast. The fixes
+above address a subset of those failures; these previous results do not prove
+this batch or the entire migration complete.
+
+WebXR control-path edits and full memory-document execution remain paused after
+automatic approval rejection. Eight pending files are excluded from this batch.
+No hardware, network configuration, or live-control acceptance test was performed.

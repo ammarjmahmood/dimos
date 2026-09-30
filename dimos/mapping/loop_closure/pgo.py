@@ -48,18 +48,26 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar, cast
 
-from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.geometry_msgs.msg import PoseStamped, TransformStamped
+from dimos_generated.sensor_msgs.msg import PointCloud2
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from dimos.memory.transform import Transformer
 from dimos.memory.type.observation import Observation
-from dimos.msgs.geometry import pose_from_matrix, pose_matrix
+from dimos.msgs.geometry import pose_from_matrix, pose_matrix, transform_from_matrix
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.pointcloud import (
+    concatenate_clouds,
+    pointcloud_from_xyz,
+    pointcloud_to_open3d,
+    transform_cloud,
+    voxel_downsample_cloud,
+)
+from dimos.msgs.time import to_seconds
 from dimos.protocol.service.spec import BaseConfig
 from dimos.utils.logging_config import setup_logger
 
@@ -370,20 +378,23 @@ class _PGOState:
         ts: float,
         world_cloud: PointCloud2,
     ) -> None:
-        if len(world_cloud) == 0:
+        if world_cloud.width * world_cloud.height == 0:
             return
         if not self._is_keyframe(local_pose):
             return
         # Unregister: lift world-frame scan back into body frame using its
         # odom pose, so PGO can re-project it via the optimized pose later.
-        body_cloud = world_cloud.transform(
-            _pose3_to_transform(
-                local_pose.inverse(),
-                ts=ts,
-                frame_id=FRAME_BODY,
-                child_frame_id=FRAME_WORLD_RAW,
-            )
-        ).voxel_downsample(self._cfg.submap_resolution)
+        body_cloud = voxel_downsample_cloud(
+            transform_cloud(
+                world_cloud,
+                TransformStamped(
+                    header=Header(frame_id=FRAME_BODY, stamp=world_cloud.header.stamp),
+                    child_frame_id=world_cloud.header.frame_id,
+                    transform=transform_from_matrix(local_pose.inverse().matrix()),
+                ),
+            ),
+            self._cfg.submap_resolution,
+        )
         self._add_keyframe(local_pose, ts, body_cloud)
         self._search_for_loops()
         self._smooth_and_update()
@@ -505,26 +516,24 @@ class _PGOState:
         lo = max(0, idx - half_range)
         hi = min(len(self._key_poses) - 1, idx + half_range)
         if lo > hi:
-            return PointCloud2()
-        cloud = self._key_poses[lo].body_cloud.transform(
-            _pose3_to_transform(
-                self._key_poses[lo].optimized,
-                ts=self._key_poses[lo].timestamp,
-                frame_id=FRAME_WORLD_CORRECTED,
-                child_frame_id=FRAME_BODY,
+            return pointcloud_from_xyz(
+                np.empty((0, 3)), header=Header(frame_id=FRAME_WORLD_CORRECTED)
             )
-        )
-        for i in range(lo + 1, hi + 1):
-            kp = self._key_poses[i]
-            cloud = cloud + kp.body_cloud.transform(
-                _pose3_to_transform(
-                    kp.optimized,
-                    ts=kp.timestamp,
-                    frame_id=FRAME_WORLD_CORRECTED,
+
+        def registered(kp: _KeyPose) -> PointCloud2:
+            return transform_cloud(
+                kp.body_cloud,
+                TransformStamped(
+                    header=Header(frame_id=FRAME_WORLD_CORRECTED, stamp=kp.body_cloud.header.stamp),
                     child_frame_id=FRAME_BODY,
-                )
+                    transform=transform_from_matrix(kp.optimized.matrix()),
+                ),
             )
-        return cloud.voxel_downsample(self._cfg.submap_resolution)
+
+        cloud = registered(self._key_poses[lo])
+        for i in range(lo + 1, hi + 1):
+            cloud = concatenate_clouds(cloud, registered(self._key_poses[i]))
+        return voxel_downsample_cloud(cloud, self._cfg.submap_resolution)
 
     def _search_for_loops(self) -> None:
         if len(self._key_poses) < self._cfg.min_keyframes_for_loop_search:
@@ -686,11 +695,11 @@ def _icp(
     import open3d as o3d  # type: ignore[import-untyped]
     import open3d.core as o3c  # type: ignore[import-untyped]
 
-    if len(source) < min_inliers or len(target) < min_inliers:
+    if source.width * source.height < min_inliers or target.width * target.height < min_inliers:
         return Transform.identity(), float("inf")
 
-    src_pcd = source.pointcloud_tensor
-    tgt_pcd = target.pointcloud_tensor
+    src_pcd = o3d.t.geometry.PointCloud.from_legacy(pointcloud_to_open3d(source))
+    tgt_pcd = o3d.t.geometry.PointCloud.from_legacy(pointcloud_to_open3d(target))
 
     # Normals on the target enable point-to-plane ICP — converges tighter
     # than point-to-point on indoor scenes (walls give unambiguous normals
@@ -724,6 +733,6 @@ def _icp(
         return Transform.identity(), float("inf")
 
     # Frames intentionally unlabeled: caller only reads .to_matrix().
-    tf = Transform.from_matrix(result.transformation.numpy(), ts=source.ts)
+    tf = Transform.from_matrix(result.transformation.numpy(), ts=to_seconds(source.header.stamp))
     rmse = float(result.inlier_rmse)
     return tf, rmse * rmse

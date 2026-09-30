@@ -19,7 +19,9 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+import numpy as np
+
+from dimos.msgs.pointcloud import pointcloud_from_xyz
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -187,16 +189,10 @@ class ObjectDB:
 
     def clear(self) -> None:
         """Clear all objects from the database."""
-        import open3d as o3d  # type: ignore[import-untyped]
-
         with self._lock:
-            # Drop Open3D pointcloud references before clearing to reduce shutdown warnings.
+            # Release large generated point buffers, retaining metadata on held objects.
             for obj in list(self._pending_objects.values()) + list(self._objects.values()):
-                obj.pointcloud = PointCloud2(
-                    pointcloud=o3d.geometry.PointCloud(),
-                    frame_id=obj.pointcloud.frame_id,
-                    ts=obj.pointcloud.ts,
-                )
+                obj.pointcloud = pointcloud_from_xyz(np.empty((0, 3)), header=obj.pointcloud.header)
             self._pending_objects.clear()
             self._objects.clear()
             self._track_id_map.clear()

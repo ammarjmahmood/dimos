@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from dimos_generated.sensor_msgs.msg import PointCloud2
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -31,7 +33,8 @@ from dimos.memory.stream import Stream
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.pointcloud import pointcloud_from_xyz
+from dimos.msgs.time import time_from_seconds
 
 # TODO(PY311): drop — the mapping extra excludes gtsam-extended where it has no
 # wheels (py3.10 Linux), see pyproject.
@@ -152,7 +155,10 @@ def _make_lidar_stream(n_frames: int = 12, points_per_frame: int = 500) -> Strea
         body = rng.uniform(-1, 1, size=(points_per_frame, 3)).astype(np.float32)
         world = (R_world @ body.T).T + np.array([i, 0, 0], dtype=np.float32)
         lidar.append(
-            PointCloud2.from_numpy(world.astype(np.float32)),
+            pointcloud_from_xyz(
+                world.astype(np.float32),
+                header=Header(frame_id="world_raw", stamp=time_from_seconds(float(i))),
+            ),
             ts=float(i),
             pose=(float(i), 0.0, 0.0, qx, qy, qz, qw),
         )
@@ -247,7 +253,7 @@ class TestApplyAsTransformer:
         lidar: Stream[PointCloud2] = mem.stream("lidar", PointCloud2)
         for i in range(3):
             lidar.append(
-                PointCloud2.from_numpy(np.zeros((1, 3), dtype=np.float32)),
+                pointcloud_from_xyz(np.zeros((1, 3), dtype=np.float32), header=Header()),
                 ts=float(i + 1),
                 pose=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
             )
@@ -268,7 +274,7 @@ class TestApplyAsTransformer:
         mem = MemoryStore()
         lidar: Stream[PointCloud2] = mem.stream("lidar", PointCloud2)
         lidar.append(
-            PointCloud2.from_numpy(np.zeros((1, 3), dtype=np.float32)),
+            pointcloud_from_xyz(np.zeros((1, 3), dtype=np.float32), header=Header()),
             ts=1.0,
             pose=None,
         )

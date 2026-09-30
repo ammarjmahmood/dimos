@@ -31,6 +31,7 @@ from dimos.msgs.camera_info import camera_info_from_intrinsics
 from dimos.msgs.image import image_from_array
 from dimos.msgs.pointcloud import pointcloud_xyz
 from dimos.msgs.time import time_from_seconds
+from dimos.perception.detection.type.detection2d.bbox import Detection2DBBox
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.perception.experimental.objectDB import ObjectDB
@@ -227,8 +228,8 @@ def test_moondream_queries_each_configured_prompt(monkeypatch: Any) -> None:
         encoding="bgr8",
         header=Header(frame_id="camera", stamp=time_from_seconds(4.0)),
     )
-    cup = MagicMock(track_id=0, class_id=-1)
-    bottle = MagicMock(track_id=0, class_id=-1)
+    cup = Detection2DBBox((0, 0, 1, 1), 0, -1, 0.9, "cup", 4.0, color)
+    bottle = Detection2DBBox((1, 1, 2, 2), 0, -1, 0.8, "bottle", 4.0, color)
     module._detector.query_detections.side_effect = [
         ImageDetections2D(color, [cup]),
         ImageDetections2D(color, [bottle]),
@@ -236,7 +237,10 @@ def test_moondream_queries_each_configured_prompt(monkeypatch: Any) -> None:
     process_3d = MagicMock()
     monkeypatch.setattr(module, "_process_3d_detections", process_3d)
 
-    module._process_images(color, _image(4.0))
+    try:
+        module._process_images(color, _image(4.0))
+    finally:
+        module.stop()
 
     assert module._detector.query_detections.call_args_list == [
         call(color, "cup"),

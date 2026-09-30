@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from dimos_generated.foxglove_msgs.msg import CompressedVideo
 from dimos_generated.geometry_msgs.msg import PointStamped, PoseStamped
@@ -142,23 +142,41 @@ def detection_boxes(message: Detection3DArray) -> rr.Boxes3D:
     return rr.Boxes3D(centers=centers, half_sizes=half_sizes, quaternions=rotations, labels=labels)
 
 
-def cloud_archetype(message: PointCloud2, *, voxel_size: float = 0.05) -> rr.Points3D:
+def cloud_archetype(
+    message: PointCloud2,
+    *,
+    voxel_size: float = 0.05,
+    mode: str = "spheres",
+    bottom_cutoff: float | None = None,
+    ui_radius: float = 2.0,
+    fill_mode: Literal["solid", "majorwireframe", "densewireframe"] = "solid",
+) -> rr.Points3D | rr.Boxes3D:
     """Render finite XYZ points with packed RGB or an explicit height colormap."""
     import rerun as rr
 
     points = pointcloud_xyz(message)
     colors = pointcloud_rgb(message)
     keep = np.isfinite(points).all(axis=1)
+    if mode not in {"points", "boxes", "spheres"}:
+        raise ValueError("cloud mode must be points, boxes or spheres")
+    if bottom_cutoff is not None:
+        keep &= points[:, 2] >= bottom_cutoff
     points = points[keep]
     if len(points) == 0:
-        return rr.Points3D([])
+        return rr.Boxes3D(centers=[]) if mode == "boxes" else rr.Points3D([])
     if colors is not None:
         colors = colors[keep]
     else:
         height = points[:, 2]
         normalized = (height - height.min()) / (height.max() - height.min() + 1e-8)
         colors = (matplotlib.colormaps["turbo"](normalized)[:, :3] * 255).astype(np.uint8)
-    return rr.Points3D(positions=points, colors=colors, radii=voxel_size / 2)
+    if mode == "boxes":
+        return rr.Boxes3D(
+            centers=points, half_sizes=[voxel_size / 2] * 3, colors=colors, fill_mode=fill_mode
+        )
+    return rr.Points3D(
+        positions=points, colors=colors, radii=-ui_radius if mode == "points" else voxel_size / 2
+    )
 
 
 def navigation_archetype(

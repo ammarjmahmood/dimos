@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 import rerun as rr
 
-from dimos.msgs.pointcloud import pointcloud_from_xyz
+from dimos.msgs.pointcloud import pointcloud_from_xyz, pointcloud_from_xyz_rgb
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 from dimos.visualization.rerun.message_helpers import cloud_archetype
 
@@ -75,3 +75,20 @@ def test_height_colors_and_empty_cloud() -> None:
     assert len(set(rendered.colors.as_arrow_array().to_pylist())) == 2
     empty = pointcloud_from_xyz(np.empty((0, 3)), header=Header())
     assert cloud_archetype(empty).positions.as_arrow_array().to_pylist() == []
+
+
+@pytest.mark.parametrize("mode", ["points", "spheres", "boxes"])
+def test_cloud_modes_filter_height_without_losing_rgb_alignment(mode):
+    cloud = pointcloud_from_xyz_rgb(
+        np.array([[0, 0, -1], [1, 2, 3]], dtype=np.float32),
+        np.array([[255, 0, 0], [0x12, 0x34, 0x56]], dtype=np.uint8),
+        header=Header(frame_id="map"),
+    )
+    before = cloud.encode()
+    rendered = cloud_archetype(cloud, mode=mode, bottom_cutoff=0, voxel_size=0.2)
+    positions = rendered.centers if mode == "boxes" else rendered.positions
+    assert positions.as_arrow_array().to_pylist() == [[1, 2, 3]]
+    assert rendered.colors.as_arrow_array().to_pylist() == [0x123456FF]
+    if mode == "points":
+        assert rendered.radii.as_arrow_array().to_pylist() == [-2.0]
+    assert cloud.encode() == before
