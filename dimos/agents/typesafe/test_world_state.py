@@ -397,3 +397,33 @@ def test_seen_empty_sector_is_clear() -> None:
         lidar_band=(0.1, 0.8, 5.0),
     )
     assert state["free_space"]["ahead"] == {"clear_m": 5.0, "state": "clear"}
+
+
+def test_goal_coordinates_name_the_object_at_them_whatever_its_label() -> None:
+    # The task says plant; the scene labels it potted_plant. The coordinates decide.
+    dets = det3d("potted_plant", 4.0, 0.0)
+    dets.detections.append(det3d("table", 3.0, 0.0).detections[0])
+    dets.detections_length = 2
+    state = build_world_state(
+        "go to the plant at (4.00, 0.00)",
+        _pose(0, 0, 0),
+        detections_3d=dets,
+        detections_2d=None,
+        lidar=None,
+        robot={},
+    )
+    assert [(o["label"], o.get("target")) for o in state["objects"]] == [
+        ("potted_plant", True),
+        ("table", None),
+    ]
+    # Nothing within half a metre of the coordinates: no target, only obstacles.
+    nothing = build_world_state(
+        "go to the plant at (9.00, 9.00)",
+        _pose(0, 0, 0),
+        detections_3d=dets,
+        detections_2d=None,
+        lidar=None,
+        robot={},
+    )
+    assert all("target" not in o for o in nothing["objects"])
+    assert "way_to_target" not in nothing
