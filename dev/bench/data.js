@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790786698279,
+  "lastUpdate": 1790790464062,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -1011,6 +1011,102 @@ window.BENCHMARK_DATA = {
             "value": 0.14,
             "unit": "MB",
             "extra": "cpu: AMD EPYC 9V45 96-Core Processor"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lesh@sysphere.org",
+            "name": "leshy",
+            "username": "leshy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f4cc9260e7538b40551901b3df41143b2d8448ca",
+          "message": "go2: GO2DDS native module, the DDS controller out of go2web (#4332)",
+          "timestamp": "2026-09-30T17:43:42Z",
+          "tree_id": "88fbabc5b5f0edc784f572531b679e7aef76d7a7",
+          "url": "https://github.com/dimensionalOS/dimos/commit/f4cc9260e7538b40551901b3df41143b2d8448ca"
+        },
+        "date": 1790790462723,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 10.15,
+            "unit": "s",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 21.69,
+            "unit": "s",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "run cpu",
+            "value": 33.212,
+            "unit": "s",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 25.246,
+            "unit": "s",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 7.966,
+            "unit": "s",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "peak memory",
+            "value": 2703.34,
+            "unit": "MB",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "peak threads",
+            "value": 401,
+            "unit": "threads",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "disk read",
+            "value": 23.02,
+            "unit": "MB",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "disk write",
+            "value": 11.039,
+            "unit": "MB",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "network (transport)",
+            "value": 2711.55,
+            "unit": "MB",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "network (external rx)",
+            "value": 0.111,
+            "unit": "MB",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
+          },
+          {
+            "name": "network (external tx)",
+            "value": 0.148,
+            "unit": "MB",
+            "extra": "cpu: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
           }
         ]
       }
