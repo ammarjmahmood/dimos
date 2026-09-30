@@ -1273,3 +1273,17 @@ The handler harness accepts two CDR commands one nanosecond apart, displays
 the clamped velocity and a generated world-frame navigation goal, and checks
 that E-STOP suppresses publication. It asserts that no driver RPC was called.
 This is a command-boundary demo; it does not start a blueprint or connect to Go2.
+
+## Inspect generated camera compositing
+
+Run the bounded handler demo from the checkout's prepared environment:
+
+```bash
+PYTHONPATH=.:build/message-codegen/demo/cpp/build \
+  .venv/bin/python examples/message-codegen/demo_camera_mux_cdr.py
+```
+
+It decodes two generated RGB images, combines and scales them, then encodes
+the result as CDR and JPEG. It asserts RGB ordering and the latest source
+timestamp `1700000000123456790ns`. Ports are mocked; it starts no camera,
+video encoder, control loop or robot connection.

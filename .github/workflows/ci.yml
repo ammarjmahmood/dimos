@@ -281,7 +281,13 @@ jobs:
         run: bash scripts/setup_message_codegen.sh
       - name: Install lint dependencies
         run: uv sync --only-group lint --frozen
+      - name: Install native build typing dependencies
+        run: uv pip install --no-deps pybind11==3.0.1 types-setuptools==77.0.2.20250328
+      - name: Generate CDR typing package
+        run: uv run python -m dimos.message_codegen.generate --output build/messages
       - name: Mypy
+        env:
+          MYPYPATH: build/messages/typing
         run: uv run mypy
 
       # The deno-fmt pre-commit hook needs deno on PATH.
@@ -724,6 +730,15 @@ jobs:
         run: bash scripts/setup_message_codegen.sh
       - name: Install dependencies
         run: uv sync --group tests --frozen
+      - name: Install CDR conformance test dependencies
+        run: uv pip install mcap==1.4.0 rosbags==0.11.0
+      - name: Install Rust for offline planner bindings
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build offline planner Python bindings
+        run: |
+          source .venv/bin/activate
+          maturin develop -m dimos/mapping/ray_tracing/rust/py/Cargo.toml
+          maturin develop -m dimos/navigation/nav_3d/mls_planner/rust/py/Cargo.toml
       - name: Run tests
         run: uv run pytest --numprocesses=logical --cov=dimos/ --junitxml=junit.xml -m 'not (self_hosted or mujoco or self_hosted_large or web_browser or bake_e2e or native_e2e)'
       - name: Re-run the failing tests with maximum verbosity

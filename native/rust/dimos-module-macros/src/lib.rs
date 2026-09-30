@@ -537,7 +537,7 @@ fn check_port_table(entry: &toml::Value, kind: &str, declared: &[PortDecl]) -> R
         let msg = msg
             .as_str()
             .ok_or_else(|| format!("`{kind}.{}` must be a string", port.name))?;
-        let want = msg.rsplit('.').next().unwrap_or(msg);
+        let want = msg.rsplit(['/', '.']).next().unwrap_or(msg);
         if want != port.ty {
             return Err(format!(
                 "port `{}` is declared `{msg}` in `{kind}` but the struct field carries `{}`",
@@ -788,6 +788,18 @@ mod tests {
             &[port("global_map", "PointCloud2")],
         )
         .expect("matching ports should pass");
+    }
+
+    #[test]
+    fn accepts_canonical_ros_message_names() {
+        let manifest = MANIFEST.replace("sensor_msgs.PointCloud2", "sensor_msgs/msg/PointCloud2");
+        check_manifest_ports(
+            &manifest,
+            "demo",
+            &[port("lidar", "PointCloud2")],
+            &[port("global_map", "PointCloud2")],
+        )
+        .expect("canonical generated message contracts should pass");
     }
 
     #[test]

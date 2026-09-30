@@ -99,6 +99,44 @@ stamp, frame-count and pixel assertions. Generated fixture mypy and Ruff passed.
 61 focused schema/MCAP/teleop checks passed. Browser E2E and full CI acceptance
 for these repairs remain to be verified on the next published commit.
 
+## Exact-commit CI and native bake follow-up
+
+At `1e7705ab3cf98edc35c72bd4c3bcceaa2d243b49`, manually dispatched
+[message-codegen run 36691321793](https://github.com/dimensionalOS/dimos/actions/runs/36691321793)
+completed successfully in both standalone and Jazzy-reference jobs. This includes
+installed wheel/sdist/CMake/Cargo consumers and offline Foxglove/Rerun decoders.
+The retained MCAP contains 150 messages: five generated channels, 30 each.
+The viewer evidence is copied locally under ignored
+`build/message-codegen/ci-evidence/1e7705ab3/`. This proves offline decoding,
+not authenticated Foxglove UI acceptance.
+
+[Main CI run 36691317959](https://github.com/dimensionalOS/dimos/actions/runs/36691317959)
+completed with failures; its web browser job and native C++/Rust job succeeded.
+Lint lacked generated typing stubs; the next batch generates them explicitly
+and provisions pinned native-build typing tools. The emitter also had a real
+loop-variable type collision, now fixed. Full-repository migration errors remain
+to be resolved after these environment errors. Five changed production/demo
+files passed targeted mypy; generated-interface positive/negative tests passed.
+
+The native bake E2E exposed old registry type names and LCM test publishers
+against a CDR decoder. All five native module registry entries now use the same
+canonical names as their generated Python ports. Macro validation accepts the
+canonical spelling. The actual Python-to-baked-Rust graph passed all three E2E
+cases over loopback-only Zenoh, including real surface-map publication and
+suppression, in 17.18 seconds. No hardware or networking settings were used.
+
+Main Python CI collection lacked MCAP/rosbags test tools and offline planner
+bindings; its next batch explicitly provisions those. Updating the whole uv
+lockfile is currently blocked by the existing `a750-control==0.1.1` wheel
+availability for supported Python 3.11. The runtime manifest and existing
+lockfile were preserved; pinned supplemental CI tools are installed explicitly.
+
+CameraMux uses generated images and separate array helpers. Its 21 tests cover
+even dimensions, scaling, selection, FPS caps, latency strips, exact source
+stamps and independent composite storage. The executable bounded camera demo
+produces a 100x36 RGB composite and an 854-byte JPEG while preserving
+`1700000000123456790ns`. No camera or encoder process is started.
+
 ## Remaining gates
 
 The OpenSpec checklist remains unchanged because these slices do not complete

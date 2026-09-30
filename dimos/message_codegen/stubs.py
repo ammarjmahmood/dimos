@@ -122,19 +122,21 @@ def generate(messages: tuple[Message, ...], module: str) -> dict[str, str]:
             )
             args = f", *, {arguments}" if arguments else ""
             lines.append(f"    def __init__(self{args}) -> None: ...")
-            for field in message.fields:
-                if field.type.is_array:
-                    sequence = names[cpp.type_name(field.type)]
+            for message_field in message.fields:
+                if message_field.type.is_array:
+                    sequence = names[cpp.type_name(message_field.type)]
                     lines.extend(
                         [
                             "    @property",
-                            f"    def {field.name}(self) -> {module}.{sequence}: ...",
-                            f"    @{field.name}.setter",
-                            f"    def {field.name}(self, value: {input_type(field.type, module)}) -> None: ...",
+                            f"    def {message_field.name}(self) -> {module}.{sequence}: ...",
+                            f"    @{message_field.name}.setter",
+                            f"    def {message_field.name}(self, value: {input_type(message_field.type, module)}) -> None: ...",
                         ]
                     )
                 else:
-                    lines.append(f"    {field.name}: {scalar_type(field.type.name, module)}")
+                    lines.append(
+                        f"    {message_field.name}: {scalar_type(message_field.type.name, module)}"
+                    )
             lines.extend(
                 [
                     "    def encode(self, little_endian: bool = True) -> bytes: ...",

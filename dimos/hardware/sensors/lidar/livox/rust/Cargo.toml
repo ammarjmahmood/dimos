@@ -17,8 +17,8 @@ path = "dimos_livox::module::Mid360"
 python = "dimos.hardware.sensors.lidar.livox.module:Mid360"
 
 [package.metadata.dimos.module.mid360.outputs]
-lidar = "sensor_msgs.PointCloud2"
-imu = "sensor_msgs.Imu"
+lidar = "sensor_msgs/msg/PointCloud2"
+imu = "sensor_msgs/msg/Imu"
 
 [dependencies]
 crc = "3"

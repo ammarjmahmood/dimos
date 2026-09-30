@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import dataclasses
 import math
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from dimos_generated.geometry_msgs.msg import Quaternion, Transform, TransformStamped, Vector3
 from dimos_generated.sensor_msgs.msg import CameraInfo, Image
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 
-CameraInfoSource = CameraInfo | Callable[[], CameraInfo | None] | None
+CameraInfoSource: TypeAlias = CameraInfo | Callable[[], CameraInfo | None] | None
 
 
 def _camera_info_key(info: CameraInfo) -> tuple[Any, ...]:
