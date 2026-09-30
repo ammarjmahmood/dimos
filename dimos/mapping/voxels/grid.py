@@ -53,17 +53,22 @@ class VoxelGrid:
         frame_id: str = "world",
         show_startup_log: bool = True,
     ) -> None:
-        import open3d.core as o3c  # type: ignore[import-untyped]
-
         self._voxel_size = voxel_size
         self._frame_id = frame_id
 
-        use_cuda = device.startswith("CUDA") and o3c.cuda.is_available()
-        self._impl: O3dVoxels | PackedVoxels = (
-            O3dVoxels(voxel_size, block_count, carve_columns, o3c.Device(device))
-            if use_cuda
-            else PackedVoxels(voxel_size, carve_columns)
-        )
+        use_cuda = False
+        self._impl: O3dVoxels | PackedVoxels
+        if device.startswith("CUDA"):
+            import open3d.core as o3c  # type: ignore[import-untyped]
+
+            use_cuda = o3c.cuda.is_available()
+            self._impl = (
+                O3dVoxels(voxel_size, block_count, carve_columns, o3c.Device(device))
+                if use_cuda
+                else PackedVoxels(voxel_size, carve_columns)
+            )
+        else:
+            self._impl = PackedVoxels(voxel_size, carve_columns)
 
         if show_startup_log:
             logger.info(f"VoxelGrid using device: {device if use_cuda else 'CPU:0 (packed-numpy)'}")

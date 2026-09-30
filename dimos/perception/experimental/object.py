@@ -32,6 +32,7 @@ import numpy as np
 
 from dimos.msgs.geometry import quaternion_from_matrix
 from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.image import image_view
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.time import time_from_seconds
@@ -191,7 +192,7 @@ class Object(Detection3D):
             "last_seen_ts": self.last_seen_ts,
             "mask": self.mask,
             "pointcloud": self.pointcloud.as_numpy(),
-            "image": self.image.as_numpy() if self.image else None,
+            "image": image_view(self.image) if self.image else None,
         }
 
     @classmethod

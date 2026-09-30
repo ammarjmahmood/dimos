@@ -32,6 +32,7 @@ from typing import Any
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import numpy as np
+from PIL import Image as PILImage
 from pydantic import ValidationError
 import pytest
 from pytest_mock import MockerFixture
@@ -41,7 +42,7 @@ from dimos.evals.agents.base import Agent
 from dimos.evals.agents.blind import BLIND_BLOCK, Blind
 from dimos.evals.agents.lib.trajectory_builder import TrajectoryBuilder
 from dimos.evals.agents.mcp_client_adapter import McpClientAdapter
-from dimos.evals.agents.question_answer import QuestionAnswer
+from dimos.evals.agents.question_answer import QuestionAnswer, _observation_blocks
 from dimos.evals.cli import load_agent
 from dimos.evals.environments.base import Environment
 from dimos.evals.environments.dataset import Dataset
@@ -80,7 +81,6 @@ from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
-from dimos.msgs.sensor_msgs.Image import Image
 
 
 def _pose(x: float, y: float) -> PoseStamped:
@@ -315,14 +315,14 @@ def test_sim_launches_base_blueprints_and_agent_modules_in_order(
 
 def test_image_file_environment(tmp_path: Path) -> None:
     path = tmp_path / "frame.png"
-    Image.from_numpy(np.full((8, 8, 3), 200, dtype=np.uint8)).save(str(path))
+    PILImage.fromarray(np.full((8, 8, 3), 200, dtype=np.uint8)).save(path)
     env = ImageFile(path)
     env.preflight(QuestionAnswer())
     running = env.start(())
     try:
         (image_stream,) = running.streams
         (obs,) = list(image_stream)
-        assert obs.data.agent_encode()[0]["type"] == "image_url"
+        assert _observation_blocks(obs, "[t=0.0s]")[1]["type"] == "image_url"
         assert running.artifacts == {"image": path}
     finally:
         env.stop()

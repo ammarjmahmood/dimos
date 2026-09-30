@@ -21,6 +21,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
+from dimos.mapping.occupancy.gradient import gradient
 from dimos.msgs.occupancy import occupancy_extent, occupancy_from_file, occupancy_view
 
 
@@ -81,3 +82,65 @@ def test_static_occupancy_loader_rejects_invalid_cells(tmp_path, cells):
     np.save(path, cells)
     with pytest.raises(ValueError):
         occupancy_from_file(path, header=Header())
+
+
+def test_gradient() -> None:
+    """Test converting occupancy grid to gradient field."""
+    # Create a small test grid with an obstacle in the middle
+    data = np.zeros((10, 10), dtype=np.int8)
+    data[4:6, 4:6] = 100  # 2x2 obstacle in center
+
+    grid = OccupancyGrid(
+        header=Header(frame_id="world"),
+        info=MapMetaData(width=10, height=10, resolution=0.1),
+        data=data.ravel(),
+    )  # 0.1m per cell
+
+    # Convert to gradient
+    gradient_grid = gradient(grid, obstacle_threshold=50, max_distance=1.0)
+
+    # Check that we get an OccupancyGrid back
+    assert isinstance(gradient_grid, OccupancyGrid)
+    assert occupancy_view(gradient_grid).shape == (10, 10)
+    assert gradient_grid.info.resolution == grid.info.resolution
+    assert gradient_grid.header == grid.header
+
+    # Obstacle cells should have value 100
+    assert occupancy_view(gradient_grid)[4, 4] == 100
+    assert occupancy_view(gradient_grid)[5, 5] == 100
+
+    # Adjacent cells should have high values (near obstacles)
+    assert occupancy_view(gradient_grid)[3, 4] > 85  # Very close to obstacle
+    assert occupancy_view(gradient_grid)[4, 3] > 85  # Very close to obstacle
+
+    # Cells at moderate distance should have moderate values
+    assert 30 < occupancy_view(gradient_grid)[0, 0] < 60  # Corner is ~0.57m away
+
+    # Check that gradient decreases with distance
+    assert (
+        occupancy_view(gradient_grid)[3, 4] > occupancy_view(gradient_grid)[2, 4]
+    )  # Closer is higher
+    assert (
+        occupancy_view(gradient_grid)[2, 4] > occupancy_view(gradient_grid)[0, 4]
+    )  # Further is lower
+
+    # Test with unknown cells
+    data_with_unknown = data.copy()
+    data_with_unknown[0:2, 0:2] = -1  # Add unknown area (close to obstacle)
+    data_with_unknown[8:10, 8:10] = -1  # Add unknown area (far from obstacle)
+
+    grid_with_unknown = OccupancyGrid(
+        header=grid.header, info=grid.info, data=data_with_unknown.ravel()
+    )
+    gradient_with_unknown = gradient(grid_with_unknown, max_distance=1.0)  # 1m max distance
+
+    # Unknown cells should remain unknown (new behavior - unknowns are preserved)
+    assert occupancy_view(gradient_with_unknown)[0, 0] == -1  # Should remain unknown
+    assert occupancy_view(gradient_with_unknown)[1, 1] == -1  # Should remain unknown
+    assert occupancy_view(gradient_with_unknown)[8, 8] == -1  # Should remain unknown
+    assert occupancy_view(gradient_with_unknown)[9, 9] == -1  # Should remain unknown
+
+    # Unknown cells count should be preserved
+    assert (
+        np.count_nonzero(occupancy_view(gradient_with_unknown) == -1) == 8
+    )  # All unknowns preserved

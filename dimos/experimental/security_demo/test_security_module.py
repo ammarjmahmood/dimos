@@ -126,7 +126,7 @@ def test_follow_step_transitions_to_patrolling_on_person_lost(security_module, p
 
     # Zero twist should be published to stop the robot
     published_twist = module.cmd_vel.publish.call_args[0][0]
-    assert published_twist.is_zero()
+    assert published_twist == Twist()
 
     module._speak_skill.speak.assert_called_with(
         "Lost sight of intruder, resuming patrol", blocking=False
@@ -158,7 +158,7 @@ def test_main_loop_stops_cleanly(security_module):
 
     # Verify zero twist published on shutdown
     last_twist = module.cmd_vel.publish.call_args[0][0]
-    assert last_twist.is_zero()
+    assert last_twist == Twist()
 
     # Verify state transitions: PATROLLING then IDLE
     state_values = [call.args[0].data for call in module.security_state.publish.call_args_list]

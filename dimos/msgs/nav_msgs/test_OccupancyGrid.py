@@ -15,20 +15,18 @@
 
 """Test the OccupancyGrid convenience class."""
 
-import pickle
-
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
 import pytest
 
-from dimos.mapping.occupancy.gradient import gradient
 from dimos.mapping.occupancy.inflation import simple_inflate
 from dimos.mapping.pointclouds.occupancy import general_occupancy
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid, block_max_reduce
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.utils.data import get_data
+from dimos.msgs.occupancy import occupancy_view
+from dimos.msgs.pointcloud import pointcloud_from_xyz
 
 
 def test_empty_grid() -> None:
@@ -195,11 +193,10 @@ def test_invalid_grid_dimensions() -> None:
 
 def test_from_pointcloud() -> None:
     """Test creating OccupancyGrid from PointCloud2."""
-    file_path = get_data("lcm_msgs") / "sensor_msgs/PointCloud2.pickle"
-    with open(file_path, "rb") as f:
-        lcm_msg = pickle.loads(f.read())
-
-    pointcloud = PointCloud2.lcm_decode(lcm_msg)
+    # A deterministic raised cluster exercises occupancy without legacy LCM assets.
+    x, y = np.meshgrid(np.arange(10) * 0.05, np.arange(10) * 0.05)
+    points = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, 0.5)))
+    pointcloud = pointcloud_from_xyz(points, header=Header(frame_id="world"))
 
     # Convert pointcloud to occupancy grid
     occupancygrid = general_occupancy(pointcloud, resolution=0.05, min_height=0.1, max_height=2.0)
@@ -207,61 +204,13 @@ def test_from_pointcloud() -> None:
     occupancygrid = simple_inflate(occupancygrid, 0.1)
 
     # Check that grid was created with reasonable properties
-    assert occupancygrid.width > 0
-    assert occupancygrid.height > 0
-    assert occupancygrid.resolution == 0.05
-    assert occupancygrid.frame_id == pointcloud.frame_id
-    assert occupancygrid.occupied_cells > 0  # Should have some occupied cells
-
-
-def test_gradient() -> None:
-    """Test converting occupancy grid to gradient field."""
-    # Create a small test grid with an obstacle in the middle
-    data = np.zeros((10, 10), dtype=np.int8)
-    data[4:6, 4:6] = 100  # 2x2 obstacle in center
-
-    grid = OccupancyGrid(grid=data, resolution=0.1)  # 0.1m per cell
-
-    # Convert to gradient
-    gradient_grid = gradient(grid, obstacle_threshold=50, max_distance=1.0)
-
-    # Check that we get an OccupancyGrid back
-    assert isinstance(gradient_grid, OccupancyGrid)
-    assert gradient_grid.grid.shape == (10, 10)
-    assert gradient_grid.resolution == grid.resolution
-    assert gradient_grid.frame_id == grid.frame_id
-
-    # Obstacle cells should have value 100
-    assert gradient_grid.grid[4, 4] == 100
-    assert gradient_grid.grid[5, 5] == 100
-
-    # Adjacent cells should have high values (near obstacles)
-    assert gradient_grid.grid[3, 4] > 85  # Very close to obstacle
-    assert gradient_grid.grid[4, 3] > 85  # Very close to obstacle
-
-    # Cells at moderate distance should have moderate values
-    assert 30 < gradient_grid.grid[0, 0] < 60  # Corner is ~0.57m away
-
-    # Check that gradient decreases with distance
-    assert gradient_grid.grid[3, 4] > gradient_grid.grid[2, 4]  # Closer is higher
-    assert gradient_grid.grid[2, 4] > gradient_grid.grid[0, 4]  # Further is lower
-
-    # Test with unknown cells
-    data_with_unknown = data.copy()
-    data_with_unknown[0:2, 0:2] = -1  # Add unknown area (close to obstacle)
-    data_with_unknown[8:10, 8:10] = -1  # Add unknown area (far from obstacle)
-
-    grid_with_unknown = OccupancyGrid(data_with_unknown, resolution=0.1)
-    gradient_with_unknown = gradient(grid_with_unknown, max_distance=1.0)  # 1m max distance
-
-    # Unknown cells should remain unknown (new behavior - unknowns are preserved)
-    assert gradient_with_unknown.grid[0, 0] == -1  # Should remain unknown
-    assert gradient_with_unknown.grid[1, 1] == -1  # Should remain unknown
-    assert gradient_with_unknown.grid[8, 8] == -1  # Should remain unknown
-    assert gradient_with_unknown.grid[9, 9] == -1  # Should remain unknown
-
-    # Unknown cells count should be preserved
-    assert gradient_with_unknown.unknown_cells == 8  # All unknowns preserved
+    assert occupancygrid.info.width > 0
+    assert occupancygrid.info.height > 0
+    assert occupancygrid.info.resolution == pytest.approx(0.05)
+    assert occupancygrid.header.frame_id == pointcloud.header.frame_id
+    assert (
+        np.count_nonzero(occupancy_view(occupancygrid) == 100) > 0
+    )  # Should have some occupied cells
 
 
 def test_filter_above() -> None:

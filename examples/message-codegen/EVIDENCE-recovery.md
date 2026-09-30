@@ -262,3 +262,14 @@ Main run 36707056720 completed fail-fast cancelled: Native/Rust/Web succeeded,
 lint reported 93 errors in 30 files, md-babel passed 126/128 blocks, ARM failed
 and other Python matrix jobs were cancelled. This consumer batch follows that
 run and still requires exact published-commit CI acceptance.
+
+
+### Generated consumer contract repairs after 201a3053
+
+- Exact published 201a3053 CI: standalone/Jazzy message-codegen run 36709681735 succeeded; main run 36709677922 terminated by fail-fast. Native C++/Rust builds and Web succeeded. Lint reported 70 errors in 21 files; Python 3.11 retry reported 40 failures and three errors. The main workflow is not green.
+- Migrated VQA, image-file evaluation and replay benchmark fixtures to generated Image/CameraInfo/PointCloud2/CompressedImage. Image observation encoding lives in the application layer; generated messages remain plain values. JPEG benchmark codec preserves exact source headers, and transport cleanup now also runs on test failure.
+- Moved the complete gradient contract test to the generated occupancy suite, preserving obstacle, distance and unknown-cell assertions. Replaced the pointcloud occupancy input with a deterministic synthetic cluster rather than legacy LCM asset loading.
+- Explicit CPU voxel backend does not import Open3D; CUDA selection remains unchanged. Added a real accumulation/CDR roundtrip test checking exact nanoseconds, output frame and disposal.
+- Local combined offline checks: 154 passed, 5 deselected (CPU voxel, generated occupancy, VQA, evaluation and Zenoh/pickle replay contracts). LCM multicast and large benchmark nodes were excluded; no network settings changed.
+- Full memory voxel and Go2 marker blueprint collection is blocked locally by absent torch; legacy occupancy suite collection by absent numba; YOLOe collection by absent ultralytics. Those fixture migrations await CI and are not recorded as local passes.
+- WebXR control/ESM changes and full memory documentation execution remain paused after automatic approval rejection. Eight related earlier work-in-progress files remain uncommitted. No model download, hardware execution or approval bypass occurred in this batch.
