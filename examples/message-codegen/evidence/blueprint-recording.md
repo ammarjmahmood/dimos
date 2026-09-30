@@ -165,3 +165,22 @@ synthetic image results validate the pipeline, not real-scene recognition.
 The separate real detection fixture `unitree_go2_lidar_corrected` is absent
 locally and its LFS archive is 1,212,727,745 bytes. Regenerating it while retaining
 its semantic assertions is still an explicit outstanding fixture gate.
+
+### DimSim standalone codec audit
+
+The remaining browser/Deno `@dimos/msgs` consumers now use pinned Foxglove CDR
+codecs and a standalone full-schema bundle exported from canonical generated
+messages. RGB publishes raw RGBA Image, depth publishes 16UC1 Image, and lidar,
+odometry and cmd_vel use PointCloud2/PoseStamped/Twist with ROS 2 channel names.
+The existing LCM transport and LC02 WebSocket envelope remain. JPEG stays only
+in eval/sidebar previews. No legacy decoding fallback was introduced.
+
+Verified locally: Vite production build; complete Deno CLI type check with a
+frozen lock preserving unrelated original dependency versions; three socket-free
+codec tests (large image envelope, all velocity components, malformed input);
+canonical-schema drift pytest; strict Python exporter typing; pre-commit checks.
+Four Deno-encoded payloads (Twist, PoseStamped, Image and PointCloud2) decoded in
+both generated Python and independent rosbags with exact values/source stamps;
+a generated Python Twist decoded in Deno with exact command components.
+Full browser/physics simulation acceptance remains unverified. These checks
+neither operate hardware nor prove host multicast or end-to-end rendering.
