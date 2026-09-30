@@ -50,7 +50,7 @@ the teleop blueprint. Defaults are side-specific directories:
 - left: `STATE_DIR / "teleop" / "openarm_mini" / "left" / "calibration.json"`
 - right: `STATE_DIR / "teleop" / "openarm_mini" / "right" / "calibration.json"`
 
-`STATE_DIR` is DimOS' XDG state directory, typically
+`STATE_DIR` is dimOS' XDG state directory, typically
 `~/.local/state/dimos` on Linux.
 
 ## Manual calibration
