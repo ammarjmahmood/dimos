@@ -122,7 +122,7 @@ def run(
     limit: int = typer.Option(0, min=0, help="Run at most N cases"),
     case: list[str] = typer.Option([], "--case", help="Run only these case IDs"),
     parallel: int = typer.Option(1, min=1, help="Cases at once, one dimos each; needs --container"),
-    container: str = typer.Option("", help="Docker image that runs each case (docker/eval)"),
+    container: str = typer.Option("", help="Docker image that runs each case (docker/evals)"),
     repeat: int = typer.Option(1, min=1, help="Trials per case"),
     video: bool = typer.Option(False, "--video", help="Capture the viewer as viewer.mp4 per case"),
 ) -> None:

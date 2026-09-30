@@ -470,7 +470,7 @@ per minute).
 A live case owns its host, so parallelism is one container per case:
 
 ```bash skip
-docker build -f docker/eval/Dockerfile -t dimos-eval .
+docker build -f docker/evals/Dockerfile -t dimensional/evals .
 dimos evals run dimos.evals.suites.habitat_nav --agent dimos.evals.agents.pi --set no_dimos=true \
   --parallel 4 --container dimos-eval --repeat 3
 ```
