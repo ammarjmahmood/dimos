@@ -42,7 +42,7 @@ def _wire_topic(channel: str) -> ZenohTopic:
 class LcmSpy:
     """Sniffs every message on the active transport's bus.
 
-    Topics are named the LCM way (`/odom#geometry_msgs.PoseStamped`);
+    Topics are named the LCM way (`/odom#geometry_msgs/msg/PoseStamped`);
     `transport_topic` maps them to the running backend's wire name.
     """
 
@@ -91,7 +91,7 @@ class LcmSpy:
                     listener(data)
 
     def publish(self, topic: str, msg: Any) -> None:
-        self._bus.publish(_wire_topic(topic), msg.lcm_encode())
+        self._bus.publish(_wire_topic(topic), msg.encode())
 
     def save_topic(self, topic: str) -> None:
         with self._saved_topics_lock:
@@ -189,7 +189,7 @@ class LcmSpy:
             return distance < threshold
 
         self.wait_for_message_result(
-            "/odom#geometry_msgs.PoseStamped",
+            "/odom#geometry_msgs/msg/PoseStamped",
             PoseStamped,
             predicate,
             f"Failed to get to position x={x}, y={y}",

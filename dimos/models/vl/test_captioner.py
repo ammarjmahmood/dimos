@@ -20,7 +20,8 @@ import pytest
 
 from dimos.models.vl.florence import Florence2Model
 from dimos.models.vl.moondream import MoondreamVlModel
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos_generated.sensor_msgs.msg import Image
+from dimos.msgs.image import image_from_file
 from dimos.utils.data import get_data
 
 
@@ -38,7 +39,7 @@ M = TypeVar("M", bound=CaptionerModel)
 
 @pytest.fixture(scope="module")
 def test_image() -> Image:
-    return Image.from_file(get_data("cafe.jpg")).to_rgb()
+    return image_from_file(get_data("cafe.jpg"))
 
 
 def generic_model_fixture(model_type: type[M]) -> Generator[M, None, None]:

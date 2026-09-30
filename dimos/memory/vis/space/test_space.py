@@ -30,7 +30,7 @@ from dimos.memory.type.observation import EmbeddedObservation, Observation
 from dimos.memory.vis import color
 from dimos.memory.vis.space.elements import Arrow, Box3D, Camera, Point, Polyline, Pose, Text
 from dimos.memory.vis.space.space import Space
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.image import image_from_array
 
 
 class TestElementTypes:
@@ -78,7 +78,7 @@ class TestElementTypes:
 
     def test_camera_with_image(self):
         ps = PoseStamped(pose=GeoPose(position=GeoPoint(x=1, y=2, z=0), orientation=Quaternion()))
-        img = Image(np.zeros((480, 640, 3), dtype=np.uint8))
+        img = image_from_array(np.zeros((480, 640, 3), dtype=np.uint8), encoding="rgb8")
         c = Camera(pose=ps, image=img, color="purple")
         assert c.pose is ps
         assert c.image is img
@@ -190,7 +190,7 @@ class TestSpaceObservations:
     """Space.add() smart dispatch for Observation types."""
 
     def test_image_observation_stored_as_observation(self):
-        img = Image(np.zeros((480, 640, 3), dtype=np.uint8))
+        img = image_from_array(np.zeros((480, 640, 3), dtype=np.uint8), encoding="rgb8")
         obs = Observation(id=1, ts=1.0, pose=(3, 1, 0, 0, 0, 0, 1), _data=img)
 
         s = Space()
