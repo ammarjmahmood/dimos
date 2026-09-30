@@ -1241,3 +1241,22 @@ CDR and SQLite boundaries, and prints an exact dropped-frame counter of
 4294967297. Counters use integer schema fields rather than Joy's float32 axes.
 The temporary database is removed automatically; no browser, robot or hosted
 connection is required. The browser JSON plane retains its named metric fields.
+
+### Phone browser command CDR
+
+With the generated extension built, start an isolated loopback preview:
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_phone_cdr.py
+```
+
+Open the printed loopback URL and click **Connect**. No sensor permission is
+needed: the page sends its default values. The demo validates five generated
+TwistStamped messages and exits, shutting down the web server. It never starts
+the module control loop or publishes robot commands.
+
+The browser fetches `/teleop/schema`, uses pinned generic Foxglove ROS2/CDR
+libraries to encode each advertised type, and wraps bytes in the existing relay
+data frame with an explicit channel, qualified type and `cdr` encoding. The
+backend rejects unknown channels, mismatched types and unframed legacy bytes.
+This preview requires access to esm.sh for the pinned browser libraries.

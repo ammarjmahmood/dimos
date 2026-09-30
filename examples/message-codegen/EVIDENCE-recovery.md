@@ -64,9 +64,31 @@ all stage-4, stage-5 or stage-6 requirements. Old wrappers and consumers remain
 in other teleop, robot and perception paths. The public type replacement and
 complete old-dependency removal still need coordinated migration.
 
-The C++ native SDK needs local LCM and pinned Zenoh C/C++ development packages;
-this host currently lacks those packages. The standalone C++ codec consumer was
-built and run, but a C++/Rust transport relay was not rerun here. LCM default
+The C++ SDK dependency blocker was resolved using an isolated project prefix
+`build/native-deps/prefix`: official LCM 1.5.1 sources, pinned Zenoh C/C++ 1.10.0
+release archives, and the already built Fast CDR prefix. Zenoh archives were
+checked against the same SHA256 values used in CI. Their pkg-config prefix
+was relocated within the ignored project directory; the actual unstable-API
+compile probe passed. No system package or networking setting was changed.
+The SDK built and all 77 CTest tests passed. C++ examples built, then
+`demo_native.py --backend zenoh` exchanged fields across Python/C++/Rust and
+verified a 921600-byte image with its exact source nanoseconds.
+
+The phone browser command path now advertises generated schemas and dispatches
+explicit channel/type CDR frames. Nine Python tests passed, including the real
+FastAPI WebSocket endpoint, invalid frame rejection and control gain/yaw math.
+A real in-app browser connected to `demo_phone_cdr.py`: five schema-driven
+Foxglove CDR frames decoded in Python. The preview stopped its server without
+starting a control loop or requesting sensor access. Production phone modules
+passed mypy with generated stubs; Ruff check/format passed.
+
+At published commit `dbf5583075154f9a174efe59a794ba5167e6592b`, all CodeQL
+language analyses passed. Neither `ci.yml` nor `message-codegen.yml` has a
+pull-request run for #4257 among the latest 100 runs. GitHub reports mergeability
+unknown and exposes only the PR head ref; the missing merge ref may be relevant,
+but a cause has not been established. Manual dispatch is blocked by absent
+authenticated API/CLI access and an unsigned-in browser. SSH Git publishing
+works; it does not confer workflow API access. LCM default
 multicast self-test is blocked on this host; no networking settings were changed.
 Full blueprint/viewer demo, final installed packaging matrix, authenticated
 Foxglove UI evidence, and exact published-commit CI acceptance remain pending.
