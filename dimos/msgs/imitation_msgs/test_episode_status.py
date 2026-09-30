@@ -15,7 +15,6 @@
 import json
 
 from dimos_lcm.std_msgs import String as LCMString
-from pydantic import ValidationError
 import pytest
 
 from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
@@ -48,13 +47,21 @@ def test_episode_status_uses_existing_string_envelope() -> None:
         task_label="拿起积木 🦾",
     )
     payload = json.loads(LCMString.lcm_decode(status.lcm_encode()).data)
-    assert payload == status.model_dump()
+    assert payload == {"schema_version": 1, **status.model_dump()}
+    assert "schema_version" not in status.model_dump()
     assert payload["schema_version"] == 1
     assert EpisodeStatus.lcm_decode(status.lcm_encode()) == status
 
 
 @pytest.mark.parametrize(
-    "updates", [{"schema_version": 2}, {"ts": float("nan")}, {"state": "unknown"}]
+    "updates",
+    [
+        {"schema_version": 2},
+        {"schema_version": True},
+        {"schema_version": 1.0},
+        {"ts": float("nan")},
+        {"state": "unknown"},
+    ],
 )
 def test_episode_status_rejects_invalid_wire_payload(updates) -> None:
     payload = {
@@ -65,13 +72,13 @@ def test_episode_status_rejects_invalid_wire_payload(updates) -> None:
         "episodes_discarded": 0,
     }
     payload.update(updates)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
         EpisodeStatus.lcm_decode(LCMString(data=json.dumps(payload)).lcm_encode())
 
 
 @pytest.mark.parametrize("payload", ["not json", "null", "[]", '{"schema_version":2}'])
 def test_episode_status_rejects_malformed_json_or_wrong_shape(payload) -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
         EpisodeStatus.lcm_decode(LCMString(data=payload).lcm_encode())
 
 
