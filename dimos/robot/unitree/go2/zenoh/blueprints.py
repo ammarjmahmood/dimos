@@ -385,6 +385,8 @@ go2_viewer = autoconnect(
     # a client: the router forwards to clients only, never between peers
     zenoh_mode="client",
     zenoh_connect=GO2_ROUTER,
+    # the router appears well after the robot's `dimos run`, keep dialing until it does
+    zenoh_connect_timeout=120.0,
     # the robot's stack owns the bus-wide `Coordinator` name; this one only watches
     serve_coordinator_rpc=False,
     n_workers=3,
