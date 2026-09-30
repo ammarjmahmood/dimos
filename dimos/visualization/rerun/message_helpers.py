@@ -75,17 +75,18 @@ def register_colormap_annotation(name: str = "turbo") -> None:
     )
 
 
-def camera_pinhole(info: CameraInfo) -> rr.Pinhole:
+def camera_pinhole(info: CameraInfo, *, optical_frame: str | None = None) -> rr.Pinhole:
     """Calibration attached to the camera's optical frame."""
     import rerun as rr
 
+    frame = info.header.frame_id if optical_frame is None else optical_frame
     return rr.Pinhole(
         focal_length=[info.k[0], info.k[4]],
         principal_point=[info.k[2], info.k[5]],
         width=info.width,
         height=info.height,
         image_plane_distance=1.0,
-        parent_frame=f"tf#/{info.header.frame_id}" if info.header.frame_id else None,
+        parent_frame=f"tf#/{frame}" if frame else None,
     )
 
 
@@ -183,6 +184,7 @@ def navigation_archetype(
     message: PointStamped | PoseStamped | Odometry | Path,
     *,
     color: tuple[int, int, int] = (0, 255, 128),
+    z_offset: float = 0.5,
 ) -> rr.Points3D | rr.Transform3D | rr.LineStrips3D:
     """Render generated navigation values in their declared parent frame."""
     import rerun as rr
@@ -192,7 +194,8 @@ def navigation_archetype(
         return rr.Points3D([[p.x, p.y, p.z]])
     if isinstance(message, Path):
         points = [
-            [p.pose.position.x, p.pose.position.y, p.pose.position.z + 0.5] for p in message.poses
+            [p.pose.position.x, p.pose.position.y, p.pose.position.z + z_offset]
+            for p in message.poses
         ]
         return rr.LineStrips3D([points] if points else [], colors=color, radii=0.05)
     pose = message.pose.pose if isinstance(message, Odometry) else message.pose

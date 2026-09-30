@@ -18,10 +18,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from dimos_generated.nav_msgs.msg import Path
 import numpy as np
 
 from dimos.core.global_config import global_config
-from dimos.msgs.nav_msgs.Path import Path
 from dimos.robot.unitree.g1.g1_rerun import g1_costmap, g1_odometry_tf_override, g1_static_robot
 from dimos.visualization.vis_module import vis_module
 
@@ -51,7 +51,10 @@ def _g1_path_colors(path: Path) -> Any:
     if not path.poses:
         return rr.LineStrips3D([])
 
-    points = [[pose.x, pose.y, pose.z + _PATH_Z_LIFT] for pose in path.poses]
+    points = [
+        [pose.pose.position.x, pose.pose.position.y, pose.pose.position.z + _PATH_Z_LIFT]
+        for pose in path.poses
+    ]
     return rr.LineStrips3D([points], colors=[_PATH_COLOR_RGBA], radii=_PATH_RADIUS_METERS)
 
 

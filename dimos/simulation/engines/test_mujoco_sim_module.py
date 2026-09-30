@@ -21,6 +21,8 @@ import time
 from typing import Any
 from unittest.mock import MagicMock
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.sensor_msgs.msg import Imu
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 import pytest
@@ -128,6 +130,27 @@ def test_ready_signal_happens_after_joint_state_and_imu_write() -> None:
         module._publish_shm_and_lcm(_FakeEngine)
 
         assert events == ["joint_state", "imu", "ready"]
+        pose = PoseStamped.decode(module.odom.publish.call_args.args[0].encode())
+        assert pose.header.frame_id == "world"
+        assert (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z) == (
+            0.0,
+            0.0,
+            0.75,
+        )
+        assert pose.pose.orientation.w == 1.0
+        imu = Imu.decode(module.imu.publish.call_args.args[0].encode())
+        assert imu.orientation.w == 1.0
+        assert (imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z) == (
+            0.1,
+            0.2,
+            0.3,
+        )
+        assert (
+            imu.linear_acceleration.x,
+            imu.linear_acceleration.y,
+            imu.linear_acceleration.z,
+        ) == (1.0, 2.0, 3.0)
+        assert imu.header.stamp.sec > 0
     finally:
         module.stop()
 
@@ -161,14 +184,28 @@ def test_camera_tf_is_published_relative_to_configured_base_frame() -> None:
         module._publish_tf(10.0, frame)
 
         color_tf, depth_tf, camera_link_tf = messages[-1].transforms
-        assert color_tf.frame_id == "link7"
+        assert color_tf.header.frame_id == "link7"
         assert color_tf.child_frame_id == "wrist_camera_color_optical_frame"
-        assert np.allclose(color_tf.translation.to_numpy(), [0.0, 0.0, 1.0])
-        assert depth_tf.frame_id == "link7"
+        assert np.allclose(
+            [
+                color_tf.transform.translation.x,
+                color_tf.transform.translation.y,
+                color_tf.transform.translation.z,
+            ],
+            [0.0, 0.0, 1.0],
+        )
+        assert depth_tf.header.frame_id == "link7"
         assert depth_tf.child_frame_id == "wrist_camera_depth_optical_frame"
-        assert camera_link_tf.frame_id == "link7"
+        assert camera_link_tf.header.frame_id == "link7"
         assert camera_link_tf.child_frame_id == "wrist_camera_link"
-        assert np.allclose(camera_link_tf.translation.to_numpy(), [0.0, 0.0, 1.0])
+        assert np.allclose(
+            [
+                camera_link_tf.transform.translation.x,
+                camera_link_tf.transform.translation.y,
+                camera_link_tf.transform.translation.z,
+            ],
+            [0.0, 0.0, 1.0],
+        )
     finally:
         module.stop()
 
@@ -535,7 +572,7 @@ def test_publish_loop_stamps_messages_with_frame_timestamp() -> None:
 
         assert [to_seconds(img.header.stamp) for img in color] == frame_ts
         assert [to_seconds(img.header.stamp) for img in depth] == frame_ts
-        assert [msg.transforms[0].ts for msg in tf] == frame_ts
+        assert [to_seconds(msg.transforms[0].header.stamp) for msg in tf] == frame_ts
         # camera_info rides the latest frame's sim clock, not wall time.
         assert to_seconds(info[-1].header.stamp) == frame_ts[-1]
         assert to_seconds(module.get_color_camera_info().header.stamp) == frame_ts[-1]

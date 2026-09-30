@@ -37,7 +37,7 @@ from dimos_generated.geometry_msgs.msg import (
     TransformStamped,
     Vector3,
 )
-from dimos_generated.sensor_msgs.msg import JointState
+from dimos_generated.sensor_msgs.msg import JointState, PointCloud2
 from dimos_generated.std_msgs.msg import Header
 from dimos_generated.tf2_msgs.msg import TFMessage
 import numpy as np
@@ -105,7 +105,7 @@ from dimos.manipulation.visualization.config import (
 from dimos.manipulation.visualization.factory import create_manipulation_visualization
 from dimos.manipulation.visualization.operator import ManipulationOperator
 from dimos.msgs.geometry import transform_from_pose
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.pointcloud import pointcloud_xyz
 from dimos.msgs.time import time_from_nanoseconds
 from dimos.perception.experimental.object import Object as DetObject
 from dimos.utils.logging_config import setup_logger
@@ -1299,17 +1299,17 @@ class ManipulationModule(Module):
         if self._world_monitor is None:
             return
         frame = self.config.world_frame
-        if cloud.frame_id != frame:
+        if cloud.header.frame_id != frame:
             # The points are metric positions in the planning frame. Registering
             # them through a guessed transform would invent geometry.
             logger.warning(
                 "Voxel map is in frame '%s', not the planning frame '%s'; dropped a map.",
-                cloud.frame_id,
+                cloud.header.frame_id,
                 frame,
             )
             return
 
-        points = cloud.points_f32()
+        points = pointcloud_xyz(cloud)
         if not len(points):
             # An empty map is how a mapper says the space it owns is now clear.
             self._world_monitor.remove_obstacle(VOXEL_MAP_OBSTACLE_ID)

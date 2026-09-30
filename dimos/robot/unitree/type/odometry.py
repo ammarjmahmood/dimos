@@ -22,14 +22,6 @@ from dimos_generated.geometry_msgs.msg import (
 )
 from dimos_generated.std_msgs.msg import Header as GeneratedHeader
 
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.robot.unitree.type.timeseries import (
-    Timestamped,
-)
-from dimos.types.timestamped import to_timestamp
-
 raw_odometry_msg_sample: "RawOdometryMessage" = {
     "type": "msg",
     "topic": "rt/utlidar/robot_pose",
@@ -80,37 +72,6 @@ class RawOdometryMessage(TypedDict):
     type: Literal["msg"]
     topic: str
     data: OdometryData
-
-
-class Odometry(PoseStamped, Timestamped):  # type: ignore[misc]
-    name = "geometry_msgs.PoseStamped"
-
-    def __init__(self, frame_id: str = "base_link", *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(frame_id=frame_id, *args, **kwargs)  # type: ignore[misc]
-
-    @classmethod
-    def from_msg(cls, msg: RawOdometryMessage) -> "Odometry":
-        pose = msg["data"]["pose"]
-
-        # Extract position
-        pos = Vector3(
-            pose["position"].get("x"),
-            pose["position"].get("y"),
-            pose["position"].get("z"),
-        )
-
-        rot = Quaternion(
-            pose["orientation"].get("x"),
-            pose["orientation"].get("y"),
-            pose["orientation"].get("z"),
-            pose["orientation"].get("w"),
-        )
-
-        ts = to_timestamp(msg["data"]["header"]["stamp"])
-        return Odometry(position=pos, orientation=rot, ts=ts, frame_id="world")
-
-    def __repr__(self) -> str:
-        return f"Odom pos({self.position}), rot({self.orientation})"
 
 
 def pose_from_webrtc_odometry(

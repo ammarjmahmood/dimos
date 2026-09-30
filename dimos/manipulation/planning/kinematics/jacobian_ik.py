@@ -48,10 +48,8 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-from dimos_generated.geometry_msgs.msg import PoseStamped, Vector3
+from dimos_generated.geometry_msgs.msg import PoseStamped, Twist, Vector3
 from dimos_generated.sensor_msgs.msg import JointState
-
-from dimos.msgs.geometry_msgs.Twist import Twist
 
 logger = setup_logger()
 

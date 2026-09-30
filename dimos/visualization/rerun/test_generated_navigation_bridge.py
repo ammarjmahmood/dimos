@@ -71,3 +71,10 @@ def test_navigation_bridge_preserves_coordinates_and_frame(kind: str) -> None:
 
 def test_empty_generated_path_clears_geometry() -> None:
     assert navigation_archetype(Path()).strips.as_arrow_array().to_pylist() == []
+
+
+def test_path_override_preserves_configured_display_height():
+    value = Path(poses=[PoseStamped(pose=Pose(position=Point(x=1, y=2, z=3)))])
+    result = navigation_archetype(value, z_offset=0.3)
+    assert result.strips.as_arrow_array().to_pylist() == [[[1, 2, pytest.approx(3.3)]]]
+    assert value.poses[0].pose.position.z == 3

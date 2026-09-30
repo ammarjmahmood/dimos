@@ -15,11 +15,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar, Union, overload
 
-from dimos_lcm.builtin_interfaces import Time as ROSTime
+from dimos_generated.builtin_interfaces.msg import Time as ROSTime
 from reactivex import create
 from reactivex.disposable import CompositeDisposable
-
-# from dimos_lcm.std_msgs import Time as ROSTime
 from reactivex.observable import Observable
 
 from dimos.types.weaklist import WeakList
@@ -49,13 +47,8 @@ def to_timestamp(ts: TimeLike) -> float:
         return float(ts)
     if isinstance(ts, dict) and "sec" in ts and "nanosec" in ts:
         return ts["sec"] + ts["nanosec"] / 1e9  # type: ignore[no-any-return]
-    # Check for ROS Time-like objects by attributes
-    if hasattr(ts, "sec") and (hasattr(ts, "nanosec") or hasattr(ts, "nsec")):
-        # Handle both std_msgs.Time (nsec) and builtin_interfaces.Time (nanosec)
-        if hasattr(ts, "nanosec"):
-            return ts.sec + ts.nanosec / 1e9  # type: ignore[no-any-return]
-        else:  # has nsec
-            return ts.sec + ts.nsec / 1e9  # type: ignore[no-any-return]
+    if isinstance(ts, ROSTime):
+        return ts.sec + ts.nanosec / 1e9
     raise TypeError("unsupported timestamp type")
 
 

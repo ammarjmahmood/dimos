@@ -19,15 +19,14 @@ from __future__ import annotations
 import bisect
 from typing import TYPE_CHECKING, Any
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.sensor_msgs.msg import Image, PointCloud2
 import pytest
 
 from dimos.memory.embed import EmbedImages
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.memory.transform import QualityWindow
 from dimos.models.embedding.clip import CLIPModel
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.robot.unitree.type.odometry import Odometry
 from dimos.utils.data import get_data_dir
 from dimos.utils.testing.legacy_pickle import LegacyPickleStore
 
@@ -102,7 +101,7 @@ class TestImportReplay:
         video_replay: LegacyPickleStore[Any],
     ) -> None:
         threshold = video_replay.first_timestamp()
-        with session.stream("odom", Odometry) as odom:
+        with session.stream("odom", PoseStamped) as odom:
             count = 0
             skipped = 0
             for ts, data in odom_index:

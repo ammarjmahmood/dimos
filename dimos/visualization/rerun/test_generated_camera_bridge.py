@@ -23,7 +23,7 @@ import rerun as rr
 
 from dimos.msgs.image import image_from_array, image_to_jpeg
 from dimos.visualization.rerun.bridge import RerunBridgeModule
-from dimos.visualization.rerun.message_helpers import image_archetype
+from dimos.visualization.rerun.message_helpers import camera_pinhole, image_archetype
 
 pytestmark = pytest.mark.filterwarnings("error::rerun.error_utils.RerunWarning")
 
@@ -68,3 +68,12 @@ def test_generated_depth_units(encoding, dtype, meter) -> None:
     result = image_archetype(Image.decode(message.encode()))
     assert isinstance(result, rr.DepthImage)
     assert result.meter.as_arrow_array().to_pylist() == [meter]
+
+
+def test_camera_override_parents_frustum_without_mutating_header():
+    info = CameraInfo(
+        header=Header(frame_id="original"), width=6, height=4, k=[10, 0, 3, 0, 11, 2, 0, 0, 1]
+    )
+    result = camera_pinhole(info, optical_frame="d435_color_optical_frame")
+    assert result.parent_frame.as_arrow_array().to_pylist() == ["tf#/d435_color_optical_frame"]
+    assert info.header.frame_id == "original"

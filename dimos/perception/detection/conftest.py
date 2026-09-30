@@ -17,15 +17,14 @@ import functools
 from typing import TypedDict
 from unittest import mock
 
-from dimos_lcm.visualization_msgs.MarkerArray import MarkerArray
+from dimos_generated.geometry_msgs.msg import PoseStamped, TransformStamped
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image, PointCloud2
+from dimos_generated.vision_msgs.msg import Detection2DArray
+from dimos_generated.visualization_msgs.msg import MarkerArray
 import pytest
 
 from dimos.core.transport import LCMTransport
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.vision_msgs.Detection2DArray import Detection2DArray
+from dimos.msgs.time import to_seconds
 from dimos.perception.detection.module2D import Detection2DModule
 from dimos.perception.detection.module3D import Detection3DModule
 from dimos.perception.detection.type.detection2d.base import Detection2D
@@ -35,17 +34,17 @@ from dimos.perception.detection.type.detection3d.pointcloud import Detection3DPC
 from dimos.perception.experimental.moduleDB import ObjectDBModule
 from dimos.protocol.tf.tf import TF
 from dimos.robot.unitree.go2 import connection
-from dimos.robot.unitree.type.odometry import Odometry
+from dimos.robot.unitree.type.odometry import pose_from_webrtc_odometry
 from dimos.utils.data import get_data
 from dimos.utils.testing.legacy_pickle import LegacyPickleStore
 
 
 class Moment(TypedDict, total=False):
-    odom_frame: Odometry
+    odom_frame: PoseStamped
     lidar_frame: PointCloud2
     image_frame: Image
     camera_info: CameraInfo
-    transforms: list[Transform]
+    transforms: list[TransformStamped]
     tf: TF
     detections: ImageDetections3DPC | None
     markers: MarkerArray | None
@@ -83,16 +82,16 @@ def get_moment(tf):
 
         image_frame = LegacyPickleStore(
             f"{data_dir}/video",
-        ).find_closest(lidar_frame.ts)
+        ).find_closest(to_seconds(lidar_frame.header.stamp))
 
         if image_frame is None:
             raise ValueError("No image frame found")
 
-        image_frame.frame_id = "camera_optical"
+        image_frame.header.frame_id = "camera_optical"
 
-        odom_frame = LegacyPickleStore(f"{data_dir}/odom", autocast=Odometry.from_msg).find_closest(
-            lidar_frame.ts
-        )
+        odom_frame = LegacyPickleStore(
+            f"{data_dir}/odom", autocast=pose_from_webrtc_odometry
+        ).find_closest(to_seconds(lidar_frame.header.stamp))
 
         if odom_frame is None:
             raise ValueError("No odom frame found")

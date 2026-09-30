@@ -1298,3 +1298,6 @@ covers the next consumer batch.
 
 [Camera/export, PGO, approved WebXR and memory documentation evidence](evidence/camera-export-runtime.md)
 covers the subsequent offline consumer batch.
+
+[Hosted arm, robot and simulation consumer evidence](evidence/robot-simulation-consumers.md)
+covers the next offline migration batch and its remaining gates.

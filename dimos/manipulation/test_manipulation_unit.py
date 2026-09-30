@@ -30,7 +30,7 @@ from dimos_generated.geometry_msgs.msg import (
     Transform,
     TransformStamped,
 )
-from dimos_generated.sensor_msgs.msg import JointState
+from dimos_generated.sensor_msgs.msg import JointState, PointCloud2
 from dimos_generated.std_msgs.msg import Header
 from dimos_generated.trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 import numpy as np
@@ -79,8 +79,8 @@ from dimos.manipulation.planning.trajectory_generator.config import (
 from dimos.manipulation.planning.trajectory_generator.simple_parametrizer import (
     SimpleTrapezoidParametrizer,
 )
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.time import duration_from_seconds, header_now, to_nanoseconds
+from dimos.msgs.pointcloud import pointcloud_from_xyz
+from dimos.msgs.time import duration_from_seconds, header_now, time_from_seconds, to_nanoseconds
 from dimos.msgs.trajectory import TrajectoryState
 from dimos.robot.assets.model import LoadedRobotModel, RobotModel
 
@@ -259,10 +259,9 @@ class TestVoxelMap:
 
     @staticmethod
     def _cloud(points: list[list[float]], frame_id: str = "world") -> PointCloud2:
-        return PointCloud2.from_numpy(
+        return pointcloud_from_xyz(
             np.asarray(points, dtype=np.float32).reshape((-1, 3)),
-            frame_id=frame_id,
-            timestamp=1.0,
+            header=Header(stamp=time_from_seconds(1.0), frame_id=frame_id),
         )
 
     def test_a_map_becomes_one_octree_obstacle(self, module_factory) -> None:

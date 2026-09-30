@@ -32,8 +32,18 @@ import threading
 import time
 from typing import Any
 
-from dimos_generated.sensor_msgs.msg import CameraInfo, Image, PointCloud2
+from dimos_generated.geometry_msgs.msg import (
+    Point,
+    Pose,
+    PoseStamped,
+    Quaternion,
+    Transform,
+    TransformStamped,
+    Vector3,
+)
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image, Imu, JointState, PointCloud2
 from dimos_generated.std_msgs.msg import Header
+from dimos_generated.tf2_msgs.msg import TFMessage
 import mujoco
 import numpy as np
 from numpy.typing import NDArray
@@ -46,15 +56,9 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
 from dimos.hardware.sensors.camera.spec import DepthCameraConfig, DepthCameraHardware
 from dimos.msgs.camera_info import camera_info_from_intrinsics, camera_info_with_stamp
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.geometry import quaternion_from_matrix
 from dimos.msgs.image import image_from_array
 from dimos.msgs.pointcloud import pointcloud_from_rgbd, pointcloud_from_xyz, voxel_downsample_cloud
-from dimos.msgs.sensor_msgs.Imu import Imu
-from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.msgs.time import time_from_seconds
 from dimos.simulation.engines.mujoco_engine import (
     CameraConfig,
@@ -99,25 +103,21 @@ def _pose_matrix(
 
 def _transform_from_matrix(
     matrix: NDArray[np.float64], *, frame_id: str, child_frame_id: str, ts: float
-) -> Transform:
-    return Transform(
-        translation=Vector3(
-            float(matrix[0, 3]),
-            float(matrix[1, 3]),
-            float(matrix[2, 3]),
-        ),
-        rotation=Quaternion.from_rotation_matrix(matrix[:3, :3]),
-        frame_id=frame_id,
+) -> TransformStamped:
+    return TransformStamped(
+        header=Header(stamp=time_from_seconds(ts), frame_id=frame_id),
         child_frame_id=child_frame_id,
-        ts=ts,
+        transform=Transform(
+            translation=Vector3(
+                x=float(matrix[0, 3]), y=float(matrix[1, 3]), z=float(matrix[2, 3])
+            ),
+            rotation=quaternion_from_matrix(matrix[:3, :3]),
+        ),
     )
 
 
-def _default_identity_transform() -> Transform:
-    return Transform(
-        translation=Vector3(0.0, 0.0, 0.0),
-        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-    )
+def _default_identity_transform() -> TransformStamped:
+    return TransformStamped(transform=Transform(rotation=Quaternion(w=1.0)))
 
 
 def _imu_from_mujoco_wxyz(
@@ -130,11 +130,10 @@ def _imu_from_mujoco_wxyz(
 ) -> Imu:
     w, x, y, z = quaternion
     return Imu(
-        orientation=Quaternion(x, y, z, w),
-        angular_velocity=Vector3(*gyroscope),
-        linear_acceleration=Vector3(*accelerometer),
-        frame_id=frame_id,
-        ts=ts,
+        header=Header(stamp=time_from_seconds(ts), frame_id=frame_id),
+        orientation=Quaternion(x=x, y=y, z=z, w=w),
+        angular_velocity=Vector3(x=gyroscope[0], y=gyroscope[1], z=gyroscope[2]),
+        linear_acceleration=Vector3(x=accelerometer[0], y=accelerometer[1], z=accelerometer[2]),
     )
 
 
@@ -263,7 +262,7 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     height: int = 480
     fps: int = 15
     base_frame_id: str = "link7"
-    base_transform: Transform | None = Field(default_factory=_default_identity_transform)
+    base_transform: TransformStamped | None = Field(default_factory=_default_identity_transform)
     align_depth_to_color: bool = True
     enable_color: bool = True
     enable_depth: bool = True
@@ -797,15 +796,18 @@ class MujocoSimModule(
             ]  # (w, x, y, z) per MuJoCo convention
             self.odom.publish(
                 PoseStamped(
-                    ts=time.time(),
-                    frame_id="world",
-                    position=Vector3(float(base_pos[0]), float(base_pos[1]), float(base_pos[2])),
-                    orientation=Quaternion(
-                        float(base_quat[1]),
-                        float(base_quat[2]),
-                        float(base_quat[3]),
-                        float(base_quat[0]),
-                    ),  # PoseStamped uses x,y,z,w
+                    header=Header(stamp=time_from_seconds(time.time()), frame_id="world"),
+                    pose=Pose(
+                        position=Point(
+                            x=float(base_pos[0]), y=float(base_pos[1]), z=float(base_pos[2])
+                        ),
+                        orientation=Quaternion(
+                            x=float(base_quat[1]),
+                            y=float(base_quat[2]),
+                            z=float(base_quat[3]),
+                            w=float(base_quat[0]),
+                        ),
+                    ),
                 )
             )
 
@@ -974,24 +976,26 @@ class MujocoSimModule(
 
         self.tf.publish(
             TFMessage(
-                _transform_from_matrix(
-                    optical_transform,
-                    frame_id=parent_frame,
-                    child_frame_id=self._color_optical_frame,
-                    ts=ts,
-                ),
-                _transform_from_matrix(
-                    optical_transform,
-                    frame_id=parent_frame,
-                    child_frame_id=self._depth_optical_frame,
-                    ts=ts,
-                ),
-                _transform_from_matrix(
-                    camera_transform,
-                    frame_id=parent_frame,
-                    child_frame_id=self._camera_link,
-                    ts=ts,
-                ),
+                transforms=[
+                    _transform_from_matrix(
+                        optical_transform,
+                        frame_id=parent_frame,
+                        child_frame_id=self._color_optical_frame,
+                        ts=ts,
+                    ),
+                    _transform_from_matrix(
+                        optical_transform,
+                        frame_id=parent_frame,
+                        child_frame_id=self._depth_optical_frame,
+                        ts=ts,
+                    ),
+                    _transform_from_matrix(
+                        camera_transform,
+                        frame_id=parent_frame,
+                        child_frame_id=self._camera_link,
+                        ts=ts,
+                    ),
+                ]
             )
         )
 
