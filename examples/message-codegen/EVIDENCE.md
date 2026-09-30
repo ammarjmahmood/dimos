@@ -1289,3 +1289,6 @@ Final legacy API/dependency retirement and viewer UI acceptance remain open.
 
 For the subsequent compressed-image/runtime adapter batch, see
 [evidence/compressed-image-runtime.md](evidence/compressed-image-runtime.md).
+
+Recorder/graph boundaries and the isolated Python example are covered in
+[evidence/recorder-graph-runtime.md](evidence/recorder-graph-runtime.md).

@@ -25,14 +25,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from dimos_generated.geometry_msgs.msg import TransformStamped
+from dimos_generated.geometry_msgs.msg import Quaternion, Transform, TransformStamped
+from dimos_generated.sensor_msgs.msg import PointCloud2
 from dimos_generated.std_msgs.msg import Header
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.protocol.tf.static_tf_publisher import StaticTfPublisher
+from dimos.visualization.rerun.message_helpers import cloud_archetype
 from dimos.visualization.vis_module import vis_module
 
 # Dot radius in screen-space UI points.
@@ -47,7 +48,13 @@ class RealSenseMountTf(StaticTfPublisher):
     """
 
     def transforms(self) -> list[TransformStamped]:
-        return [TransformStamped(header=Header(frame_id="world"), child_frame_id="camera_link")]
+        return [
+            TransformStamped(
+                header=Header(frame_id="world"),
+                child_frame_id="camera_link",
+                transform=Transform(rotation=Quaternion(w=1.0)),
+            )
+        ]
 
 
 def _rerun_blueprint() -> Any:
@@ -71,7 +78,7 @@ def _rerun_blueprint() -> Any:
 def _cloud(cloud: PointCloud2) -> Any:
     # The default "spheres" mode is sized for sparse lidar; a dense RGBD cloud
     # reads better as flat dots that keep their size as you zoom.
-    return cloud.to_rerun(mode="points", ui_radius=_CLOUD_RADIUS_UI)
+    return cloud_archetype(cloud, mode="points", ui_radius=_CLOUD_RADIUS_UI)
 
 
 _vis = vis_module(
