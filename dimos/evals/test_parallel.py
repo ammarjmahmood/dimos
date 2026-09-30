@@ -32,6 +32,10 @@ def test_job_command_on_host_and_in_container(tmp_path: Path, monkeypatch) -> No
     assert env is None and cmd[:2] == ["docker", "run"] and "img" in cmd
     assert cmd.count("-e") == 2 and "OPENAI_API_KEY" in cmd and "ANTHROPIC_API_KEY" not in cmd
     assert f"{job}:/out" in cmd and cmd[cmd.index("--label") + 1] == "dimos-eval=run1"
+    cmd, _ = _job_command("s.m", "a.m", [], case, job, "", "run1", video=True)
+    assert (
+        cmd[-1] == "--video" and "video=true" not in cmd
+    )  # the child's own flag, no agent override
 
 
 def test_robot_readme_lists_only_served_topics() -> None:

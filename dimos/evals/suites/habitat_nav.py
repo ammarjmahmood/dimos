@@ -57,6 +57,7 @@ from dimos.evals.nav_metrics import (
 )
 from dimos.evals.types import EvalCase, Outcome, Suite, recording
 from dimos.robot.raw_robot_bridge import dry_run_world_state
+from dimos.utils.logging_config import setup_logger
 
 TASK_BRIEF = (
     "You control a mobile robot in a furnished indoor scene. You know the robot's pose and the "
@@ -64,6 +65,8 @@ TASK_BRIEF = (
     "named below, driving around obstacles, and declare finished as soon as the robot is beside "
     "it. The last line is the goal; its coordinates are the target's centre in the world frame."
 )
+logger = setup_logger()
+
 SCENES = Path(__file__).parent / "scenes" / "habitat"
 BLUEPRINT = ["habitat-nav-gt", "mcp-server", "demo-objects", "nav-skills"]
 TIMEOUT_S = float(os.environ.get("DIMOS_EVAL_TIMEOUT_S", 1800))
@@ -132,7 +135,12 @@ def grade_nav(
                 reference=reference,
                 walls=walls or (),
             )
-        stats = json.loads(stats_path.read_text()) if stats_path and stats_path.exists() else {}
+        if stats_path is None:
+            stats: dict[str, Any] = {}
+        elif stats_path.exists():
+            stats = json.loads(stats_path.read_text())
+        else:  # the bridge never wrote its counters: no world state was published at all
+            stats = {"ticks": 0, "errors": 0, "last_error": f"no stats file at {stats_path}"}
         write_metrics(
             m,
             o.artifacts["recording"].parent / "nav_metrics.json",
@@ -164,6 +172,9 @@ def cases_for(scene_file: Path, goal_key: str = "end_xy") -> list[EvalCase]:
     if "ground_truth" in scene:
         objects = DIMOS_PROJECT_ROOT / scene["ground_truth"]
         if not objects.is_file():  # ground truth ships separately (misc/habitat, PR #4211)
+            logger.warning(
+                "scene skipped: ground truth missing", scene=scene_file.name, path=str(objects)
+            )
             return []
     detections = json.loads(objects.read_text())["detections"]
     boxes = {d["id"]: box_of(d["center_xyz"], d["size_xyz"]) for d in detections}

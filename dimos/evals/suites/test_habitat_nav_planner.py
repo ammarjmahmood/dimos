@@ -16,6 +16,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from dimos.evals.suites.habitat_nav import cases_for
 
 SCENE = {
@@ -65,3 +67,11 @@ def test_goal_key_falls_back_to_the_centre(tmp_path: Path) -> None:
     f = tmp_path / "s1.json"
     f.write_text(json.dumps(scene))
     assert cases_for(f, goal_key="end_nav_xy")[0].inputs.endswith("(2.00, 3.00)")
+
+
+def test_missing_stats_read_as_no_world_state() -> None:
+    from dimos.evals.suites.habitat_nav import world_state_check
+
+    with pytest.raises(RuntimeError, match="no world state"):
+        world_state_check({"ticks": 0, "errors": 0, "last_error": "no stats file"})
+    world_state_check({})  # arms without a bridge have no counters to check

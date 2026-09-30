@@ -133,7 +133,6 @@ def run(
         for c in cases:
             if hasattr(c.environment.config, "video"):
                 c.environment.config.video = True
-        set_ = [*set_, "video=true"] if parallel > 1 or container or repeat > 1 else set_
     kwargs = agent_kwargs(set_)
     if allow is not None:
         if "allowed_tools" in kwargs:
@@ -148,6 +147,11 @@ def run(
         kwargs["excluded_keywords"] = [w.strip() for w in exclude.split(",") if w.strip()]
     provenance = run_provenance({"kind": "suite_module", "value": suite}, agent, kwargs)
     selected = frozenset(t for t in tags.split(",") if t) if tags else frozenset()
+    if not [c for c in cases if not selected or selected & c.tags]:
+        typer.echo(
+            f"no case matches: suite has {len(cases)} case(s), tags {sorted(selected)}", err=True
+        )
+        raise typer.Exit(code=2)
     if parallel > 1 or container or repeat > 1:
         if parallel > 1 and not container:
             raise typer.BadParameter(
@@ -158,7 +162,7 @@ def run(
         chosen = [c for c in cases if not selected or selected & c.tags][: limit or None]
         run_dir, results = run_parallel(
             suite, agent, set_, chosen,
-            parallel=parallel, container=container, repeat=repeat, manifest=provenance,
+            parallel=parallel, container=container, repeat=repeat, manifest=provenance, video=video,
         )  # fmt: skip
     else:
         runner = EvalRunner()

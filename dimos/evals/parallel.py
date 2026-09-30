@@ -50,9 +50,12 @@ def _job_command(
     job: Path,
     container: str,
     run_id: str,
+    video: bool = False,
 ) -> tuple[list[str], dict[str, str] | None]:
     child = ["dimos", "evals", "run", suite, "--agent", agent, "--case", case.id]
     child += [arg for o in overrides for arg in ("--set", o)]
+    if video:
+        child.append("--video")
     if not container:
         return child, {**os.environ, "XDG_STATE_HOME": str(job / "state")}
     keys = [arg for k in KEY_VARS if k in os.environ for arg in ("-e", k)]
@@ -71,9 +74,10 @@ def _run_job(
     job: Path,
     container: str,
     run_id: str,
+    video: bool = False,
 ) -> dict[str, Any]:
     job.mkdir(parents=True, exist_ok=True)
-    cmd, env = _job_command(suite, agent, overrides, case, job, container, run_id)
+    cmd, env = _job_command(suite, agent, overrides, case, job, container, run_id, video)
     t0 = time.monotonic()
     with (job / "job.log").open("w") as log:
         try:
@@ -113,6 +117,7 @@ def run_parallel(
     container: str,
     repeat: int,
     manifest: dict[str, Any],
+    video: bool = False,
 ) -> tuple[Path, list[EvalResult]]:
     out_dir = STATE_DIR / "evals"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +133,10 @@ def run_parallel(
         with ThreadPoolExecutor(parallel) as pool:
             rows = list(
                 pool.map(
-                    lambda j: _run_job(suite, agent, overrides, j[0], j[1], container, run_id), jobs
+                    lambda j: _run_job(
+                        suite, agent, overrides, j[0], j[1], container, run_id, video
+                    ),
+                    jobs,
                 )
             )
     finally:

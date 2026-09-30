@@ -84,6 +84,7 @@ LINEAR_ACCEL = 0.8  # m/s^2 ramp
 ANGULAR_ACCEL = 1.6  # rad/s^2 ramp
 PUBLISH_HZ = 10.0  # cmd_vel rate
 STOP_THRESHOLD = 0.7  # noul
+MIN_PROBABILITY = 0.0  # an axis pick below this probability reads as none; 0: every pick counts
 REACHED_M = 0.5
 GIVE_UP_S = 5.0  # goal clears after this long without motion
 SLOW_WITHIN_M = 1.5  # speed scales down inside this distance to the goal

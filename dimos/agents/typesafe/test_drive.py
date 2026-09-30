@@ -99,3 +99,9 @@ def test_undeclared_choice_reads_as_none() -> None:
     a["drive.x"] = choice("sideways", "sideways", "forward", "none", "backward")
     d = _decode(a)
     assert (d.x, d.labels[0]) == (0.0, "none")
+
+
+def test_min_probability_gates_an_axis_pick() -> None:
+    d = decode(answers(x="forward", p=0.4), stop_threshold=0.7, min_probability=0.5)
+    assert (d.x, d.labels[0]) == (0.0, "none")
+    assert _decode(answers(x="forward", p=0.4)).x == 1.0  # off by default: the pick counts

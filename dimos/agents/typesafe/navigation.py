@@ -40,6 +40,7 @@ from dimos.agents.typesafe.constants import (
     LIDAR_BAND,
     LINEAR_ACCEL,
     LINEAR_SPEED,
+    MIN_PROBABILITY,
     NAV_MAX_HZ,
     NAV_TIMEOUT_S,
     PUBLISH_HZ,
@@ -82,6 +83,7 @@ class TypeSafeNavigationConfig(TypeSafeAgentConfig):
     linear_accel: float = LINEAR_ACCEL
     angular_accel: float = ANGULAR_ACCEL
     stop_threshold: float = STOP_THRESHOLD
+    min_probability: float = MIN_PROBABILITY
     reached_m: float = REACHED_M
     give_up_s: float = GIVE_UP_S
     image_size: tuple[int, int] = IMAGE_SIZE
@@ -176,7 +178,11 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         assert isinstance(state, dict)
         if self._state_gen != self._goal_gen:
             return  # the goal changed while this request was in flight
-        drive = decode(answers, stop_threshold=self.config.stop_threshold)
+        drive = decode(
+            answers,
+            stop_threshold=self.config.stop_threshold,
+            min_probability=self.config.min_probability,
+        )
         self._steer(state, drive, self._state_gen)  # type: ignore[arg-type]
 
     def on_failure(self) -> None:

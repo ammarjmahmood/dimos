@@ -335,9 +335,11 @@ def test_goal_coordinates_pick_one_of_several_same_label_objects() -> None:
         lidar=None,
         robot={},
     )
-    assert [(o["label"], o["distance_m"]) for o in state["objects"]] == [
-        ("chair", 39.75),
-        ("table", 2.75),
+    # The other chair is not the target but it is still something to drive around.
+    assert [(o["label"], o["distance_m"], o.get("target")) for o in state["objects"]] == [
+        ("chair", 39.75, True),
+        ("chair", 1.75, None),
+        ("table", 2.75, None),
     ]
 
 

@@ -67,9 +67,18 @@ def caption_runs(runs: list[Path], out: Path) -> dict[tuple[str, str], Path]:
         for row in (run / "results.jsonl").read_text().splitlines():
             r = json.loads(row)
             src = run / r["case_id"] / "viewer.mp4"
+            if not src.exists():  # a parallel run keeps each case's files in its job's own run
+                src = next(
+                    iter(
+                        run.glob(
+                            f"{r['case_id']}-*/state/dimos/evals/run-*/{r['case_id']}/viewer.mp4"
+                        )
+                    ),
+                    src,
+                )
             if not src.exists():
                 continue
-            metrics_path = run / r["case_id"] / "nav_metrics.json"
+            metrics_path = src.parent / "nav_metrics.json"
             lines = [label, r["case_id"], f"score {r['score']:.2f}"]
             if metrics_path.exists():
                 m = json.loads(metrics_path.read_text())

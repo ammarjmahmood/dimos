@@ -159,8 +159,6 @@ def _objects_3d(
             named = []
     else:
         named = [d for d in raw if d["label"] and d["label"].lower() in goal.lower()]
-    # Same-label others would be taken for the one the coordinates single out.
-    twin_label = named[0]["label"] if at and named else None
     out: list[ObjectState] = []
     solids: list[tuple[str, Box]] = []
     target_box: Box | None = None
@@ -172,7 +170,6 @@ def _objects_3d(
             p["z"] - s["z"] / 2 > floor + BODY_BAND_M[1]
             or p["z"] + s["z"] / 2 < floor + BODY_BAND_M[0]
             or max(s["x"], s["y"]) < MIN_FOOTPRINT_M
-            or d["label"] == twin_label
             or _OVERHEAD.search(d["label"])
         ):
             continue
