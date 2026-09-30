@@ -26,17 +26,41 @@ pub struct Lens {
     pub fy: f64,
     pub cx: f64,
     pub cy: f64,
-    /// `[k1, k2, p1, p2, k3, k4, k5, k6]`, zero-extended so a 5-coefficient plumb_bob works unchanged.
+    pub model: Model,
+    /// Brown-Conrady: `[k1, k2, p1, p2, k3, k4, k5, k6]`, zero-extended so a 5-coefficient plumb_bob works unchanged.
+    /// Equidistant: `[k1, k2, k3, k4, 0, 0, 0, 0]`.
     pub distortion: [f64; 8],
 }
 
+/// The distortion models a `CameraInfo` can name that this resamples.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Model {
+    /// OpenCV's standard model: plumb_bob, or rational_polynomial with eight coefficients.
+    BrownConrady,
+    /// OpenCV's fisheye (Kannala-Brandt) model, which ROS names equidistant.
+    Equidistant,
+}
+
+impl Model {
+    /// None for a model this cannot undistort.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" | "plumb_bob" | "rational_polynomial" => Some(Self::BrownConrady),
+            "equidistant" | "fisheye" | "kannala_brandt" => Some(Self::Equidistant),
+            _ => None,
+        }
+    }
+}
+
 impl Lens {
-    /// The lens as seen in an image `scale` times the calibration's resolution; None without usable intrinsics.
+    /// The lens as seen in an image `scale` times the calibration's resolution; None without usable intrinsics
+    /// or for a distortion model this cannot undistort.
     pub fn from_info(info: &CameraInfo, scale: f64) -> Option<Self> {
         let (fx, fy) = (info.K[0], info.K[4]);
         if !(fx > 0.0 && fy > 0.0 && fx.is_finite() && fy.is_finite()) {
             return None;
         }
+        let model = Model::from_name(&info.distortion_model)?;
         // Eight coefficients mean the rational model whatever `distortion_model` claims; some drivers mislabel it plumb_bob.
         let mut distortion = [0.0; 8];
         for (slot, value) in distortion.iter_mut().zip(&info.D) {
@@ -47,12 +71,34 @@ impl Lens {
             fy: fy * scale,
             cx: (info.K[2] + 0.5) * scale - 0.5,
             cy: (info.K[5] + 0.5) * scale - 0.5,
+            model,
             distortion,
         })
     }
 
     /// Where a normalised ray lands in the distorted image (NaN past the model's valid range).
     pub fn distort(&self, x: f64, y: f64) -> (f64, f64) {
+        let (xd, yd) = match self.model {
+            Model::BrownConrady => self.brown_conrady(x, y),
+            Model::Equidistant => self.equidistant(x, y),
+        };
+        (self.fx * xd + self.cx, self.fy * yd + self.cy)
+    }
+
+    /// As OpenCV's `fisheye::distortPoints`: the angle off the axis, not the radius, carries the polynomial.
+    fn equidistant(&self, x: f64, y: f64) -> (f64, f64) {
+        let [k1, k2, k3, k4, ..] = self.distortion;
+        let r = (x * x + y * y).sqrt();
+        if r < 1e-12 {
+            return (x, y);
+        }
+        let theta = r.atan();
+        let t2 = theta * theta;
+        let theta_d = theta * (1.0 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4))));
+        (x * theta_d / r, y * theta_d / r)
+    }
+
+    fn brown_conrady(&self, x: f64, y: f64) -> (f64, f64) {
         let [k1, k2, p1, p2, k3, k4, k5, k6] = self.distortion;
         let r2 = x * x + y * y;
         let (r4, r6) = (r2 * r2, r2 * r2 * r2);
@@ -68,7 +114,7 @@ impl Lens {
         }
         let xd = x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x);
         let yd = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y;
-        (self.fx * xd + self.cx, self.fy * yd + self.cy)
+        (xd, yd)
     }
 }
 
@@ -193,6 +239,36 @@ mod tests {
                 "({x}, {y}) -> ({su}, {sv}), OpenCV ({u}, {v})"
             );
         }
+    }
+
+    #[test]
+    fn an_equidistant_lens_matches_opencv_fisheye() {
+        // The Go2 front camera (front_camera_720.yaml); OpenCV's fisheye::distortPoints puts these rays here.
+        let mut go2 = info(&[-0.0730943, -0.0234114, -0.0069306, 0.0092387]);
+        go2.distortion_model = "equidistant".into();
+        go2.K = [
+            797.4756, 0.0, 643.5352, 0.0, 796.4872, 349.2784, 0.0, 0.0, 1.0,
+        ];
+        let lens = Lens::from_info(&go2, 1.0).unwrap();
+        assert_eq!(lens.model, Model::Equidistant);
+        for ((x, y), (u, v)) in [
+            ((-0.9, -0.5), (117.447, 57.369)),
+            ((0.9, 0.5), (1169.624, 641.188)),
+            ((0.3, -0.1), (873.612, 272.681)),
+        ] {
+            let (su, sv) = lens.distort(x, y);
+            assert!(
+                (su - u).abs() < 0.05 && (sv - v).abs() < 0.05,
+                "({x}, {y}) -> ({su}, {sv}), OpenCV ({u}, {v})"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_distortion_model_is_refused() {
+        let mut odd = info(&[0.0; 5]);
+        odd.distortion_model = "double_sphere".into();
+        assert!(Lens::from_info(&odd, 1.0).is_none());
     }
 
     #[test]
