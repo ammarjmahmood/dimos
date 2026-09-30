@@ -99,12 +99,6 @@ def is_valid_segment(segment: str) -> bool:
     return _SEGMENT.fullmatch(segment) is not None
 
 
-def is_valid_key(key: str) -> bool:
-    """Whether a whole name is three legal parts joined by "/"."""
-    parts = key.split(SEPARATOR)
-    return len(parts) == 3 and all(_SEGMENT.fullmatch(p) for p in parts)
-
-
 class Key(str):
     """The name of one number on a robot, such as "arm/joint1/position".
 

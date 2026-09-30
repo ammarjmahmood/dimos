@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The description's derived views, and that all of it survives RPC."""
+"""The description's five fields, its derived views, and that it survives RPC."""
 
 from __future__ import annotations
 
@@ -22,25 +22,28 @@ import pickle
 import pytest
 
 from dimos.control.contract.description import (
-    ActivationPolicy,
-    AvailableAfter,
     ControlDescription,
-    Estop,
-    EstopKind,
-    EstopRecovery,
-    LimitPolicy,
     Limits,
-    ModeGroup,
-    Omission,
-    ProcessLoss,
     Resource,
     ResourceKind,
-    SafeStop,
-    SafeStopKind,
-    ShutdownMotion,
-    Timing,
 )
-from dimos.control.contract.keys import EFFORT, KD, KP, POSITION, VELOCITY, VX, Unit
+from dimos.control.contract.keys import POSITION, Unit
+
+
+def test_a_description_is_exactly_five_fields() -> None:
+    """Name, parts, limits, report rate and deadman timeout, and nothing else."""
+    assert [f.name for f in dataclasses.fields(ControlDescription)] == [
+        "source",
+        "resources",
+        "limits",
+        "state_rate_hz",
+        "deadman_timeout_s",
+    ]
+
+
+def test_limits_refuse_unless_told_to_clamp() -> None:
+    """Clamping is something a description asks for, never what it gets by default."""
+    assert Limits(-1.0, 1.0).clamp is False
 
 
 def test_state_and_command_keys_follow_declaration_order(xarm: ControlDescription) -> None:
@@ -76,6 +79,15 @@ def test_joint_names_exclude_bases(chassis: ControlDescription) -> None:
     assert chassis.joint_names() == ()
 
 
+def test_an_imu_reports_but_is_never_commanded(g1: ControlDescription) -> None:
+    """A sensor adds state keys, no command keys, and is not a joint."""
+    assert "g1/imu/qw" in g1.state_keys()
+    assert not any(key.startswith("g1/imu/") for key in g1.command_keys())
+    assert "g1/imu" not in g1.joint_names()
+    assert g1.unit_of("g1/imu/gz") is Unit.RAD_PER_S
+    assert g1.unit_of("g1/imu/az") is Unit.M_PER_S2
+
+
 def test_unit_of(xarm: ControlDescription) -> None:
     """Units come from the owning resource, and are None when undeclared."""
     assert xarm.unit_of("arm/joint1/position") is Unit.RAD
@@ -95,92 +107,38 @@ def test_gripper_units_are_per_gripper(xarm: ControlDescription) -> None:
     assert swapped.unit_of("arm/gripper/position") is Unit.NORMALIZED
 
 
-def test_omission_defaults(xarm: ControlDescription) -> None:
-    """Position and gains hold their last value; everything else falls to zero."""
-    assert xarm.omission_of("arm/joint1/position") is Omission.RETAIN_LAST
-    assert xarm.omission_of("arm/joint1/velocity") is Omission.ZERO
-
-
-def test_omission_defaults_cover_gains(g1: ControlDescription) -> None:
-    """kp and kd retain, which is what lets a position-only task win a PD joint."""
-    assert g1.omission_of("g1/joint1/kp") is Omission.RETAIN_LAST
-    assert g1.omission_of("g1/joint1/kd") is Omission.RETAIN_LAST
-    assert g1.omission_of("g1/joint1/effort") is Omission.ZERO
-
-
-def test_explicit_omission_overrides_the_default(g1: ControlDescription) -> None:
-    """UNSET is opt-in, and is the only way None reaches a vendor's write()."""
-    assert g1.omission_of("g1/joint1/velocity") is Omission.UNSET
-
-
-def test_groups_for(xarm: ControlDescription) -> None:
-    """An arm joint sits in both exclusive groups; the gripper in its own."""
-    assert [g.name for g in xarm.groups_for("joint1")] == ["position", "velocity"]
-    assert [g.name for g in xarm.groups_for("gripper")] == ["gripper"]
-    assert xarm.groups_for("nonexistent") == ()
-
-
-def test_is_command_and_state_key(xarm: ControlDescription) -> None:
-    """Membership answers for both directions, and for foreign sources."""
-    assert xarm.is_command_key("arm/joint1/position")
-    assert not xarm.is_command_key("arm/joint1/effort")
-    assert xarm.is_state_key("arm/joint1/effort")
-    assert not xarm.is_state_key("g1/joint1/position")
-
-
 def test_resource_lookup(xarm: ControlDescription) -> None:
     """Resource lookup is by declared name, or None."""
     assert xarm.resource("gripper") is not None
     assert xarm.resource("missing") is None
 
 
-def test_process_loss_scalar_and_per_group(g1: ControlDescription) -> None:
-    """A source may answer once, or per mode group."""
-    assert g1.process_loss_of() is ProcessLoss.UNPROTECTED
-    assert g1.process_loss_of("pd") is ProcessLoss.UNPROTECTED
-
-    per_group = dataclasses.replace(g1, process_loss={"pd": ProcessLoss.NATIVE_WATCHDOG})
-
-    assert per_group.process_loss_of("pd") is ProcessLoss.NATIVE_WATCHDOG
-    assert per_group.process_loss_of("absent") is ProcessLoss.UNKNOWN
-
-
 def test_descriptions_are_frozen(xarm: ControlDescription) -> None:
-    """Immutable per epoch: a re-describe builds a new one and bumps the epoch."""
+    """A change means building a new description, not editing this one."""
     with pytest.raises(dataclasses.FrozenInstanceError):
         xarm.source = "other"  # type: ignore[misc]
 
 
-@pytest.fixture
-def every_dataclass() -> tuple[object, ...]:
-    """One instance of every frozen dataclass in the package."""
-    return (
+def test_every_dataclass_pickles() -> None:
+    """Descriptions travel over RPC, so every part must survive the round trip."""
+    parts = (
         Resource(
             name="joint1",
             kind=ResourceKind.JOINT,
             state_interfaces=(POSITION,),
-            command_interfaces=(POSITION, KP, KD, VELOCITY, EFFORT),
+            command_interfaces=(POSITION,),
             units={POSITION: Unit.RAD},
         ),
-        Limits(-1.0, 1.0, LimitPolicy.CLAMP),
-        ModeGroup(name="pd", resources=("joint1",), interfaces=frozenset({POSITION, VX})),
-        SafeStop(kind=SafeStopKind.DAMP, kd={"g1/joint1/kd": 5.0}, stable_state="floor"),
-        Estop(kind=EstopKind.DAMP, recovery=EstopRecovery.PREPARE_ARM_REQUIRED),
-        Timing(state_rate_hz=100.0, stale_timeout_s=0.05, watchdog_timeout_s=0.1),
-        ShutdownMotion(pose={"arm/joint1/position": 0.0}, tolerance=0.01, timeout_s=5.0),
+        Limits(-1.0, 1.0, clamp=True),
     )
-
-
-def test_every_dataclass_pickles(every_dataclass: tuple[object, ...]) -> None:
-    """Descriptions travel over RPC, so every part must survive the round trip."""
-    for original in every_dataclass:
+    for original in parts:
         assert pickle.loads(pickle.dumps(original)) == original
 
 
 def test_whole_descriptions_pickle(
     xarm: ControlDescription, g1: ControlDescription, chassis: ControlDescription
 ) -> None:
-    """describe_control() returns these across a process boundary."""
+    """A robot hands its description over from its own process, so it must come back equal."""
     for desc in (xarm, g1, chassis):
         restored = pickle.loads(pickle.dumps(desc))
 
@@ -189,20 +147,7 @@ def test_whole_descriptions_pickle(
         assert restored.command_keys() == desc.command_keys()
 
 
-@pytest.mark.parametrize(
-    "enum_member",
-    [
-        ResourceKind.SENSOR,
-        LimitPolicy.CLAMP,
-        Omission.UNSET,
-        SafeStopKind.ZERO_RAMP,
-        EstopKind.VENDOR,
-        EstopRecovery.PREPARE_ARM_REQUIRED,
-        ActivationPolicy.OPERATOR_CONFIRMED,
-        ProcessLoss.UNKNOWN,
-        AvailableAfter.PREPARE_ARM,
-    ],
-)
-def test_enums_pickle_by_identity(enum_member: object) -> None:
+def test_resource_kinds_pickle_by_identity() -> None:
     """Enum members compare by identity after a round trip, not just by value."""
-    assert pickle.loads(pickle.dumps(enum_member)) is enum_member
+    for kind in ResourceKind:
+        assert pickle.loads(pickle.dumps(kind)) is kind

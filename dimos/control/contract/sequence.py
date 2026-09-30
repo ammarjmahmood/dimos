@@ -14,10 +14,9 @@
 
 """Telling which message is newer, and when a robot has gone quiet.
 
-Messages arrive out of order and get repeated, so each carries two counters: an
-epoch, which changes whenever the robot is restarted or re-described, and a
-sequence, which counts up within one epoch. A message from a later epoch is
-always newer. Within one epoch, the higher sequence wins.
+Messages arrive out of order and get repeated, so each carries a sequence
+number that counts up. The higher number wins. ``ControlValues`` also carries
+an ``epoch``; nothing here reads it.
 
 Nothing here reads a clock. The current time is passed in, so a test can decide
 a robot has gone quiet without waiting for it to happen.
@@ -28,27 +27,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-def is_newer(epoch: int, sequence: int, last: tuple[int, int] | None) -> bool:
-    """Whether this message is newer than the last one accepted.
+def is_newer(sequence: int, last_sequence: int | None) -> bool:
+    """Whether a message is newer than the last one accepted.
 
-    A message from a later run of the robot is always newer. Within one run,
-    its number has to be strictly higher, so a repeated or delayed message
+    Its number has to be strictly higher, so a repeated or delayed message
     loses.
 
     Args:
-        epoch: Which run of the robot this message belongs to.
-        sequence: Its number within that run.
-        last: The run and number last accepted, or ``None`` if none yet.
+        sequence: The message's number.
+        last_sequence: The number of the last message accepted, or ``None`` if
+            none yet.
 
     Returns:
         True if this message should be used.
     """
-    if last is None:
-        return True
-    last_epoch, last_sequence = last
-    if epoch != last_epoch:
-        return epoch > last_epoch
-    return sequence > last_sequence
+    return last_sequence is None or sequence > last_sequence
 
 
 @dataclass(slots=True)

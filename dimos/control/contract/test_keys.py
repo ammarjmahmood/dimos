@@ -21,7 +21,7 @@ import pickle
 
 import pytest
 
-from dimos.control.contract.keys import POSITION, Key, Unit, is_valid_key, is_valid_segment
+from dimos.control.contract.keys import POSITION, Key, Unit, is_valid_segment
 
 
 @pytest.mark.parametrize("segment", ["arm", "joint1", "left_hip_pitch", "A", "_", "9", "a_1_B"])
@@ -92,21 +92,6 @@ def test_error_quotes_the_key() -> None:
     """A malformed name appears in its own error, so a log line is actionable."""
     with pytest.raises(ValueError, match="arm/joint1"):
         Key("arm/joint1")
-
-
-@pytest.mark.parametrize(
-    ("key", "valid"),
-    [
-        ("arm/joint1/position", True),
-        ("go2/base/vx", True),
-        ("arm/joint1", False),
-        ("arm/joint1/position/x", False),
-        ("arm/join t1/position", False),
-    ],
-)
-def test_is_valid_key(key: str, valid: bool) -> None:
-    """is_valid_key agrees with the type on every shape."""
-    assert is_valid_key(key) is valid
 
 
 def test_keys_pickle_with_their_parts() -> None:

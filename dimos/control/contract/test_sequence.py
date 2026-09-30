@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ordering within an epoch, and staleness against a caller-supplied clock."""
+"""Ordering by sequence number, and staleness against a caller-supplied clock."""
 
 from __future__ import annotations
 
@@ -25,32 +25,22 @@ from dimos.control.contract.sequence import Freshness, is_newer
 
 def test_anything_is_newer_than_nothing() -> None:
     """The first frame from a source is always accepted."""
-    assert is_newer(0, 0, None)
-    assert is_newer(-5, -99, None)
+    assert is_newer(0, None)
+    assert is_newer(-99, None)
 
 
 @pytest.mark.parametrize(
     ("sequence", "newer"),
     [(6, True), (5, False), (4, False), (1000, True)],
 )
-def test_same_epoch_needs_a_strictly_greater_sequence(sequence: int, newer: bool) -> None:
+def test_needs_a_strictly_greater_sequence(sequence: int, newer: bool) -> None:
     """A replayed or duplicated frame loses; only a later one wins."""
-    assert is_newer(1, sequence, (1, 5)) is newer
+    assert is_newer(sequence, 5) is newer
 
 
 def test_equal_sequence_is_not_newer() -> None:
     """The duplicate case, called out because it is the one that bites."""
-    assert not is_newer(3, 77, (3, 77))
-
-
-def test_a_higher_epoch_always_wins() -> None:
-    """Sequences restart per epoch, so a new epoch beats any old sequence."""
-    assert is_newer(2, 0, (1, 10_000))
-
-
-def test_a_lower_epoch_never_wins() -> None:
-    """A frame from a retired epoch loses even with a huge sequence."""
-    assert not is_newer(1, 10_000, (2, 0))
+    assert not is_newer(77, 77)
 
 
 def test_freshness_starts_stale() -> None:

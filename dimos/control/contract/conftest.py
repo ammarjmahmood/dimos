@@ -14,12 +14,12 @@
 
 """Three example robots for the tests, written out by hand.
 
-  arm      a 7-joint arm with a gripper. It can be told where to go or how
-           fast to move, but not both at once, and it cannot measure how fast
-           its joints are turning
+  arm      a 7-joint arm with a gripper. It cannot measure how fast its
+           joints are turning, so it does not claim to
   g1       a humanoid body whose joints are held in place by stiffness and
-           damping
-  chassis  a base that drives around on the floor, in any direction
+           damping, with an IMU in its chest
+  chassis  a base that drives around on the floor, in any direction. Its
+           speed limits clamp, so a teleop stick pushed too far still drives
 
 They are written out in full rather than built by a shortcut, so that tests
 elsewhere can check the shortcuts produce exactly these.
@@ -30,27 +30,26 @@ from __future__ import annotations
 import pytest
 
 from dimos.control.contract.description import (
-    ActivationPolicy,
     ControlDescription,
-    Estop,
-    EstopKind,
-    EstopRecovery,
-    LimitPolicy,
     Limits,
-    ModeGroup,
-    Omission,
-    ProcessLoss,
     Resource,
     ResourceKind,
-    SafeStop,
-    SafeStopKind,
-    Timing,
 )
 from dimos.control.contract.keys import (
+    AX,
+    AY,
+    AZ,
     EFFORT,
+    GX,
+    GY,
+    GZ,
     KD,
     KP,
     POSITION,
+    QW,
+    QX,
+    QY,
+    QZ,
     VELOCITY,
     VX,
     VY,
@@ -68,10 +67,10 @@ G1_JOINTS = tuple(f"joint{i}" for i in range(1, 30))
 
 @pytest.fixture
 def xarm() -> ControlDescription:
-    """An arm that can be told where to go or how fast to move, not both.
+    """An arm that can be told where to go or how fast to move.
 
-    Its gripper is separate, so it stays usable either way. The arm cannot
-    measure how fast its joints are turning, so it does not claim to.
+    The arm cannot measure how fast its joints are turning, so it does not
+    claim to.
     """
     joints = tuple(
         Resource(
@@ -99,35 +98,17 @@ def xarm() -> ControlDescription:
         source="arm",
         resources=(*joints, gripper),
         limits=limits,
-        mode_groups=(
-            ModeGroup(name="position", resources=ARM_JOINTS, interfaces=frozenset({POSITION})),
-            ModeGroup(name="velocity", resources=ARM_JOINTS, interfaces=frozenset({VELOCITY})),
-            # Its own group, and not exclusive: the gripper is commandable
-            # alongside whichever arm group is live.
-            ModeGroup(
-                name="gripper",
-                resources=("gripper",),
-                interfaces=frozenset({POSITION}),
-                exclusive=False,
-            ),
-        ),
-        safe_stop=SafeStop(kind=SafeStopKind.HOLD, stable_state="holds position"),
-        estop=Estop(
-            kind=EstopKind.VENDOR, recovery=EstopRecovery.CLEAR, stable_state="brakes engage"
-        ),
-        activation_policy=ActivationPolicy.DIRECT,
-        timing=Timing(state_rate_hz=100.0, stale_timeout_s=0.05, watchdog_timeout_s=0.1),
-        process_loss=ProcessLoss.UNKNOWN,
+        state_rate_hz=100.0,
+        deadman_timeout_s=0.1,
     )
 
 
 @pytest.fixture
 def g1() -> ControlDescription:
-    """A humanoid whose 29 joints are all driven together.
+    """A humanoid whose 29 joints are each held by a stiffness and a damping.
 
-    Each is held by a stiffness and a damping, which are stored here rather
-    than sent with every instruction. Out-of-range values are trimmed rather
-    than refused, and it stops by going slack.
+    The IMU only reports: which way up the body is, how fast it is turning,
+    and how hard it is being pushed.
     """
     joints = tuple(
         Resource(
@@ -145,47 +126,20 @@ def g1() -> ControlDescription:
         )
         for name in G1_JOINTS
     )
+    imu = Resource(
+        name="imu",
+        kind=ResourceKind.SENSOR,
+        state_interfaces=(QX, QY, QZ, QW, GX, GY, GZ, AX, AY, AZ),
+        units=dict.fromkeys((QX, QY, QZ, QW), Unit.UNITLESS)
+        | dict.fromkeys((GX, GY, GZ), Unit.RAD_PER_S)
+        | dict.fromkeys((AX, AY, AZ), Unit.M_PER_S2),
+    )
     return ControlDescription(
         source="g1",
-        resources=joints,
-        # CLAMP, not REJECT. One instruction covers all 29 joints and is
-        # applied all or not at all, so under REJECT a single joint asked to
-        # go a hair past its limit throws the whole instruction away and the
-        # robot gets nothing. Balancing on two legs, it would fall over.
-        # CLAMP trims that one value to the limit and sends the rest.
-        limits={Key.of("g1", j, POSITION): Limits(-2.0, 2.0, LimitPolicy.CLAMP) for j in G1_JOINTS},
-        mode_groups=(
-            ModeGroup(
-                name="pd",
-                resources=G1_JOINTS,
-                interfaces=frozenset({POSITION, VELOCITY, EFFORT, KP, KD}),
-            ),
-        ),
-        # This robot's firmware reads a commanded speed of zero as a real
-        # instruction to hold still, not as "no instruction". So when an
-        # instruction says nothing about speed, nothing must be sent for it
-        # rather than a zero.
-        omission={Key.of("g1", j, VELOCITY): Omission.UNSET for j in G1_JOINTS},
-        initial_values={Key.of("g1", j, KP): 60.0 for j in G1_JOINTS}
-        | {Key.of("g1", j, KD): 1.5 for j in G1_JOINTS},
-        safe_stop=SafeStop(
-            kind=SafeStopKind.DAMP,
-            kd={Key.of("g1", j, KD): 5.0 for j in G1_JOINTS},
-            stable_state="sinks to the floor",
-        ),
-        estop=Estop(
-            kind=EstopKind.DISABLE,
-            recovery=EstopRecovery.PREPARE_ARM_REQUIRED,
-            stable_state="limp",
-        ),
-        activation_policy=ActivationPolicy.OPERATOR_CONFIRMED,
-        timing=Timing(
-            state_rate_hz=500.0,
-            stale_timeout_s=0.02,
-            watchdog_timeout_s=0.05,
-            prepare_arm_timeout_s=10.0,
-        ),
-        process_loss=ProcessLoss.UNPROTECTED,
+        resources=(*joints, imu),
+        limits={Key.of("g1", j, POSITION): Limits(-2.0, 2.0) for j in G1_JOINTS},
+        state_rate_hz=500.0,
+        deadman_timeout_s=0.05,
     )
 
 
@@ -214,21 +168,10 @@ def chassis() -> ControlDescription:
         source="chassis",
         resources=(base,),
         limits={
-            Key.of("chassis", "base", VX): Limits(-1.5, 1.5),
-            Key.of("chassis", "base", VY): Limits(-1.0, 1.0),
-            Key.of("chassis", "base", WZ): Limits(-2.0, 2.0),
+            Key.of("chassis", "base", VX): Limits(-1.5, 1.5, clamp=True),
+            Key.of("chassis", "base", VY): Limits(-1.0, 1.0, clamp=True),
+            Key.of("chassis", "base", WZ): Limits(-2.0, 2.0, clamp=True),
         },
-        mode_groups=(
-            ModeGroup(name="twist", resources=("base",), interfaces=frozenset({VX, VY, WZ})),
-        ),
-        safe_stop=SafeStop(kind=SafeStopKind.ZERO_RAMP, ramp_s=0.3, stable_state="rolls to a stop"),
-        estop=Estop(kind=EstopKind.ZERO, recovery=EstopRecovery.CLEAR, stable_state="stops dead"),
-        activation_policy=ActivationPolicy.DIRECT,
-        timing=Timing(
-            state_rate_hz=50.0,
-            stale_timeout_s=0.2,
-            watchdog_timeout_s=0.2,
-        ),
-        process_loss=ProcessLoss.EXTERNAL_SUPERVISOR,
-        meta={"command_frame": "body", "yaw_convention": "unwrapped"},
+        state_rate_hz=50.0,
+        deadman_timeout_s=0.2,
     )
