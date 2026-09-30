@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 output="$PWD/build/message-codegen/viewers"
 mkdir -p "$output/evidence"
 export PYTHONPATH="$PWD:$PWD/build/message-codegen/demo/cpp/build${PYTHONPATH:+:$PYTHONPATH}"
-.venv/bin/pytest dimos/protocol/test_cdr_mcap.py --noconftest -o addopts='' -q \
+.venv/bin/python -m pytest dimos/protocol/test_cdr_mcap.py --noconftest -o addopts='' -q \
   | tee "$output/evidence/pytest.txt"
 .venv/bin/python examples/message-codegen/demo_mcap.py --output "$output/demo.mcap" \
   | tee "$output/evidence/producer.txt"

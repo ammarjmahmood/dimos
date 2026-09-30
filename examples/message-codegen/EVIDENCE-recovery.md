@@ -204,3 +204,30 @@ Exact published `febed89cec435bc2b853b4d163f033a6fd7dc8f2` message-codegen run
 were fail-fast cancelled. Native, Rust, Web, Linux and macOS builds succeeded.
 Lint reported 188 errors in 61 files and md-babel failed on remaining old
 examples. These results predate this cleanup batch and are not final acceptance.
+
+
+## Offline RGB-D and namespace-entrypoint repair
+
+Generated PointCloud2 helpers now project rectified RGB-D with scaled camera
+intrinsics, integer-depth units, invalid-depth filtering and packed RGB fields.
+Transforming a cloud retains declared fields, endian, organized dimensions and
+all point/row padding; finite values beyond the target field range are rejected.
+Support-plane preparation consumes these generated values before its existing
+Open3D downsampling/RANSAC. Open3D fitting itself was not executed locally.
+Image benchmark fixtures now construct generated RGB8 values.
+
+Offline image views, calibration, geometry and point-cloud tests: **143 passed**.
+Strict checks passed for point-cloud helpers, support-plane and benchmark data.
+Standalone codegen tests with PYTHONPATH unset: **24 passed, one existing skip**.
+The codegen and MCAP shell gates use python -m pytest so namespace-package
+imports retain the checkout root. This fixes the observed collection failure of
+published 6547f9c message-codegen run 36704834764 without reducing coverage.
+
+Local full mypy: 178 errors in 78 files (1158 checked); the intersection with
+original failing CI file paths is 90 errors in 28 files, down from 96. This
+includes unavailable local dependency errors and is not CI acceptance.
+Published 6547f9c main run 36704509445 has successful native, Rust, Web and
+Linux/macOS builds; lint and md-babel failed, Python test jobs remain running.
+WebXR control migration and model-backed memory-doc execution remain held for
+specific approval after automatic review rejected those actions. Their existing
+uncommitted work is preserved and excluded from this repair batch.

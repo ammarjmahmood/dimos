@@ -18,10 +18,11 @@ from dataclasses import dataclass
 import os
 from typing import TYPE_CHECKING, Any
 
+from dimos_generated.sensor_msgs.msg import Image
 import numpy as np
 import pytest
 
-from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.image import image_from_array
 from dimos.protocol.pubsub.benchmark.type import Case
 from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic, Zenoh
 from dimos.protocol.pubsub.spec import PubSub
@@ -59,7 +60,7 @@ def make_data_image(size: int) -> Image:
     height = max(1, int(pixels**0.5))
     width = pixels // height
     data = padded_data[: height * width * 3].reshape(height, width, 3)
-    return Image(data=data, format=ImageFormat.RGB)
+    return image_from_array(data, encoding="rgb8")
 
 
 testcases: list[Case[Any, Any]] = []

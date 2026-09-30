@@ -19,17 +19,24 @@ import gc
 import struct
 
 from dimos_generated.builtin_interfaces.msg import Time
+from dimos_generated.geometry_msgs.msg import Quaternion, Transform, TransformStamped, Vector3
 from dimos_generated.sensor_msgs.msg import PointCloud2, PointField
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 import pytest
 
+from dimos.msgs.camera_info import camera_info_from_intrinsics
+from dimos.msgs.image import image_from_array
 from dimos.msgs.pointcloud import (
     concatenate_clouds,
+    pointcloud_from_rgbd,
     pointcloud_from_xyz,
+    pointcloud_from_xyz_rgb,
+    pointcloud_rgb,
     pointcloud_view,
     pointcloud_xyz,
     select_points,
+    transform_cloud,
 )
 
 
@@ -236,3 +243,119 @@ def test_empty_cloud_is_a_copy_identity(padded_cloud):
     assert result == padded_cloud
     result.header.frame_id = "changed"
     assert padded_cloud.header.frame_id == ""
+
+
+def test_transform_retains_extra_fields_padding_endian_and_source_stamp(padded_cloud):
+    padded_cloud.header = Header(
+        frame_id="sensor", stamp=Time(sec=1_700_000_000, nanosec=123_456_789)
+    )
+    original = bytes(padded_cloud.data)
+    transform = TransformStamped(
+        header=Header(frame_id="world", stamp=Time(sec=99)),
+        child_frame_id="sensor",
+        transform=Transform(translation=Vector3(x=2.0, y=-1.0), rotation=Quaternion(w=1.0)),
+    )
+    result = transform_cloud(padded_cloud, transform)
+    np.testing.assert_allclose(
+        pointcloud_xyz(result), pointcloud_xyz(padded_cloud) + np.array([2.0, -1.0, 0.0])
+    )
+    np.testing.assert_array_equal(
+        pointcloud_view(result)["tags"], pointcloud_view(padded_cloud)["tags"]
+    )
+    assert result.header.frame_id == "world"
+    assert result.header.stamp == padded_cloud.header.stamp
+    assert (
+        result.width,
+        result.height,
+        result.row_step,
+        result.point_step,
+        result.is_bigendian,
+    ) == (
+        padded_cloud.width,
+        padded_cloud.height,
+        padded_cloud.row_step,
+        padded_cloud.point_step,
+        padded_cloud.is_bigendian,
+    )
+    for row in range(2):
+        assert (
+            bytes(result.data)[row * 64 + 48 : row * 64 + 64]
+            == original[row * 64 + 48 : row * 64 + 64]
+        )
+        for column in range(2):
+            offset = row * 64 + column * 24
+            assert (
+                bytes(result.data)[offset + 20 : offset + 24] == original[offset + 20 : offset + 24]
+            )
+    assert bytes(padded_cloud.data) == original
+    result.header.stamp.nanosec = 0
+    assert padded_cloud.header.stamp.nanosec == 123_456_789
+
+
+def test_transform_rejects_frame_mismatch(padded_cloud):
+    with pytest.raises(ValueError, match="child frame"):
+        transform_cloud(padded_cloud, TransformStamped(child_frame_id="other"))
+
+
+@pytest.mark.parametrize("organized", [False, True])
+def test_rgb_factory_roundtrip(organized):
+    points = np.arange(18, dtype=np.float64).reshape(2, 3, 3)
+    colors = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
+    if not organized:
+        points, colors = points.reshape(-1, 3), colors.reshape(-1, 3)
+    cloud = PointCloud2.decode(pointcloud_from_xyz_rgb(points, colors, header=Header()).encode())
+    np.testing.assert_array_equal(pointcloud_xyz(cloud), points.reshape(-1, 3))
+    np.testing.assert_array_equal(pointcloud_rgb(cloud), colors.reshape(-1, 3))
+    assert cloud.point_step == 16
+    assert cloud.row_step == cloud.width * 16
+
+
+@pytest.mark.parametrize("floating", [False, True])
+def test_rgbd_projection_scaled_intrinsics_and_invalid_depth(floating):
+    header = Header(frame_id="optical", stamp=Time(sec=1700000000, nanosec=123456789))
+    rgb = np.arange(18, dtype=np.uint8).reshape(2, 3, 3)
+    color = image_from_array(rgb, encoding="rgb8", header=header)
+    values = np.array([[1, 0, 2], [3, 4, 5]], dtype=np.float32)
+    if floating:
+        values[0, 1] = np.nan
+        values[1, 2] = np.inf
+        depth = image_from_array(values, encoding="32FC1", header=header)
+    else:
+        depth = image_from_array((values * 1000).astype(">u2"), encoding="16UC1", header=header)
+        # Add nonzero row padding to big-endian depth.
+        payload = bytes(depth.data)
+        depth.data = payload[:6] + b"xx" + payload[6:] + b"yy"
+        depth.step = 8
+    calibration = camera_info_from_intrinsics(4, 8, 2, 2, 6, 4, header=header)
+    cloud = PointCloud2.decode(
+        pointcloud_from_rgbd(color, depth, calibration, depth_scale=0.001, depth_trunc=4).encode()
+    )
+    np.testing.assert_allclose(
+        pointcloud_xyz(cloud), [[-0.5, -0.25, 1], [1, -0.5, 2], [-1.5, 0, 3]]
+    )
+    np.testing.assert_array_equal(pointcloud_rgb(cloud), rgb.reshape(-1, 3)[[0, 2, 3]])
+    assert cloud.header == header
+
+
+@pytest.mark.parametrize(
+    "scale,trunc", [(0, 1), (-1, 1), (float("nan"), 1), (1, 0), (1, float("inf"))]
+)
+def test_rgbd_rejects_invalid_units(scale, trunc):
+    header = Header()
+    color = image_from_array(np.zeros((1, 1, 3), dtype=np.uint8), encoding="rgb8", header=header)
+    depth = image_from_array(np.ones((1, 1), dtype=np.uint16), encoding="16UC1", header=header)
+    calibration = camera_info_from_intrinsics(1, 1, 0, 0, 1, 1, header=header)
+    with pytest.raises(ValueError, match="finite and positive"):
+        pointcloud_from_rgbd(color, depth, calibration, depth_scale=scale, depth_trunc=trunc)
+
+
+def test_transform_rejects_coordinate_overflow():
+    cloud = pointcloud_from_xyz(np.array([[3e38, 0, 0]]), header=Header(frame_id="child"))
+    transform = TransformStamped(
+        header=Header(frame_id="parent"),
+        child_frame_id="child",
+        transform=Transform(translation=Vector3(x=3e38), rotation=Quaternion(w=1)),
+    )
+    with pytest.raises(ValueError, match="exceed field range"):
+        transform_cloud(cloud, transform)
+    assert np.isfinite(pointcloud_xyz(cloud)).all()

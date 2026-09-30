@@ -17,13 +17,18 @@
 
 """NumPy conversions for generated PointCloud2 messages."""
 
+import math
 from typing import Any
 
-from dimos_generated.sensor_msgs.msg import PointCloud2, PointField
+from dimos_generated.geometry_msgs.msg import TransformStamped
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from numpy.typing import NDArray
 
+from dimos.msgs.camera_info import intrinsic_matrix
+from dimos.msgs.geometry import transform_matrix
+from dimos.msgs.image import image_to_rgb, image_view
 from dimos.msgs.time import to_nanoseconds
 
 _FIELD_KINDS = {1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4", 7: "f4", 8: "f8"}
@@ -189,3 +194,103 @@ def concatenate_clouds(first: PointCloud2, second: PointCloud2) -> PointCloud2:
         data=bytes(a.data) + bytes(b.data),
         is_dense=first.is_dense and second.is_dense,
     )
+
+
+def transform_cloud(message: PointCloud2, transform: TransformStamped) -> PointCloud2:
+    """Apply parent←child to XYZ while retaining the complete organized record layout.
+
+    Copy storage before changing coordinates. Keep all other fields, point/row
+    padding, endian and the cloud's exact source stamp. Frames must match;
+    integer XYZ is rejected because transformed coordinates would be truncated.
+    """
+    if message.header.frame_id != transform.child_frame_id:
+        raise ValueError("point cloud frame does not match transform child frame")
+    view = pointcloud_view(message)
+    for name in ("x", "y", "z"):
+        if name not in (view.dtype.names or ()) or view.dtype[name].kind != "f":
+            raise ValueError("transform requires scalar floating-point XYZ fields")
+    matrix = transform_matrix(transform.transform)
+    xyz = pointcloud_xyz(message)
+    transformed = xyz @ matrix[:3, :3].T + matrix[:3, 3]
+    for index, name in enumerate(("x", "y", "z")):
+        values = transformed[:, index]
+        if np.any(np.abs(values[np.isfinite(values)]) > np.finfo(view.dtype[name]).max):
+            raise ValueError(f"transformed {name} coordinates exceed field range")
+    payload = bytearray(bytes(message.data))
+    writable = np.ndarray(
+        (message.height, message.width),
+        dtype=view.dtype,
+        buffer=payload,
+        strides=(message.row_step, message.point_step),
+    )
+    for index, name in enumerate(("x", "y", "z")):
+        writable[name] = transformed[:, index].reshape(message.height, message.width)
+    output = PointCloud2.decode(message.encode())
+    output.data = bytes(payload)
+    output.header = Header(stamp=message.header.stamp, frame_id=transform.header.frame_id)
+    return output
+
+
+def pointcloud_from_xyz_rgb(
+    points: NDArray[Any], colors: NDArray[np.uint8], *, header: Header
+) -> PointCloud2:
+    """Copy XYZ and RGB8 into a declared XYZ FLOAT32 / packed RGB UINT32 layout."""
+    cloud = pointcloud_from_xyz(points, header=header)
+    rgb = np.asarray(colors)
+    if rgb.dtype != np.uint8 or rgb.shape != np.asarray(points).shape:
+        raise ValueError("RGB must be uint8 with the same (..., 3) shape as XYZ")
+    records = np.empty((cloud.height, cloud.width), dtype=[("xyz", "<f4", (3,)), ("rgb", "<u4")])
+    records["xyz"] = np.asarray(points).reshape(cloud.height, cloud.width, 3)
+    rgb = rgb.reshape(cloud.height, cloud.width, 3).astype(np.uint32)
+    records["rgb"] = (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]
+    cloud.fields.append(PointField(name="rgb", offset=12, datatype=PointField.UINT32, count=1))
+    cloud.point_step = 16
+    cloud.row_step = cloud.width * cloud.point_step
+    cloud.data = records.tobytes()
+    return cloud
+
+
+def pointcloud_from_rgbd(
+    color: Image,
+    depth: Image,
+    calibration: CameraInfo,
+    *,
+    depth_scale: float = 1.0,
+    depth_trunc: float = 5.0,
+) -> PointCloud2:
+    """Project a rectified RGB/depth pair into the depth optical frame.
+
+    Integer depth is multiplied by depth_scale to obtain meters; 32FC1 already
+    represents meters. Invalid/nonpositive/too-distant samples are removed.
+    Scale K when calibration resolution differs, retaining the depth header.
+    """
+    if (
+        not math.isfinite(depth_scale)
+        or depth_scale <= 0
+        or not math.isfinite(depth_trunc)
+        or depth_trunc <= 0
+    ):
+        raise ValueError("depth scale and truncation must be finite and positive")
+    if (color.width, color.height) != (depth.width, depth.height):
+        raise ValueError("color and depth dimensions do not match")
+    if depth.encoding not in ("16UC1", "mono16", "32FC1"):
+        raise ValueError("RGBD requires uint16 or float32 depth")
+    if calibration.width <= 0 or calibration.height <= 0:
+        raise ValueError("calibration dimensions must be positive")
+    matrix = intrinsic_matrix(calibration).copy()
+    matrix[0, :] *= depth.width / calibration.width
+    matrix[1, :] *= depth.height / calibration.height
+    distances = image_view(depth).astype(np.float64)
+    if depth.encoding != "32FC1":
+        distances *= depth_scale
+    valid = np.isfinite(distances) & (distances > 0) & (distances < depth_trunc)
+    rows, columns = np.indices(distances.shape)
+    z = distances[valid]
+    xyz = np.column_stack(
+        (
+            (columns[valid] - matrix[0, 2]) * z / matrix[0, 0],
+            (rows[valid] - matrix[1, 2]) * z / matrix[1, 1],
+            z,
+        )
+    )
+    return pointcloud_from_xyz_rgb(xyz, image_to_rgb(color)[valid], header=depth.header)
