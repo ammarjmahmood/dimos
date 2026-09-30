@@ -1,6 +1,6 @@
 # LCM transport and CDR messages
 
-DimOS uses [LCM](https://github.com/lcm-proj/lcm) as a raw UDP multicast
+dimOS uses [LCM](https://github.com/lcm-proj/lcm) as a raw UDP multicast
 transport for local inter-process communication. Typed streams carry generated
 CDR messages. LCM and Zenoh use the same message bytes; choosing a transport
 does not change a message's schema or codec.
@@ -116,7 +116,7 @@ own contracts; CDR is the typed-message representation.
 | `sensor_msgs` | `Image`, `CompressedImage`, `PointCloud2`, `CameraInfo`, `LaserScan` |
 | `nav_msgs` | `Odometry`, `Path`, `OccupancyGrid` |
 | `vision_msgs` | `Detection2D`, `Detection3D`, `BoundingBox2D` |
-| `dimos_msgs` | DimOS-owned custom message definitions |
+| `dimos_msgs` | dimOS-owned custom message definitions |
 
 Import built-in values from `dimos_generated.<package>.msg`. Application-local
 `.msg` files can generate their own Python package, CMake target and Cargo crate.

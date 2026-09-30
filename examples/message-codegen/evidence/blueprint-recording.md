@@ -30,3 +30,19 @@ sub-float-resolution scheduling is not claimed.
 No hardware ran and host tuning was check-only. Default-interface LCM, human
 Foxglove/Rerun inspection, full dependency retirement and final installed-package
 acceptance remain open. This evidence does not mark stages 5 or 6 complete.
+
+## Follow-up regression batch
+
+The published parent `f4a269ce4` codegen workflow 36763634296 succeeded. Main
+workflow 36763630343 ended cancelled after ARM reported 6170 passed, 228 skipped
+and one documentation-branding failure. Both offending spellings in
+`docs/usage/lcm.md` are repaired; other Python jobs were cancelled, not passed.
+
+Follow-up local checks: 15 Joy/Header/LineSegments3D/branding tests and 53
+stamped-covariance/time tests passed. Migrated suites retain numeric payloads,
+empty and large sequences, covariance patterns, copy independence, explicit
+clock and datetime conversions, and add independent ROS CDR checks. Legacy
+convenience constructors, custom string formatting, inheritance, Path-based
+line packing and implicit timestamps are intentionally retired. Generated ROS
+time overflow now reports an explicit ValueError; both int32 boundaries and
+values immediately outside them are covered. Scoped mypy passed time.py.

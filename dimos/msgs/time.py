@@ -37,11 +37,15 @@ def to_seconds(stamp: Time | Duration) -> float:
 
 def time_from_nanoseconds(value: int) -> Time:
     sec, nanosec = divmod(value, NANOSECONDS_PER_SECOND)
+    if not -(2**31) <= sec < 2**31:
+        raise ValueError("seconds must fit the ROS signed 32-bit field")
     return Time(sec=sec, nanosec=nanosec)
 
 
 def duration_from_nanoseconds(value: int) -> Duration:
     sec, nanosec = divmod(value, NANOSECONDS_PER_SECOND)
+    if not -(2**31) <= sec < 2**31:
+        raise ValueError("seconds must fit the ROS signed 32-bit field")
     return Duration(sec=sec, nanosec=nanosec)
 
 

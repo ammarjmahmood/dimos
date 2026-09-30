@@ -65,3 +65,17 @@ def test_now_reads_integer_clock_and_preserves_frame(monkeypatch):
 
     assert to_nanoseconds(header.stamp) == 1_700_000_000_123_456_789
     assert header.frame_id == "camera"
+
+
+@pytest.mark.parametrize("factory", [time_from_nanoseconds, duration_from_nanoseconds])
+@pytest.mark.parametrize("seconds", [-(2**31), 2**31 - 1])
+def test_ros_seconds_range_boundaries(factory, seconds):
+    value = seconds * 1_000_000_000 + 999_999_999
+    assert to_nanoseconds(factory(value)) == value
+
+
+@pytest.mark.parametrize("factory", [time_from_nanoseconds, duration_from_nanoseconds])
+@pytest.mark.parametrize("value", [-(2**31) * 1_000_000_000 - 1, 2**31 * 1_000_000_000])
+def test_ros_seconds_overflow_is_explicit(factory, value):
+    with pytest.raises(ValueError, match="signed 32-bit"):
+        factory(value)
