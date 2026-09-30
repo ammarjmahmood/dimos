@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790800035472,
+  "lastUpdate": 1790807453044,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -1203,6 +1203,102 @@ window.BENCHMARK_DATA = {
             "value": 0.346,
             "unit": "MB",
             "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "69774903+aclauer@users.noreply.github.com",
+            "name": "Andrew Lauer",
+            "username": "aclauer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "271d40137834457e1578fc77261e3584539b2d8e",
+          "message": "refactor: deprecate cpp pointlio (#4311)",
+          "timestamp": "2026-10-01T01:26:36+03:00",
+          "tree_id": "5dc9163de80ccb5379a72819f46c5e6ab1fd4eee",
+          "url": "https://github.com/dimensionalOS/dimos/commit/271d40137834457e1578fc77261e3584539b2d8e"
+        },
+        "date": 1790807451976,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 7.869,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 16.25,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "run cpu",
+            "value": 24.72,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 17.918,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 6.802,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "peak memory",
+            "value": 2698.711,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "peak threads",
+            "value": 400,
+            "unit": "threads",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "disk read",
+            "value": 24.148,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "disk write",
+            "value": 11.137,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "network (transport)",
+            "value": 2718.311,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "network (external rx)",
+            "value": 0.115,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          },
+          {
+            "name": "network (external tx)",
+            "value": 0.161,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
           }
         ]
       }
