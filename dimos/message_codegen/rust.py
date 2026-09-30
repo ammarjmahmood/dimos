@@ -135,13 +135,24 @@ def literal(value: Any, type_: FieldType) -> str:
     return str(value)
 
 
-def generate(messages: tuple[Message, ...], definitions: Definitions) -> str:
+def generate(
+    messages: tuple[Message, ...], definitions: Definitions, imports: dict[str, str] | None = None
+) -> str:
+    imports = imports or {}
     packages: dict[str, list[Message]] = defaultdict(list)
     for message in messages:
         packages[message.package].append(message)
     lines = ["// Generated from ROS2 .msg definitions. Do not edit.", "pub mod codec;"]
+    for name in imports:
+        packages.setdefault(name.split("/")[0], [])
     for package, contents in sorted(packages.items()):
         lines.append(f"pub mod {identifier(package)} {{ pub mod msg {{")
+        for qualified, owner in sorted(imports.items()):
+            imported_package, _, imported_name = qualified.split("/")
+            if imported_package == package:
+                lines.append(
+                    f"pub use {owner}::{identifier(package)}::msg::{identifier(imported_name)};"
+                )
         for message in contents:
             name = identifier(message.short_name)
             lines.extend(
@@ -198,7 +209,11 @@ def generate(messages: tuple[Message, ...], definitions: Definitions) -> str:
                         f'if {value}.len() > {field.type.string_bound} {{ return Err("{field.name} exceeds string bound".into()); }}'
                     )
                 if field.type.nested:
-                    checks.append(f"crate::codec::Message::validate(&{value})?;")
+                    field_owner = imports.get(field.type.name)
+                    trait = (
+                        f"{field_owner}::codec::Message" if field_owner else "crate::codec::Message"
+                    )
+                    checks.append(f"{trait}::validate(&{value})?;")
                 if checks and field.type.is_array:
                     lines.append(
                         f"for item in &{member} {{ {' '.join(checks).replace('&item', 'item')} }}"

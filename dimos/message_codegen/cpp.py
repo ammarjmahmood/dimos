@@ -202,7 +202,7 @@ def validation(message: Message) -> list[str]:
     return lines
 
 
-def generate(messages: tuple[Message, ...]) -> str:
+def generate(messages: tuple[Message, ...], imports: tuple[str, ...] = ()) -> str:
     guards = {
         message.name: "DIMOS_MESSAGE_"
         + sha256(
@@ -232,6 +232,7 @@ def generate(messages: tuple[Message, ...]) -> str:
         "#include <fastcdr/CdrSizeCalculator.hpp>",
         '#include "dimos_cdr.hpp"',
     ]
+    lines.extend(f"#include <{module}/messages.hpp>" for module in imports)
     for message in messages:
         guard = guards[message.name] + "_TYPE"
         lines.extend([f"#ifndef {guard}", f"#define {guard}"])
@@ -269,6 +270,7 @@ def generate(messages: tuple[Message, ...]) -> str:
         lines.append("#endif")
 
     lines.append("namespace eprosima::fastcdr {")
+    lines.extend(f"#include <{module}/messages.hpp>" for module in imports)
     for message in messages:
         guard = guards[message.name] + "_CODEC"
         lines.extend([f"#ifndef {guard}", f"#define {guard}"])

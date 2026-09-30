@@ -26,6 +26,7 @@ import shutil
 from dimos.message_codegen import cpp, python, rust, stubs
 from dimos.message_codegen.definitions import Definitions
 from dimos.message_codegen.distribution import write_distribution
+from dimos.message_codegen.ownership import ABI, Dependency, resolve_owners, schema_hash
 
 TEMPLATES = Path(__file__).with_name("templates")
 
@@ -38,13 +39,17 @@ def generate(
     *,
     installed: bool = False,
     version: str = "0.1.0",
+    dependencies: tuple[Dependency, ...] = (),
+    shared: bool = False,
 ) -> tuple[str, ...]:
     """Emit all three native language outputs, resolving dependencies first."""
     if not re.fullmatch(r"[a-z][a-z0-9_]*", module) or keyword.iskeyword(module):
         raise ValueError(f"Invalid Python extension module name: {module}")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Package version must have the form major.minor.patch")
-    definitions = Definitions(roots, installed=installed)
+    definitions = Definitions(
+        roots + [dep.root / "schemas" for dep in dependencies], installed=installed
+    )
     messages = definitions.resolve(names)
     for message in messages:
         for field in message.fields:
@@ -52,37 +57,67 @@ def generate(
                 raise ValueError(
                     f"{message.source}: wstring is not yet supported by the Rust CDR backend"
                 )
+    owners = resolve_owners(messages, definitions, dependencies)
+    owned = tuple(message for message in messages if message.name not in owners)
+    imports = tuple(sorted({owner.module for owner in owners.values()}))
     output.mkdir(parents=True, exist_ok=True)
     typing_root = output / "typing" / module
     if typing_root.exists():
         shutil.rmtree(typing_root)
-    for name, content in stubs.generate(messages, module).items():
+    stub_files = stubs.generate(owned, module)
+    for name, content in stub_files.items():
+        for imported_name, owner in owners.items():
+            content = content.replace(
+                f"{module}.{imported_name.replace(chr(47), chr(46))}",
+                f"{owner.module}.{imported_name.replace(chr(47), chr(46))}",
+            )
+        if name.endswith(".pyi") and content:
+            content = "".join(f"import {dep}\n" for dep in imports) + content
         path = typing_root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     native = output / "cpp"
     native.mkdir(exist_ok=True)
-    (native / "messages.hpp").write_text(cpp.generate(messages))
+    (native / "messages.hpp").write_text(cpp.generate(owned, imports))
     shutil.copyfile(TEMPLATES / "dimos_cdr.hpp", native / "dimos_cdr.hpp")
     shutil.copyfile(TEMPLATES / "dimos_python.hpp", native / "dimos_python.hpp")
-    bindings = python.generate(messages, definitions, module)
+    bindings = python.generate(
+        owned,
+        definitions,
+        module,
+        imports=imports,
+        shared=shared,
+        version=version,
+        imported={name: owner.module for name, owner in owners.items()},
+        dependency_versions={dep.module: dep.version for dep in dependencies},
+    )
     for name, content in bindings.items():
         (native / name).write_text(content)
+    for stale in native.glob("bind_*.cpp"):
+        if stale.name not in bindings:
+            stale.unlink()
     sources = " ".join(sorted(bindings))
+    dependency_cmake = "".join(
+        f"find_package({dep.module} {dep.version} EXACT CONFIG REQUIRED)\n" for dep in dependencies
+    )
+    dependency_targets = " ".join(f"{name}::messages" for name in imports)
     (native / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.20)\n"
         f"project({module} VERSION {version} LANGUAGES CXX)\n"
         "find_package(fastcdr 2.4.0 EXACT REQUIRED)\n"
         "include(GNUInstallDirs)\n"
-        f"add_library({module}_messages INTERFACE)\n"
+        + dependency_cmake
+        + f"add_library({module}_messages INTERFACE)\n"
         f"set_target_properties({module}_messages PROPERTIES EXPORT_NAME messages)\n"
         f"target_compile_features({module}_messages INTERFACE cxx_std_17)\n"
         f"target_include_directories({module}_messages INTERFACE $<BUILD_INTERFACE:${{CMAKE_CURRENT_SOURCE_DIR}}> $<INSTALL_INTERFACE:include>)\n"
-        f"target_link_libraries({module}_messages INTERFACE fastcdr)\n"
+        f"target_link_libraries({module}_messages INTERFACE fastcdr {dependency_targets})\n"
         f"install(TARGETS {module}_messages EXPORT {module}Targets)\n"
         f"install(FILES messages.hpp dimos_cdr.hpp DESTINATION include/{module})\n"
         f"install(EXPORT {module}Targets NAMESPACE {module}:: DESTINATION lib/cmake/{module})\n"
-        f"install(FILES {module}Config.cmake DESTINATION lib/cmake/{module})\n"
+        "include(CMakePackageConfigHelpers)\n"
+        f"write_basic_package_version_file(${{CMAKE_CURRENT_BINARY_DIR}}/{module}ConfigVersion.cmake VERSION {version} COMPATIBILITY ExactVersion)\n"
+        f"install(FILES {module}Config.cmake ${{CMAKE_CURRENT_BINARY_DIR}}/{module}ConfigVersion.cmake DESTINATION lib/cmake/{module})\n"
         f"install(DIRECTORY ../schemas DESTINATION share/{module})\n"
         'option(DIMOS_BUILD_PYTHON "Build Python bindings" ON)\n'
         "if(DIMOS_BUILD_PYTHON)\n"
@@ -91,16 +126,21 @@ def generate(
         "find_package(pybind11 3.0.1 EXACT REQUIRED)\n"
         f"pybind11_add_module({module} NO_EXTRAS {sources})\n"
         f"target_compile_features({module} PRIVATE cxx_std_17)\n"
-        f"target_link_libraries({module} PRIVATE fastcdr)\n"
+        f"target_link_libraries({module} PRIVATE fastcdr {dependency_targets})\n"
         "endif()\n"
     )
     (native / f"{module}Config.cmake").write_text(
         "include(CMakeFindDependencyMacro)\nfind_dependency(fastcdr 2.4.0 EXACT)\n"
-        f'include("${{CMAKE_CURRENT_LIST_DIR}}/{module}Targets.cmake")\n'
+        + "".join(
+            f"find_dependency({dep.module} {dep.version} EXACT CONFIG)\n" for dep in dependencies
+        )
+        + f'include("${{CMAKE_CURRENT_LIST_DIR}}/{module}Targets.cmake")\n'
     )
     crate = output / "rust"
     (crate / "src").mkdir(parents=True, exist_ok=True)
-    (crate / "src" / "lib.rs").write_text(rust.generate(messages, definitions))
+    (crate / "src" / "lib.rs").write_text(
+        rust.generate(owned, definitions, {name: owner.crate for name, owner in owners.items()})
+    )
     shutil.copyfile(TEMPLATES / "codec.rs", crate / "src" / "codec.rs")
     (crate / "Cargo.toml").write_text(
         f'[package]\nname = "{module.replace("_", "-")}-messages"\nversion = "{version}"\nedition = "2024"\n'
@@ -108,6 +148,10 @@ def generate(
         'include = ["src/*.rs", "schemas.json", "schemas/**", "Cargo.toml"]\n'
         '[workspace]\n[dependencies]\nserde = { version = "1.0", features = ["derive"] }\n'
         'serde-big-array = "=0.5.1"\nre_cdr = "=0.1.0"\n'
+        + "".join(
+            f'{dep.module.replace("_", "-")}-messages = {{ version = "={dep.version}", path = {json.dumps(str(dep.root / "rust"))} }}\n'
+            for dep in dependencies
+        )
     )
     metadata = {message.name: definitions.schema(message.name) for message in messages}
     (output / "schemas.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
@@ -126,6 +170,22 @@ def generate(
     if (crate / "schemas").exists():
         shutil.rmtree(crate / "schemas")
     shutil.copytree(schema_root, crate / "schemas", dirs_exist_ok=True)
+    (output / "message-package.json").write_text(
+        json.dumps(
+            {
+                "format": 1,
+                "abi": ABI,
+                "module": module,
+                "version": version,
+                "shared": shared,
+                "owned": [message.name for message in owned],
+                "schemas": {name: schema_hash(schema) for name, schema in metadata.items()},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
     return tuple(message.name for message in messages)
 
 
