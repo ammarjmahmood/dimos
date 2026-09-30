@@ -372,7 +372,6 @@ go2_viewer = autoconnect(
                 "path",
                 "planner_path",
                 "nodes",
-                "node_edges",
                 "surface_map",
                 "seed_map",
                 "seed_bounds",
