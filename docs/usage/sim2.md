@@ -5,6 +5,34 @@ Their controllers remain ordinary DimOS modules. MuJoCo owns physics; robot
 control uses shared memory. Cameras and lidar run independently of physics.
 PimSim, task catalogs and population preparation are not involved.
 
+## What Runs
+
+The application remains a normal DimOS blueprint. sim2 replaces its devices,
+not its navigation, perception, planner or policy. Three loops do the work:
+
+1. **Control:** the existing ControlCoordinator reads joint/IMU feedback,
+   runs its policy or trajectory controller and writes motor targets through
+   the simulated hardware adapter. G1 runs this at 50 Hz; xArm at 100 Hz.
+2. **Physics:** one world worker reads the latest motor targets from shared
+   memory, applies them and steps MuJoCo. It publishes joint/IMU feedback and
+   a world-state snapshot. The current blueprints request 200 Hz, paced against
+   wall time; they do not wait for each control or sensor message.
+3. **Sensing:** dedicated camera and lidar workers read the latest world
+   snapshot and render or raycast using their own query model. G1 requests
+   640x480 RGB-D and lidar at 10 Hz. Results use ordinary DimOS typed streams
+   for mapping, perception and visualization, which feed the next commands.
+
+Those rates are configured targets, not hard real-time guarantees. Scene
+inspection, editing and reset are RPCs on the world owner, not a fourth task
+engine. Robot definitions describe models, actuators and mounted devices;
+they do not implement another control loop.
+
+This is why the code is a collection of DimOS modules: the simulator emulates
+independently scheduled devices consumed by an existing robotics application.
+Native MuJoCo provides physics, rendering and raycasting. Keeping policies and
+application lifecycle in DimOS avoids imposing another framework's robot,
+controller and task lifecycle on that application.
+
 ## Run
 
 ```bash
@@ -35,13 +63,22 @@ configuration parser as the CLI before deploying workers. Omit `--move` to
 leave the robot holding its starting pose. The router is test setup, not a
 second control path: joint commands still cross the same SHM device interface.
 
-On the September 29 split onto main, the local-router headless smoke runs
-reported G1 startup at 4.03 s and 0.999x real time, with GR00T walking and
-640x480 RGB-D. xArm startup was 19.41 s and 0.999x real time, with RGB-D and
-a completed joint command. These are short local measurements with assets
-already downloaded, not cross-machine performance guarantees. The xArm run
-also exposed stale-TF warnings during manipulation-module shutdown and a
-worker stop timeout; that lifecycle issue remains open. G1 shut down cleanly.
+September 30 local-router headless checks, with assets already downloaded:
+
+| Blueprint | Startup | Real-time factor | Shutdown | Functional check |
+|---|---:|---:|---:|---|
+| G1 GR00T | 3.26 s | 0.9997 | 0.210 s | Walking, RGB-D and lidar |
+| xArm7 planner | 13.20 s | 0.9996 | 0.058 s | Reached joint command and RGB-D |
+
+These are short local smoke measurements, not sustained or cross-machine
+performance guarantees. Both publish 640x480 RGB-D. The earlier xArm shutdown
+timeout was a module lifecycle race: fire-and-forget stops could stop the
+controller before manipulation cancelled its trajectory, and worker teardown
+could call stop again. The coordinator now orders known RPC consumers before
+providers and awaits the existing worker undeploy operation once per module.
+It retains a bounded timeout for genuinely unresponsive workers. Verification:
+57 coordinator/worker tests passed, with 13 existing macOS skips, plus both
+live runs. Startup TF and macOS renderer warnings are not claimed resolved.
 
 ## Included Scenes
 
@@ -208,6 +245,27 @@ The whole-body channel contains complete position, velocity, gains and
 feed-forward torque. The adapter latches joint and IMU data together per
 coordinator tick. Native xArm servos retain their original actuator model;
 the gripper retains the hardware API's 0-850 units. No second PD is applied.
+
+### Performance Boundaries
+
+The previous MuJoCo engine performs camera rendering and lidar raycasting
+inside its simulation loop; a separate publisher thread does not remove that
+work from physics. sim2 moves those operations into dedicated workers. A slow
+frame no longer directly holds up a physics step, although CPU/GPU contention
+can still reduce throughput. Lidar uses native batched `mj_multiRay` queries.
+
+The cost of this isolation is one model/data copy per sensor worker and state
+snapshot transfer/reconstruction. Motor shared memory does not mean images
+and point clouds are zero-copy end to end. Real-time pacing is not lockstep
+determinism or a faster-than-real-time training scheduler. The ideal lidar
+does not establish MID360 timing/noise or Point-LIO fidelity.
+
+The strongest proposed comparison with main is the same scene, robot and
+policy while increasing camera count/resolution and lidar load. Record physics
+real-time factor, control p95/p99 tick intervals, achieved sensor rate/frame age
+and RAM. Also measure repeated reset latency without recompilation and show
+the same application using real versus simulated devices. These comparisons
+are planned, not results established by the smoke measurements above.
 
 ## Scene Interface
 

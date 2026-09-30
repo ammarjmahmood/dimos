@@ -150,9 +150,13 @@ def main() -> None:
     finally:
         if command is not None:
             command.stop()
-        coordinator.stop()
-        if router is not None:
-            router.stop()
+        stopping = time.monotonic()
+        try:
+            coordinator.stop()
+        finally:
+            if router is not None:
+                router.stop()
+        print(json.dumps({"shutdown_seconds": time.monotonic() - stopping}))
 
 
 if __name__ == "__main__":
