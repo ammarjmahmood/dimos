@@ -11,17 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""TypeSafe navigation agent: pose, detections and scan in; joystick-style cmd_vel and a
-world-frame goal point out. The model picks directions; code sets magnitudes from the
-goal's bearing and distance, ramps the Twist and zeroes it on a deadman.
+"""TypeSafe navigation agent: pose, detections and scan in; joystick-style cmd_vel out.
+The model picks directions and declares the task finished; code sets magnitudes from
+the target's bearing and distance, ramps the Twist and zeroes it on a deadman.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 import threading
 import time
 from typing import Any
 
+from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.messages.base import BaseMessage
 from reactivex import Observable, operators as ops
@@ -38,22 +40,22 @@ from dimos.agents.typesafe.constants import (
     LIDAR_BAND,
     LINEAR_ACCEL,
     LINEAR_SPEED,
-    MIN_PROBABILITY,
     NAV_MAX_HZ,
+    NAV_TIMEOUT_S,
     PUBLISH_HZ,
     REACHED_M,
     SLOW_WITHIN_M,
     STALE_S,
     STOP_THRESHOLD,
+    TASK,
     TURN_FULL_AT_DEG,
 )
 from dimos.agents.typesafe.drive import Drive, decode, questions
 from dimos.agents.typesafe.types import Answers, Question
-from dimos.agents.typesafe.world_state import WorldState, build_world_state
+from dimos.agents.typesafe.world_state import Memory, RobotState, WorldState, build_world_state
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Odometry import Odometry
@@ -72,13 +74,13 @@ ZERO: Vec3 = (0.0, 0.0, 0.0)
 
 class TypeSafeNavigationConfig(TypeSafeAgentConfig):
     max_hz: float | None = NAV_MAX_HZ
+    timeout_s: float = NAV_TIMEOUT_S
     stale_s: float = STALE_S
     deadman_s: float | None = None  # None: max(DEADMAN_MIN_S, DEADMAN_PERIODS / max_hz)
     linear_speed: float = LINEAR_SPEED
     angular_speed: float = ANGULAR_SPEED
     linear_accel: float = LINEAR_ACCEL
     angular_accel: float = ANGULAR_ACCEL
-    min_probability: float = MIN_PROBABILITY
     stop_threshold: float = STOP_THRESHOLD
     reached_m: float = REACHED_M
     give_up_s: float = GIVE_UP_S
@@ -97,17 +99,17 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
     human_input: In[str]
 
     cmd_vel: Out[Twist]
-    goal: Out[PointStamped]  # world-frame XY the goal text resolved to
     agent: Out[BaseMessage]
     agent_idle: Out[bool]
+    finished: Out[Bool]  # once, when the model declares the task complete
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._lock = threading.Lock()
         self._goal: str | None = None
         self._goal_gen = 0  # bumps on every set_goal; a late answer for an old goal is dropped
-        self._goal_xy: tuple[float, float] | None = None
-        self._motion = "idle"
+        self._robot: RobotState = {"motion": "idle"}
+        self._memory = Memory()
         self._target: Vec3 = ZERO
         self._current: Vec3 = ZERO
         self._decided_at = 0.0
@@ -142,20 +144,22 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             return None
         assert isinstance(trigger, PoseStamped)
         pose, det3d, det2d = trigger, self._fresh("detections_3d"), self._fresh("detections_2d")
-        if det3d is None and det2d is None and self._goal_xy is None:
+        if det3d is None and det2d is None:
             self._set_target(ZERO)
             self._say("holding: no detections")
             return None
         state = build_world_state(
             goal,
             pose,
-            self._motion,
+            task=TASK,
             detections_3d=det3d,
             detections_2d=det2d,
             lidar=self._fresh("lidar"),
-            goal_xy=self._goal_xy,
+            robot=self._robot,
             image_size=self.config.image_size,
             lidar_band=self.config.lidar_band,
+            memory=self._memory,
+            now=time.monotonic(),
         )
         self._state_gen = self._goal_gen
         return state
@@ -168,12 +172,11 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         assert isinstance(state, dict)
         if self._state_gen != self._goal_gen:
             return  # the goal changed while this request was in flight
-        drive = decode(
-            answers,
-            min_probability=self.config.min_probability,
-            stop_threshold=self.config.stop_threshold,
-        )
+        drive = decode(answers, stop_threshold=self.config.stop_threshold)
         self._steer(state, drive)  # type: ignore[arg-type]
+
+    def on_failure(self) -> None:
+        self._set_target(ZERO)
 
     @rpc
     def start(self) -> None:
@@ -209,13 +212,14 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
     @rpc
     def set_goal(self, goal: str | None) -> None:
         goal = (goal or "").strip() or None
+        if goal:
+            goal = goal.splitlines()[-1].strip()  # a briefing may precede the goal
         with self._lock:
             self._goal = goal
             self._goal_gen += 1
-            self._goal_xy = None
+            self._robot = {"motion": "idle"}
             self._target = self._current = ZERO
             self._zero_since = None
-            self._motion = "idle"
         if goal is None:
             self.cmd_vel.publish(Twist.zero())
         else:
@@ -233,24 +237,21 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             self.agent.publish(AIMessage(content=text))
 
     def _steer(self, state: WorldState, drive: Drive) -> None:
-        """The model picked directions; geometry to the goal point sets the magnitudes."""
-        target = next((o for o in state["objects"] if o["label"] == drive.target), None)
-        if target is not None and "position" in target:
-            self._resolve_goal(target["position"]["x"], target["position"]["y"])
-            dist, err = target.get("distance_m", 0.0), abs(target.get("bearing_deg", 0.0))
-        elif "goal_point" in state:
-            dist, err = state["goal_point"]["distance_m"], abs(state["goal_point"]["bearing_deg"])
-        else:
-            dist, err = None, 0.0
+        """The model picked directions; geometry to the chosen target sets the magnitudes."""
         lin, ang = self.config.linear_speed, self.config.angular_speed
-        if dist is not None:
+        target = next((o for o in state["objects"] if o["label"] == drive.target), None)
+        if target is not None and "distance_m" in target:
+            dist, err = target["distance_m"], abs(target.get("bearing_deg", 0.0))
             if dist <= self.config.reached_m:
-                drive = Drive(0.0, 0.0, 0.0, True, drive.confidence, drive.labels, drive.target)
+                drive = replace(drive, x=0.0, y=0.0, yaw=0.0, stop=True)
             lin *= min(1.0, max(0.3, dist / SLOW_WITHIN_M))
             ang *= min(1.0, max(0.25, err / TURN_FULL_AT_DEG))
         self._set_target((drive.x * lin, drive.y * lin, drive.yaw * ang), immediate=drive.stop)
         with self._lock:
-            self._motion = "stopped" if drive.is_zero else "driving"
+            self._robot = {
+                "motion": "stopped" if drive.is_zero else "driving",
+                "last_drive": dict(zip(("x", "y", "yaw"), drive.labels, strict=True)),
+            }
             gave_up = (
                 self._zero_since is not None
                 and time.monotonic() - self._zero_since > self.config.give_up_s
@@ -258,17 +259,13 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         self._say(
             f"drive {'/'.join(drive.labels)} stop={drive.stop} target={drive.target} confidence={drive.confidence:.2f}"
         )
-        if gave_up:
+        if drive.finished:
+            self.finished.publish(Bool(True))
+            self.set_goal(None)
+            self._say(f"finished at the target {drive.target}")
+        elif gave_up:
             self.set_goal(None)
             self._say("goal reached or unreachable; stopped")
-
-    def _resolve_goal(self, x: float, y: float) -> None:
-        """Latch the target's world XY; publish it when it moves more than 10 cm."""
-        with self._lock:
-            prev = self._goal_xy
-            self._goal_xy = (x, y)
-        if prev is None or abs(prev[0] - x) > 0.1 or abs(prev[1] - y) > 0.1:
-            self.goal.publish(PointStamped(x, y, 0.0, frame_id="world"))
 
     def _set_target(self, target: Vec3, *, immediate: bool = False) -> None:
         now = time.monotonic()
