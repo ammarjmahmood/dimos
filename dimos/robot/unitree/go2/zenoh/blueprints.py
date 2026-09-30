@@ -33,6 +33,8 @@ failure can be bisected by dropping down a level:
   Jetson (or the Go2 itself) talking DDS to the robot directly.
 - ``go2-dds-motion-pointlio``: ``go2-zenoh-motion-pointlio`` over DDS, GO2DDS being the
   zenoh router the viewer dials.
+- ``go2-dds-motion-pointlio-relocalization``: ``go2-dds-motion-pointlio`` placed in a premap
+  by :class:`LocalMapRelocalization`, which seeds the raycaster and the planner with it.
 """
 
 import os
@@ -43,6 +45,8 @@ from dimos.core.global_config import global_config
 from dimos.hardware.sensors.lidar.pointlio.module import PointLioRust
 from dimos.hardware.sensors.lidar.pointlio.pointlio_blueprints import mid360_for_pointlio
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
+from dimos.mapping.relocalization.lidar.module import LocalMapRelocalization
+from dimos.mapping.relocalization.lidar.relocalize import GO2_NAV
 from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.navigation.global_planner.viz import nav_static, nav_visual_override
 from dimos.navigation.local_planner.native import LocalPlannerNative
@@ -292,17 +296,18 @@ _go2_dds_pointlio = GO2DDS.blueprint(
     ]
 )
 
+# Point-LIO's own inputs and the raycaster's region cylinder, noise on a nav view.
+_dds_pointlio_hidden = {
+    "world/pointlio_map": None,
+    "world/lidar": None,
+    "world/lidar_raw": None,
+    "world/region_bounds": None,
+}
+
 go2_dds_motion_pointlio = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
-        rerun_config=_rerun_config(
-            {
-                "world/pointlio_map": None,
-                "world/lidar": None,
-                "world/lidar_raw": None,
-                "world/region_bounds": None,
-            },
-        ),
+        rerun_config=_rerun_config(_dds_pointlio_hidden),
     ),
     _go2_dds_pointlio,
     MovementManager.blueprint(),
@@ -320,6 +325,24 @@ go2_dds_motion_pointlio = autoconnect(
     n_workers=11,
     robot_model="unitree_go2",
 )
+
+# The relocalizer matches the raycaster's local map against the premap, publishes the
+# odom -> map fix on tf and the placed premap on loaded_map, which the raycaster seeds
+# from and passes on to the planner as full_map. The republish covers a raycaster that
+# missed the one-shot loaded_map publish. The raw premap is millions of points, so the
+# view keeps the seeded voxels on full_map instead.
+go2_dds_motion_pointlio_relocalization = autoconnect(
+    go2_dds_motion_pointlio,
+    vis_module(
+        viewer_backend=global_config.viewer,
+        rerun_config=_rerun_config({**_dds_pointlio_hidden, "world/loaded_map": None}),
+    ),
+    LocalMapRelocalization.blueprint(
+        world_frame="odom",
+        republish_loaded_map=30.0,
+        relocalize=GO2_NAV,
+    ),
+).global_config(n_workers=12)
 
 
 # The viewer half alone, for the machine with the screen. Zenoh keeps the newest sample
@@ -343,6 +366,7 @@ go2_viewer = autoconnect(
                 "nodes",
                 "node_edges",
                 "surface_map",
+                "full_map",
                 "goal",
                 "way_point",
                 "goal_reached",

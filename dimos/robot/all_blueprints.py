@@ -71,6 +71,7 @@ all_blueprints = {
     "dual-xarm6-planner-coordinator": "dimos.robot.manipulators.xarm.blueprints.basic:dual_xarm6_planner_coordinator",
     "go2-dds-basic": "dimos.robot.unitree.go2.zenoh.blueprints:go2_dds_basic",
     "go2-dds-motion-pointlio": "dimos.robot.unitree.go2.zenoh.blueprints:go2_dds_motion_pointlio",
+    "go2-dds-motion-pointlio-relocalization": "dimos.robot.unitree.go2.zenoh.blueprints:go2_dds_motion_pointlio_relocalization",
     "go2-localize-live": "dimos.perception.localize.demo_blueprints.go2_localize_live:go2_localize_live",
     "go2-viewer": "dimos.robot.unitree.go2.zenoh.blueprints:go2_viewer",
     "go2-zenoh-basic": "dimos.robot.unitree.go2.zenoh.blueprints:go2_zenoh_basic",
