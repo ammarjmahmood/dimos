@@ -52,15 +52,16 @@ def det3d(label: str, x: float, y: float, ts: float | None = None) -> Detection3
     return Detection3DArray(detections_length=1, header=Header(ts, "world"), detections=[d])
 
 
-def _det2d(label: str, cx: float, w: float, h: float) -> Detection2DArray:
+def det2d(label: str, cx: float, w: float, h: float, ts: float | None = None) -> Detection2DArray:
+    ts = time.time() if ts is None else ts
     d = Detection2D()
-    d.header = Header(1.0, "camera")
+    d.header = Header(ts, "camera")
     d.results = [ObjectHypothesisWithPose(hypothesis=ObjectHypothesis(class_id=label, score=0.8))]
     d.results_length = 1
     center = Pose2D()
     center.position.x, center.position.y = cx, 360.0
     d.bbox = BoundingBox2D(center=center, size_x=w, size_y=h)
-    return Detection2DArray(detections_length=1, header=Header(1.0, "camera"), detections=[d])
+    return Detection2DArray(detections_length=1, header=Header(ts, "camera"), detections=[d])
 
 
 def _state(**kw):  # type: ignore[no-untyped-def]
@@ -108,7 +109,7 @@ def test_objects_3d_relative_to_pose() -> None:
 
 
 def test_objects_2d_bearing_and_size() -> None:
-    (obj,) = _state(detections_2d=_det2d("person", 1200.0, 640, 600))["objects"]
+    (obj,) = _state(detections_2d=det2d("person", 1200.0, 640, 600))["objects"]
     assert (obj["bearing"], obj["size"]) == ("far_right", "filling_view")
 
 

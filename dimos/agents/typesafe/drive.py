@@ -149,7 +149,9 @@ def decode(answers: Answers, *, min_probability: float, stop_threshold: float) -
         a = _choice(answers, f"drive.{axis}")
         label = (
             a["choice"]
-            if a and a["probabilities"].get(a["choice"], 0.0) >= min_probability
+            if a
+            and a["choice"] in (pos, _neg)
+            and a["probabilities"].get(a["choice"], 0.0) >= min_probability
             else "none"
         )
         vals.append(0.0 if stop or label == "none" else 1.0 if label == pos else -1.0)

@@ -78,3 +78,10 @@ def test_target_none_dropped() -> None:
     a = answers(x="forward")
     a["target"] = choice("none", "chair", "none")
     assert _decode(a).target is None
+
+
+def test_undeclared_choice_reads_as_none() -> None:
+    a = answers()
+    a["drive.x"] = choice("sideways", "sideways", "forward", "none", "backward")
+    d = _decode(a)
+    assert (d.x, d.labels[0]) == (0.0, "none")

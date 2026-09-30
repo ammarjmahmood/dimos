@@ -145,6 +145,9 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
         if det3d is None and det2d is None and self._goal_xy is None:
             self._set_target(ZERO)
             self._say("holding: no detections")
+            if self._gave_up():
+                self.set_goal(None)
+                self._say("goal reached or unreachable; stopped")
             return None
         state = build_world_state(
             goal,
@@ -173,7 +176,7 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             min_probability=self.config.min_probability,
             stop_threshold=self.config.stop_threshold,
         )
-        self._steer(state, drive)  # type: ignore[arg-type]
+        self._steer(state, drive, self._state_gen)  # type: ignore[arg-type]
 
     @rpc
     def start(self) -> None:
@@ -216,9 +219,9 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             self._target = self._current = ZERO
             self._zero_since = None
             self._motion = "idle"
-        if goal is None:
-            self.cmd_vel.publish(Twist.zero())
-        else:
+            if goal is None:
+                self.cmd_vel.publish(Twist.zero())
+        if goal is not None:
             self.agent.publish(HumanMessage(content=goal))
         self.agent_idle.publish(goal is None)
 
@@ -232,11 +235,19 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             logger.info(text)
             self.agent.publish(AIMessage(content=text))
 
-    def _steer(self, state: WorldState, drive: Drive) -> None:
-        """The model picked directions; geometry to the goal point sets the magnitudes."""
+    def _gave_up(self) -> bool:
+        with self._lock:
+            return (
+                self._zero_since is not None
+                and time.monotonic() - self._zero_since > self.config.give_up_s
+            )
+
+    def _steer(self, state: WorldState, drive: Drive, gen: int) -> None:
+        """The model picked directions; geometry to the goal point sets the magnitudes.
+        `gen` is the goal generation the state was built for: a later goal makes this a no-op."""
         target = next((o for o in state["objects"] if o["label"] == drive.target), None)
         if target is not None and "position" in target:
-            self._resolve_goal(target["position"]["x"], target["position"]["y"])
+            self._resolve_goal(target["position"]["x"], target["position"]["y"], gen)
             dist, err = target.get("distance_m", 0.0), abs(target.get("bearing_deg", 0.0))
         elif "goal_point" in state:
             dist, err = state["goal_point"]["distance_m"], abs(state["goal_point"]["bearing_deg"])
@@ -248,13 +259,14 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
                 drive = Drive(0.0, 0.0, 0.0, True, drive.confidence, drive.labels, drive.target)
             lin *= min(1.0, max(0.3, dist / SLOW_WITHIN_M))
             ang *= min(1.0, max(0.25, err / TURN_FULL_AT_DEG))
-        self._set_target((drive.x * lin, drive.y * lin, drive.yaw * ang), immediate=drive.stop)
         with self._lock:
+            if gen != self._goal_gen:
+                return
             self._motion = "stopped" if drive.is_zero else "driving"
-            gave_up = (
-                self._zero_since is not None
-                and time.monotonic() - self._zero_since > self.config.give_up_s
-            )
+        self._set_target(
+            (drive.x * lin, drive.y * lin, drive.yaw * ang), immediate=drive.stop, gen=gen
+        )
+        gave_up = self._gave_up()
         self._say(
             f"drive {'/'.join(drive.labels)} stop={drive.stop} target={drive.target} confidence={drive.confidence:.2f}"
         )
@@ -262,24 +274,27 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
             self.set_goal(None)
             self._say("goal reached or unreachable; stopped")
 
-    def _resolve_goal(self, x: float, y: float) -> None:
+    def _resolve_goal(self, x: float, y: float, gen: int) -> None:
         """Latch the target's world XY; publish it when it moves more than 10 cm."""
         with self._lock:
+            if gen != self._goal_gen:
+                return
             prev = self._goal_xy
             self._goal_xy = (x, y)
         if prev is None or abs(prev[0] - x) > 0.1 or abs(prev[1] - y) > 0.1:
             self.goal.publish(PointStamped(x, y, 0.0, frame_id="world"))
 
-    def _set_target(self, target: Vec3, *, immediate: bool = False) -> None:
+    def _set_target(self, target: Vec3, *, immediate: bool = False, gen: int | None = None) -> None:
         now = time.monotonic()
         with self._lock:
+            if gen is not None and gen != self._goal_gen:
+                return
             self._target = target
             self._decided_at = now
             if immediate:
                 self._current = ZERO
+                self.cmd_vel.publish(Twist.zero())
             self._zero_since = (self._zero_since or now) if target == ZERO else None
-        if immediate:
-            self.cmd_vel.publish(Twist.zero())
 
     def _publish_loop(self) -> None:
         dt = 1.0 / PUBLISH_HZ
@@ -300,9 +315,8 @@ class TypeSafeNavigationAgent(TypeSafeAgent):
                     c + max(-s, min(s, t - c)) for c, t, s in zip(cur, target, steps, strict=True)
                 )
                 self._current = (nxt[0], nxt[1], nxt[2])
-                publish = self._goal is not None or any(cur)
-            if publish:
-                self.cmd_vel.publish(
-                    Twist(linear=(nxt[0], nxt[1], 0.0), angular=(0.0, 0.0, nxt[2]))
-                )
+                if self._goal is not None or any(cur):
+                    self.cmd_vel.publish(
+                        Twist(linear=(nxt[0], nxt[1], 0.0), angular=(0.0, 0.0, nxt[2]))
+                    )
             self._stop_event.wait(dt)

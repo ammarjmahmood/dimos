@@ -20,7 +20,7 @@ from reactivex.scheduler import ThreadPoolScheduler
 
 from dimos.agents.typesafe.navigation import TypeSafeNavigationAgent
 from dimos.agents.typesafe.test_drive import answers
-from dimos.agents.typesafe.test_world_state import det3d
+from dimos.agents.typesafe.test_world_state import det2d, det3d
 from dimos.agents.typesafe.types import Answers, Question
 from dimos.core.transport import LCMTransport, pLCMTransport
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
@@ -222,3 +222,17 @@ def test_goal_change_during_inference_drops_the_stale_answer(rig: Rig) -> None:
     time.sleep(0.3)
     assert not moving(twists)
     assert a._goal_xy is None
+
+
+def test_lost_detections_give_up(rig: Rig) -> None:
+    """2D detections latch no goal point: when they stop, holding ends with the goal cleared."""
+    a, fake, twists = rig
+    fake.answers = answers(x="forward")
+    a.set_goal("go to the chair")
+    a.detections_2d.transport.publish(det2d("chair", 640.0, 200, 200))
+    time.sleep(0.05)
+    odom(a)
+    assert until(lambda: moving(twists))
+    a.config.stale_s = 0.0  # every detection is now stale
+    assert until(lambda: (odom(a), a.current_goal() is None)[1])
+    assert twists[-1].is_zero()

@@ -355,7 +355,7 @@ class HabitatHost:
         self._sim = hs.Simulator(hs.Configuration(backend, [agent_cfg]))
         self._agent = self._sim.initialize_agent(0)
         self.labels = [
-            o.category.name() if o.category is not None else ""
+            o.category.name() if o is not None and o.category is not None else ""
             for o in self._sim.semantic_scene.objects
         ]
         self.reset_pose()

@@ -11,7 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Go2 driven by TypeSafe: `go to the <object>` on /human_input; objects on `detections_3d`."""
+"""Go2 driven by TypeSafe: `go to the <object>` on /human_input.
+
+Objects must arrive on `detections_3d` (world-frame boxes) or `detections_2d` from a
+detector run beside this blueprint; without them a goal is held, never driven. The
+DimSim e2e test publishes the target itself.
+"""
 
 from dimos.agents.typesafe.agent import typesafe_api_key
 from dimos.agents.typesafe.navigation import TypeSafeNavigationAgent
