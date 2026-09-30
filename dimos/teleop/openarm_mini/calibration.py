@@ -17,7 +17,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Self
+import sys
+from typing import Literal
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 from pydantic import StrictBool, StrictInt, ValidationError, model_validator
 

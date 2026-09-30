@@ -18,9 +18,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+import sys
 import threading
 import time
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 from pydantic import Field, model_validator
 
