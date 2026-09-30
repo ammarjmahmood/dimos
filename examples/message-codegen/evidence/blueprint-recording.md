@@ -152,3 +152,16 @@ SDK, and its `sensor_msgs::msg`/`nav_msgs::msg` types collide with generated C++
 type names. A verified vendor boundary/codec migration is still required;
 no board build, deployment or robot operation has been performed. Historical
 manual replay fixtures and final viewer/transport acceptance also remain open.
+
+The shared Go2 moment fixture now takes an explicit CDR SQLite path; its tests
+create generated recordings instead of resolving the old pickle dataset name.
+The manual memory import/query tool now copies 1024 deterministic CDR samples
+into an isolated destination. Its original >1000 counts, >10-second duration,
+pagination, ordering, overlap, lazy decoding and pose assertions remain.
+All **18 tool checks passed**, including cached CPU CLIP embedding/search with
+model network access disabled; no new weight download was needed. These
+synthetic image results validate the pipeline, not real-scene recognition.
+
+The separate real detection fixture `unitree_go2_lidar_corrected` is absent
+locally and its LFS archive is 1,212,727,745 bytes. Regenerating it while retaining
+its semantic assertions is still an explicit outstanding fixture gate.
