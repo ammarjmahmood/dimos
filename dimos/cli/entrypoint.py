@@ -14,17 +14,17 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 import sys
-
-from dimos.cli.commands.network import network_app
 
 
 def cli_main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "network":
-        network_app(args=sys.argv[2:], prog_name="dimos network")
+        import_module("dimos.cli.commands.network").network_app(
+            args=sys.argv[2:], prog_name="dimos network"
+        )
         return
     # The legacy CLI imports heavy robot/perception dependencies. Preflight
     # deliberately runs without initializing those modules or GlobalConfig.
-    from dimos.cli.dimos import cli_main as legacy_main
-
-    legacy_main()
+    # Preserve legacy startup ordering, including native thread-pool settings.
+    import_module("dimos.cli.dimos").cli_main()

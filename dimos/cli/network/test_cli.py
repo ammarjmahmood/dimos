@@ -113,3 +113,24 @@ def test_actual_entrypoint_two_processes_with_only_ssh_launch_stub(tmp_path, mon
     assert report["cleanup"] == "confirmed"
     assert report["directions"]["local_to_remote"][-1]["receiver"]["unique_received"] > 0
     assert "Starting SSH-owned peer" in result.stderr
+
+
+def test_legacy_dispatch_does_not_preload_network_or_native_dependencies():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, types; "
+            "from dimos.cli.entrypoint import cli_main; "
+            "assert 'zenoh' not in sys.modules; "
+            "sys.modules['dimos.cli.dimos'] = types.SimpleNamespace(cli_main=lambda: None); "
+            "sys.argv = ['dimos', '--help']; cli_main(); "
+            "assert 'dimos.cli.commands.network' not in sys.modules; "
+            "assert 'zenoh' not in sys.modules",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
