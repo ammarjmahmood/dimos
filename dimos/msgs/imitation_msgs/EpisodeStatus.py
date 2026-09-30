@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import ClassVar, Literal, TypeAlias, cast
 
 from dimos_lcm.std_msgs import String as LCMString
@@ -34,7 +35,6 @@ class EpisodeStatus(BaseModel):
 
     msg_name: ClassVar[str] = "imitation_msgs.EpisodeStatus"
 
-    schema_version: Literal[1] = 1
     ts: FiniteFloat
     state: RecordingState
     episodes_saved: int
@@ -44,11 +44,15 @@ class EpisodeStatus(BaseModel):
 
     def lcm_encode(self) -> bytes:
         """Carry validated episode JSON in the existing String wire envelope."""
-        return cast("bytes", LCMString(data=self.model_dump_json()).lcm_encode())
+        payload = {"schema_version": 1, **self.model_dump(mode="json")}
+        return cast("bytes", LCMString(data=json.dumps(payload, allow_nan=False)).lcm_encode())
 
     @classmethod
     def lcm_decode(cls, data: bytes) -> EpisodeStatus:
-        status = cls.model_validate_json(LCMString.lcm_decode(data).data)
-        if "schema_version" not in status.model_fields_set:
+        payload = json.loads(LCMString.lcm_decode(data).data)
+        if not isinstance(payload, dict) or "schema_version" not in payload:
             raise ValueError("EpisodeStatus JSON requires schema_version")
-        return status
+        version = payload.pop("schema_version")
+        if type(version) is not int or version != 1:
+            raise ValueError("Unsupported EpisodeStatus schema_version")
+        return cls.model_validate(payload)
