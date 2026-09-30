@@ -71,14 +71,23 @@ impl RayTracingVoxelMap {
         // Register with the transform nearest the cloud stamp, waiting briefly
         // for one still in flight rather than dropping the cloud.
         let stamp = time_secs(&msg.header.stamp);
-        let Some(tf_pose) = self
+        let tolerance = self.config.tf_match_tolerance_s;
+        let lookup = self
             .tf
             .lookup(&self.config.world_frame, &msg.header.frame_id)
             .at(stamp)
-            .tolerance(self.config.tf_match_tolerance_s)
-            .within(TF_WAIT_TIMEOUT)
-            .await
-        else {
+            .tolerance(tolerance);
+        // A stale cloud's transform will never arrive, so waiting on it would cap the drain rate of a backed-up queue at 1/TF_WAIT_TIMEOUT.
+        let transform_is_past = self
+            .tf
+            .get_latest(&self.config.world_frame, &msg.header.frame_id)
+            .is_some_and(|latest| latest.ts > stamp + tolerance);
+        let found = if transform_is_past {
+            lookup.get()
+        } else {
+            lookup.within(TF_WAIT_TIMEOUT).await
+        };
+        let Some(tf_pose) = found else {
             warn!(
                 stamp,
                 world_frame = %self.config.world_frame,
