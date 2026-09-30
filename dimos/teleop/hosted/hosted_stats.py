@@ -28,6 +28,7 @@ import threading
 import time
 from typing import Any
 
+from dimos_generated.dimos_msgs.msg import VideoStats
 from reactivex.disposable import Disposable
 
 from dimos.core.core import rpc
@@ -36,7 +37,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.robot.unitree.go2.connection import GO2Connection
 from dimos.teleop.utils.stream_stats import LiveStreamStats
-from dimos.teleop.utils.video_stats import VideoStats
+from dimos.teleop.utils.video_stats import video_stats_from_dict
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -108,7 +109,7 @@ class HostedStatsModule(Module):
         kind = msg.get("type")
         if kind == "video_stats":
             try:
-                self.video_stats.publish(VideoStats.from_dict(msg))
+                self.video_stats.publish(video_stats_from_dict(msg))
             except (TypeError, ValueError):
                 logger.warning("state_reliable: malformed video_stats, dropping")
         elif kind == "clock_report":

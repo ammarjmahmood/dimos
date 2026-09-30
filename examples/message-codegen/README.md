@@ -5,6 +5,9 @@ reading, a position, defaults, fixed and variable arrays, and a bounded string.
 This example generates Python, C++, and Rust from that definition without ROS.
 The native processes print the fields they receive and each adds its own hop.
 
+See [Add and use a message](/docs/development/messages.md) for the new-type and
+Python/C++/Rust user stories, including a bounded runnable local example.
+
 ## Build dependencies
 
 Use Python 3.12+, a C++17 compiler, CMake 3.20+, and Rust 1.92+. Install Python
@@ -1224,3 +1227,17 @@ PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/mess
 
 This writes `build/message-codegen/demo/evidence/hosted-map.png` from CDR inputs
 through local callbacks, with no hosted connection or robot.
+
+### Explicit generated video telemetry
+
+After rebuilding the generated messages with the current in-tree definitions:
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_video_stats.py
+```
+
+The demo converts browser health JSON into `dimos_msgs/msg/VideoStats`, crosses
+CDR and SQLite boundaries, and prints an exact dropped-frame counter of
+4294967297. Counters use integer schema fields rather than Joy's float32 axes.
+The temporary database is removed automatically; no browser, robot or hosted
+connection is required. The browser JSON plane retains its named metric fields.

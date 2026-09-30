@@ -15,21 +15,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
-import importlib
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from dimos.message_codegen.registry import message_types
 
 if TYPE_CHECKING:
     from dimos.msgs.protocol import DimosMsg
-
-
-def lcm_msg_type(msg_name: str) -> type[Any]:
-    """The generated dimos_lcm class of a '<package>.<Type>' name. ImportError
-    when the wheel has no such message."""
-    package, name = msg_name.split(".")
-    msg_type: type[Any] = getattr(importlib.import_module(f"dimos_lcm.{package}.{name}"), name)
-    return msg_type
 
 
 @lru_cache(maxsize=256)

@@ -24,6 +24,8 @@ composed blueprint produces, the rest stay empty in the DB. Compose at the CLI::
 from datetime import datetime
 from pathlib import Path
 
+from dimos_generated.dimos_msgs.msg import VideoStats
+
 from dimos.constants import STATE_DIR
 from dimos.core.core import rpc
 from dimos.core.stream import In
@@ -32,7 +34,6 @@ from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.teleop.utils.report import generate_report
-from dimos.teleop.utils.video_stats import VideoStats
 from dimos.teleop.webxr.controller_types import Buttons
 from dimos.utils.logging_config import setup_logger
 

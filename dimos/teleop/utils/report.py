@@ -30,13 +30,13 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from dimos_generated.dimos_msgs.msg import VideoStats
 import numpy as np
 
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.TwistStamped import TwistStamped
 from dimos.teleop.utils.stream_stats import pcts
-from dimos.teleop.utils.video_stats import VideoStats
 from dimos.teleop.webxr.controller_types import Buttons
 from dimos.utils.logging_config import setup_logger
 
