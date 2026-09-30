@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from dimos_generated.geometry_msgs.msg import TransformStamped
-import rerun as rr
 
 DEFAULT_LINKS_ROOT = "tf_links"
 DEFAULT_TF_ROOT = "world/tf"
@@ -25,8 +27,14 @@ AXIS_WIDTH_UI_POINTS = 2.0
 AXIS_COLORS = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
 
 
+if TYPE_CHECKING:
+    import rerun as rr
+
+
 def _triad(length: float) -> rr.Arrows3D:
     """XYZ arrows, red green blue."""
+    import rerun as rr
+
     return rr.Arrows3D(
         origins=[[0.0, 0.0, 0.0]] * 3,
         vectors=[[length, 0.0, 0.0], [0.0, length, 0.0], [0.0, 0.0, length]],
@@ -59,6 +67,8 @@ class TfFrameTree:
             self._redraw()
 
     def _place(self, frame: str, walked: frozenset[str]) -> tuple[str, int]:
+        import rerun as rr
+
         part = rr.escape_entity_path_part(frame)
         parent = self._parents.get(frame)
         if parent is None or parent in walked:
@@ -67,6 +77,8 @@ class TfFrameTree:
         return f"{parent_path}/{part}", parent_depth + 1
 
     def _redraw(self) -> None:
+        import rerun as rr
+
         frames = {*self._parents, *self._parents.values()}
         placed = {frame: self._place(frame, frozenset()) for frame in frames}
 

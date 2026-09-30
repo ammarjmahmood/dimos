@@ -731,7 +731,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --group tests --frozen
       - name: Install CDR conformance test dependencies
-        run: uv pip install mcap==1.4.0 rosbags==0.11.0
+        run: uv pip install mcap==1.4.0 rosbags==0.11.0 mypy==1.19.1 pybind11==3.0.1
       - name: Install Rust for offline planner bindings
         uses: dtolnay/rust-toolchain@stable
       - name: Build offline planner Python bindings

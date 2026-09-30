@@ -273,7 +273,12 @@ class PGO(Transformer[PointCloud2, "PoseGraph"]):
                 continue
             # Placeholder filter: zero translation OR uninitialized (all-zero)
             # quaternion. Identity rotation (qw=1) is valid and stays.
-            if pose.position.is_zero() or pose.orientation.is_zero():
+            if np.allclose([pose.position.x, pose.position.y, pose.position.z], 0.0) or (
+                pose.orientation.x == 0.0
+                and pose.orientation.y == 0.0
+                and pose.orientation.z == 0.0
+                and pose.orientation.w == 0.0
+            ):
                 continue
             pgo.process(_obs_to_pose3(obs), obs.ts, obs.data)
 

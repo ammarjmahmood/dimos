@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, Any
 from dimos_generated.dimos_msgs.msg import LineSegments3D
 from dimos_generated.sensor_msgs.msg import PointCloud2
 import numpy as np
-import rerun as rr
 
 from dimos.msgs.pointcloud import pointcloud_view, pointcloud_xyz
 
@@ -63,6 +62,8 @@ def render_surface_map(
     Clearance rides the cloud's intensity channel; cells below ``wall_clearance_m`` are
     untraversable and dropped. Falls back to a flat color when the channel is absent.
     """
+    import rerun as rr
+
     pts = pointcloud_xyz(msg)
     records = pointcloud_view(msg)
     clearance = records["intensity"].ravel() if "intensity" in (records.dtype.names or ()) else None
@@ -77,6 +78,8 @@ def render_surface_map(
 
 
 def render_nodes(msg: PointCloud2) -> Archetype:
+    import rerun as rr
+
     pts = pointcloud_xyz(msg)
     if len(pts) == 0:
         return rr.Points3D([])
@@ -86,6 +89,8 @@ def render_nodes(msg: PointCloud2) -> Archetype:
 
 
 def render_node_edges(msg: LineSegments3D) -> Archetype:
+    import rerun as rr
+
     if not msg.segments:
         return rr.LineStrips3D([])
     strips = np.array(

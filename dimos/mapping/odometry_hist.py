@@ -22,7 +22,6 @@ from typing import Any
 from dimos_generated.geometry_msgs.msg import PoseStamped
 from dimos_generated.nav_msgs.msg import Odometry, Path
 from pydantic import Field
-import rerun as rr
 
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
@@ -31,6 +30,8 @@ from dimos.msgs.time import to_nanoseconds
 
 def path_at_true_height(path: Path) -> Any:
     """The default z lift clears a costmap a bare odometry demo has none of."""
+    import rerun as rr
+
     points = [[p.pose.position.x, p.pose.position.y, p.pose.position.z] for p in path.poses]
     return rr.LineStrips3D([points] if points else [], colors=[(0, 255, 128)], radii=0.02)
 

@@ -36,6 +36,7 @@ from typing import (
 )
 from urllib.parse import urlparse
 
+from dimos_generated.foxglove_msgs.msg import CompressedVideo
 from dimos_generated.geometry_msgs.msg import PointStamped, PoseStamped
 from dimos_generated.nav_msgs.msg import OccupancyGrid, Odometry, Path
 from dimos_generated.sensor_msgs.msg import CameraInfo, CompressedImage, Image, PointCloud2
@@ -71,6 +72,7 @@ from dimos.visualization.rerun.message_helpers import (
     navigation_archetype,
     occupancy_mesh,
     tf_archetypes,
+    video_archetype,
 )
 from dimos.visualization.rerun.tf_tree import TfFrameTree
 
@@ -336,6 +338,8 @@ class RerunBridgeModule(Module):
                 return detection_boxes(msg)
             if isinstance(msg, (Image, CompressedImage)):
                 return image_archetype(msg)
+            if isinstance(msg, CompressedVideo):
+                return video_archetype(msg)
             if isinstance(msg, RerunConvertible):
                 return msg.to_rerun()
             return None
@@ -404,11 +408,18 @@ class RerunBridgeModule(Module):
             # if source msg carries a frame_id, attach the entity to that TF frame
             # should skip if archetype is a Transform3D
             if not isinstance(rerun_data, rr.Transform3D):
-                frame_id = getattr(getattr(msg, "header", None), "frame_id", None)
+                frame_id = (
+                    msg.frame_id
+                    if isinstance(msg, CompressedVideo)
+                    else getattr(getattr(msg, "header", None), "frame_id", None)
+                )
                 if frame_id and self._frame_attached.get(entity_path) != frame_id:
                     rr.log(entity_path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
                     self._frame_attached[entity_path] = frame_id
-                    if isinstance(msg, (Image, CompressedImage)) and frame_id in self._camera_infos:
+                    if (
+                        isinstance(msg, (Image, CompressedImage, CompressedVideo))
+                        and frame_id in self._camera_infos
+                    ):
                         rr.log(entity_path, camera_pinhole(self._camera_infos[frame_id]))
 
     def _log_camera_info(self, entity_path: str, info: CameraInfo) -> None:

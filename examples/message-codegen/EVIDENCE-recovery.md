@@ -172,3 +172,35 @@ multicast self-test is blocked on this host; no networking settings were changed
 Full blueprint/viewer demo, final installed packaging matrix, authenticated
 Foxglove UI evidence, and exact published-commit CI acceptance remain pending.
 No hardware commands, model inference or model downloads were used.
+
+
+## Generated-consumer cleanup checkpoint
+
+The next local batch migrates model/detector/embedding image boundaries,
+recording headers and TF payloads, report source-time calculations, G1 mount
+composition, and generated video rendering. Public generated messages remain
+plain schema values. OpenCV/Open3D/Rerun imports are deferred per the existing
+codebase check, without suppressing that check. Old typed-transport test inputs
+now use canonical generated types. Empty codegen namespace initializers are
+removed; bundled standalone generator precedence still passes its existing test.
+
+Affected offline helpers, WebSocket protocol, camera mux, reports and G1 math:
+195 passed, one desktop viewer binary test excluded because `dimos-viewer` is
+not installed locally. Transport/package/structure checks: 57 passed. Strict
+checks passed for the migrated recorder/report, image/projection, detector
+modules, person tracker, patrol consumer, time adapter, G1 and viewer helpers.
+Model weights and hardware behavior are not validated by these checks.
+
+The original timestamp self-hosted test accidentally acquired/extracted
+`unitree_office_walk` during the explicit-file run (ignored data directory about
+2 GB); the download was not requested in advance. Its backpressure/alignment
+fixture now uses synthetic capture events, retaining its existing assertions.
+All 21 timestamp/projection tests pass without replay assets. Existing cached
+data is retained; subsequent tests avoid automatic large-asset acquisition.
+
+Exact published `febed89cec435bc2b853b4d163f033a6fd7dc8f2` message-codegen run
+36694469475 succeeded. Main CI run 36694465187 completed with ARM tests
+5940 passed / 54 failed / 229 skipped / one teardown error; other Python jobs
+were fail-fast cancelled. Native, Rust, Web, Linux and macOS builds succeeded.
+Lint reported 188 errors in 61 files and md-babel failed on remaining old
+examples. These results predate this cleanup batch and are not final acceptance.

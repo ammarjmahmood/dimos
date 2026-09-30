@@ -27,7 +27,13 @@ import numpy as np
 import pytest
 
 from dimos.msgs.geometry import yaw
-from dimos.msgs.image import image_from_array, image_sharpness, image_to_jpeg, image_view
+from dimos.msgs.image import (
+    image_from_array,
+    image_sharpness,
+    image_to_jpeg,
+    image_to_rgb,
+    image_view,
+)
 from dimos.msgs.occupancy import block_max_reduce, occupancy_view
 from dimos.msgs.time import time_from_nanoseconds
 from dimos.web.relay_bridge.builtin_codecs import decode_point, encode_path, encode_pose
@@ -129,3 +135,54 @@ def test_sharpness_rejects_depth_and_empty_images():
         image_sharpness(depth)
     with pytest.raises(ValueError, match="nonempty"):
         image_sharpness(Image(encoding="mono8"))
+
+
+@pytest.mark.parametrize(
+    "encoding,pixel",
+    [
+        ("rgb8", [255, 0, 17]),
+        ("bgr8", [17, 0, 255]),
+        ("rgba8", [255, 0, 17, 23]),
+        ("bgra8", [17, 0, 255, 23]),
+    ],
+)
+def test_rgb_model_input_is_color_correct_and_independent(encoding: str, pixel: list[int]) -> None:
+    source = image_from_array(np.array([[pixel]], dtype=np.uint8), encoding=encoding)
+    restored = Image.decode(source.encode())
+    rgb = image_to_rgb(restored)
+    np.testing.assert_array_equal(rgb, [[[255, 0, 17]]])
+    rgb[0, 0] = 0
+    np.testing.assert_array_equal(image_view(restored), [[pixel]])
+
+
+def test_rgb_model_input_respects_big_endian_padded_grayscale() -> None:
+    msg = Image(
+        width=2,
+        height=2,
+        step=6,
+        encoding="mono16",
+        is_bigendian=1,
+        data=[0x12, 0x34, 0xFF, 0xFF, 99, 99, 0x01, 0x00, 0, 0, 99, 99],
+    )
+    np.testing.assert_array_equal(
+        image_to_rgb(msg), [[[18, 18, 18], [255, 255, 255]], [[1, 1, 1], [0, 0, 0]]]
+    )
+
+
+def test_rgb_model_input_requires_explicit_float_depth_scale() -> None:
+    msg = image_from_array(np.array([[2.5]], dtype=np.float32), encoding="32FC1")
+    with pytest.raises(ValueError, match="RGB8"):
+        image_to_rgb(msg)
+
+
+def test_mosaic_uses_generated_pixels_and_preserves_rgb_colors() -> None:
+    from dimos.memory.vis.utils import mosaic
+
+    red = image_from_array(np.array([[[255, 0, 0]]], dtype=np.uint8), encoding="rgb8")
+    blue = image_from_array(np.array([[[255, 0, 0]]], dtype=np.uint8), encoding="bgr8")
+    observation = mosaic([red, blue], cols=2, cell_height=1)
+    result = Image.decode(observation.data.encode())
+    assert result.encoding == "bgr8"
+    np.testing.assert_array_equal(image_to_rgb(result), [[[255, 0, 0], [0, 0, 255]]])
+    assert observation.tags == {"mosaic": True}
+    assert observation.pose is None

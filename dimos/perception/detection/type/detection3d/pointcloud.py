@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 import functools
 from typing import TYPE_CHECKING, Any
 
-import cv2
 from dimos_generated.geometry_msgs.msg import (
     Point,
     Pose,
@@ -31,7 +30,6 @@ from dimos_generated.sensor_msgs.msg import PointCloud2
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from numpy.typing import NDArray
-import open3d as o3d
 
 from dimos.msgs.geometry import inverse_transform, transform_matrix
 from dimos.msgs.image import image_view
@@ -46,6 +44,7 @@ from dimos.perception.detection.type.detection3d.pointcloud_filters import (
 
 if TYPE_CHECKING:
     from dimos_generated.sensor_msgs.msg import CameraInfo, Image
+    import open3d as o3d
 
     from dimos.perception.detection.type.detection2d.bbox import Detection2DBBox
 
@@ -75,6 +74,8 @@ class Detection3DPC(Detection3D):
         )
 
     def _open3d(self) -> o3d.geometry.PointCloud:
+        import open3d as o3d
+
         return o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pointcloud_xyz(self.pointcloud)))
 
     def get_bounding_box(self) -> o3d.geometry.AxisAlignedBoundingBox:
@@ -144,6 +145,8 @@ class Detection3DPC(Detection3D):
         segmentation mask is eroded to ``mask_scale`` of its size first, since
         the bleed lives on the mask boundary.
         """
+        import cv2
+
         # no radius_outlier: dense depth clouds make radius search expensive,
         # and the depth-gap cluster above already drops disconnected points
         if filters is None:

@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 from dimos.msgs.pointcloud import (
+    concatenate_clouds,
     pointcloud_from_xyz,
     pointcloud_view,
     pointcloud_xyz,
@@ -194,3 +195,44 @@ def test_selection_supports_no_retained_points(padded_cloud):
     result = select_points(padded_cloud, np.zeros(4, dtype=bool))
     assert (result.height, result.width, result.row_step, len(result.data)) == (1, 0, 0, 0)
     assert result.fields == padded_cloud.fields
+
+
+def test_cloud_concatenation_preserves_all_records_and_newest_nanosecond(padded_cloud):
+    first = PointCloud2.decode(padded_cloud.encode())
+    first.header = Header(frame_id="world", stamp=Time(sec=1700000000, nanosec=123456789))
+    second = PointCloud2.decode(first.encode())
+    second.header.stamp.nanosec += 1
+    second.is_dense = False
+    result = PointCloud2.decode(concatenate_clouds(first, second).encode())
+    assert (result.height, result.width, result.row_step) == (1, 8, 8 * 24)
+    assert result.fields == first.fields
+    assert result.is_bigendian == first.is_bigendian
+    assert result.header.frame_id == "world"
+    assert result.header.stamp.nanosec == 123456790
+    assert not result.is_dense
+    packed = select_points(first, np.ones(4, dtype=bool))
+    assert bytes(result.data) == bytes(packed.data) * 2
+    np.testing.assert_array_equal(
+        pointcloud_view(result)["tags"].reshape(-1, 2),
+        np.tile([[1, 11], [2, 12], [3, 13], [4, 14]], (2, 1)),
+    )
+    result.data = bytes(len(result.data))
+    assert bytes(first.data) == bytes(padded_cloud.data)
+
+
+def test_cloud_concatenation_rejects_unrelated_frames_and_layouts(padded_cloud):
+    second = PointCloud2.decode(padded_cloud.encode())
+    second.header.frame_id = "unrelated"
+    with pytest.raises(ValueError, match="different frames"):
+        concatenate_clouds(padded_cloud, second)
+    second.header.frame_id = padded_cloud.header.frame_id
+    second.is_bigendian = not second.is_bigendian
+    with pytest.raises(ValueError, match="different record layouts"):
+        concatenate_clouds(padded_cloud, second)
+
+
+def test_empty_cloud_is_a_copy_identity(padded_cloud):
+    result = concatenate_clouds(PointCloud2(), padded_cloud)
+    assert result == padded_cloud
+    result.header.frame_id = "changed"
+    assert padded_cloud.header.frame_id == ""

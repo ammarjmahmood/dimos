@@ -419,27 +419,30 @@ text "CameraModule" italic at ((CL.x + CO.x)/2, CL.s.y - 0.25in)
 ```python
 import time
 
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos_generated.geometry_msgs.msg import Quaternion, Transform, TransformStamped, Vector3
+from dimos_generated.std_msgs.msg import Header
+from dimos.msgs.time import time_from_nanoseconds
 from dimos.protocol.tf.tf import MultiTBuffer
 
 tf = MultiTBuffer()
 
 # Simulate transforms at different times
 for i in range(5):
-    t = Transform(
-        translation=Vector3(float(i), 0.0, 0.0),
-        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        frame_id="base_link",
+    t = TransformStamped(
+        header=Header(
+            stamp=time_from_nanoseconds(time.time_ns() + i * 100_000_000),
+            frame_id="base_link",
+        ),
         child_frame_id="camera_link",
-        ts=time.time() + i * 0.1,
+        transform=Transform(
+            translation=Vector3(x=float(i)), rotation=Quaternion(w=1.0)
+        ),
     )
     tf.receive_transform(t)
 
 # Query the latest transform
 result = tf.get("base_link", "camera_link")
-print(f"Latest transform: x={result.translation.x}")
+print(f"Latest transform: x={result.transform.translation.x}")
 print(f"Buffer has {len(tf.buffers)} transform pair(s)")
 print(tf)
 ```

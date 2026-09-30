@@ -338,7 +338,7 @@ LCM is UDP multicast. It’s very fast on a robot LAN, but it’s **best-effort*
 For local emission it autoconfigures system in a way in which it's more robust and faster then other more common protocols like ROS, DDS
 
 ```python
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos_generated.geometry_msgs.msg import Vector3
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM, Topic
 
 lcm = LCM()
@@ -348,7 +348,7 @@ received = []
 topic = Topic("/robot/velocity", Vector3)
 
 lcm.subscribe(topic, lambda msg, t: received.append(msg))
-lcm.publish(topic, Vector3(1.0, 0.0, 0.5))
+lcm.publish(topic, Vector3(x=1.0, z=0.5))
 
 import time
 time.sleep(0.1)

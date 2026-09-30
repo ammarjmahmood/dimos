@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from typing_extensions import Self
     from ultralytics.engine.results import Results
 
-import cv2
 from dimos_generated.vision_msgs.msg import (
     BoundingBox2D,
     Detection2D as ROSDetection2D,
@@ -94,6 +93,8 @@ class Detection2DBBox(Detection2D):
 
     def draw_on(self, img: Any, scale: float = 1.0) -> None:
         """Draw this detection's bbox and label onto a BGR numpy array (in-place)."""
+        import cv2
+
         x1, y1, x2, y2 = map(int, self.bbox)
 
         h = hashlib.md5(self.name.encode()).digest()[0]

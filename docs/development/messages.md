@@ -81,7 +81,7 @@ runs in the same script. Include the generated `messages.hpp`, use
 the next CDR file. Installed consumers include `story_messages/messages.hpp`
 and link the exported CMake target.
 
-For a native DimOS module, follow the actual
+For a native dimOS module, follow the actual
 [C++ CDR relay](/examples/native-modules/cpp/src/cdr_relay.cpp): derive `Module`,
 register the typed input with `Builder::input`, retain an `Output<Type>`, and
 publish the generated struct in its handler. The SDK selects the CDR codec for
@@ -97,7 +97,7 @@ and runs in the script. Import `story_msgs::msg::DeviceReading` and the generate
 owned fields use ordinary Rust mutation. The default encoder emits little
 endian encapsulated XCDR1 and the decoder accepts the supported big endian form.
 
-For a native DimOS module, follow the actual
+For a native dimOS module, follow the actual
 [Rust CDR relay](/examples/native-modules/rust/src/cdr_relay.rs): derive `Module`,
 annotate `Input<Type>` with `decode = cdr::decode` and `Output<Type>` with
 `encode = cdr::encode`, then implement `handle_<input>` and publish asynchronously.
@@ -118,7 +118,7 @@ Installed providers expose each qualified type and its complete concatenated
 schema. The runtime passes this metadata through recorder stream configuration.
 MCAP stores the ROS2 profile, `cdr` channel bytes and `ros2msg` schemas, with chunk
 compression. Foxglove and Rerun can inspect fields using embedded definitions,
-without installing your application package. Typed DimOS replay needs the matching
+without installing your application package. Typed dimOS replay needs the matching
 installed message package; unknown types can still be accessed as bytes.
 Source stamps are used for recognized stamped layouts, while unknown or unstamped
 layouts use reception time. MCAP log time always reflects reception.

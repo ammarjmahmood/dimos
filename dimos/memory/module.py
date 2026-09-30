@@ -23,6 +23,9 @@ import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.sensor_msgs.msg import Image
+from dimos_generated.tf2_msgs.msg import TFMessage
 from pydantic import Field, field_validator
 from reactivex import operators as ops
 from reactivex.disposable import Disposable
@@ -40,17 +43,16 @@ from dimos.memory.stream import Stream
 from dimos.memory.transform import QualityWindow
 from dimos.memory.type.observation import EmbeddedObservation, Observation
 from dimos.models.embedding.base import EmbeddingModel
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.sensor_msgs.Image import Image
-from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.msgs.geometry import pose_from_transform
+from dimos.msgs.time import to_seconds
 from dimos.utils.data import backup_file
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
+    from dimos_generated.geometry_msgs.msg import Pose
     from reactivex.abc import DisposableBase
 
     from dimos.core.stream import Out
-    from dimos.msgs.geometry_msgs.Pose import Pose
 
 logger = setup_logger()
 
@@ -394,7 +396,7 @@ class Recorder(MemoryModule):
     def _port_to_stream(self, name: str, input_topic: In[Any], stream: Stream[Any]) -> None:
         """Append each message from *input_topic* to *stream*, attaching world pose via tf.
 
-        Stamped messages use their own ``.frame_id`` and ``.ts``; unstamped
+        Stamped messages use their own ``header.frame_id`` and ``header.stamp``; unstamped
         messages (or ones whose frame isn't in the tf graph, e.g. a payload
         already in world coords) fall back to ``config.default_frame_id`` —
         so every observation gets a robot-pose anchor when tf is publishing.
@@ -435,7 +437,8 @@ class Recorder(MemoryModule):
 
     def _resolve_ts(self, name: str, msg: Any) -> float:
         """Timestamp to record *msg* at. Override to re-base onto another clock."""
-        return getattr(msg, "ts", None) or time.time()
+        header = getattr(msg, "header", None)
+        return to_seconds(header.stamp) if header is not None else time.time()
 
     async def _resolve_pose(self, name: str, msg: Any, ts: float) -> Pose | None:
         """Pose to anchor *msg* with. Dispatches to the stream's (async)
@@ -446,11 +449,12 @@ class Recorder(MemoryModule):
             return cast("Pose | None", await setter(msg))
         if self._tf is None:
             return None
-        frame_id = getattr(msg, "frame_id", None) or self.config.default_frame_id
+        header = getattr(msg, "header", None)
+        frame_id = (header.frame_id if header is not None else "") or self.config.default_frame_id
         transform = self._tf.get(
             self.config.root_frame, frame_id, time_point=ts, time_tolerance=self.config.tf_tolerance
         )
-        return transform.to_pose() if transform is not None else None
+        return pose_from_transform(transform).pose if transform is not None else None
 
     def _collect_pose_setters(self) -> dict[str, PoseSetter]:
         """Map stream name -> bound ``@pose_setter_for`` method."""
@@ -471,7 +475,11 @@ class Recorder(MemoryModule):
         def on_tf(msg: TFMessage) -> None:
             try:
                 for transform in msg.transforms:
-                    tf_stream.append(TFMessage(transform), ts=transform.ts, pose=None)
+                    tf_stream.append(
+                        TFMessage(transforms=[transform]),
+                        ts=to_seconds(transform.header.stamp),
+                        pose=None,
+                    )
             except sqlite3.ProgrammingError:
                 # A late LCM callback raced teardown and hit the closed store.
                 pass

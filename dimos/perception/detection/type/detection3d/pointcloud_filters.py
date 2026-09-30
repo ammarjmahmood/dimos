@@ -20,12 +20,13 @@ from typing import TYPE_CHECKING
 from dimos_generated.geometry_msgs.msg import TransformStamped
 from dimos_generated.sensor_msgs.msg import CameraInfo, PointCloud2
 import numpy as np
-import open3d as o3d
 
 from dimos.msgs.geometry import inverse_transform
 from dimos.msgs.pointcloud import pointcloud_xyz, select_points
 
 if TYPE_CHECKING:
+    import open3d as o3d
+
     from dimos.perception.detection.type.detection2d.bbox import Detection2DBBox
 
 PointCloudFilter = Callable[
@@ -34,6 +35,8 @@ PointCloudFilter = Callable[
 
 
 def _open3d_cloud(pc: PointCloud2) -> o3d.geometry.PointCloud:
+    import open3d as o3d
+
     return o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pointcloud_xyz(pc)))
 
 

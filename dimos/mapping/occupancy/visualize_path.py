@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cv2
+from __future__ import annotations
+
 from dimos_generated.nav_msgs.msg import OccupancyGrid, Path
 from dimos_generated.sensor_msgs.msg import Image
 import numpy as np
@@ -31,6 +32,8 @@ def visualize_path(
     thickness: int = 1,
     scale: int = 8,
 ) -> Image:
+    import cv2
+
     image = visualize_occupancy_grid(occupancy_grid, "rainbow")
     bgr = image_view(image)
 

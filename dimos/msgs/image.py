@@ -14,9 +14,10 @@
 
 """Array views and compression for generated ROS image messages."""
 
+from __future__ import annotations
+
 from typing import Any
 
-import cv2
 from dimos_generated.sensor_msgs.msg import Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
@@ -78,6 +79,8 @@ def image_view(msg: Image) -> NDArray[Any]:
 
 def image_to_jpeg(msg: Image, quality: int = 75) -> bytes:
     """Encode an 8-bit gray or color image using OpenCV's JPEG encoder."""
+    import cv2
+
     if isinstance(quality, bool) or not 0 <= quality <= 100:
         raise ValueError("JPEG quality must be in 0..100")
     pixels = image_view(msg)
@@ -98,6 +101,8 @@ def image_to_jpeg(msg: Image, quality: int = 75) -> bytes:
 
 def image_sharpness(message: Image) -> float:
     """Laplacian variance of an 8-bit visual image, downsampled to 160 pixels wide."""
+    import cv2
+
     pixels = image_view(message)
     codes = {
         "rgb8": cv2.COLOR_RGB2GRAY,
@@ -124,6 +129,8 @@ def image_sharpness(message: Image) -> float:
 
 def image_to_bgr(message: Image) -> NDArray[np.uint8]:
     """Return an independent BGR8 array for drawing or OpenCV color operations."""
+    import cv2
+
     pixels = image_view(message)
     if message.encoding == "bgr8":
         return pixels.copy()
@@ -135,4 +142,30 @@ def image_to_bgr(message: Image) -> NDArray[np.uint8]:
     }
     if message.encoding not in codes:
         raise ValueError(f"Cannot convert {message.encoding!r} to BGR8")
+    return np.asarray(cv2.cvtColor(pixels, codes[message.encoding]), dtype=np.uint8)
+
+
+def image_to_rgb(message: Image) -> NDArray[np.uint8]:
+    """Copy a display image as RGB8; 16-bit grayscale uses its high byte.
+
+    Alpha is discarded. Floating-point depth needs an explicit visualization
+    scale and is rejected rather than assigning pixel values to meters.
+    """
+    import cv2
+
+    pixels = image_view(message)
+    if message.encoding == "rgb8":
+        return pixels.copy()
+    if message.encoding in ("mono16", "16UC1"):
+        return np.asarray(
+            cv2.cvtColor((pixels / 256).astype(np.uint8), cv2.COLOR_GRAY2RGB), dtype=np.uint8
+        )
+    codes = {
+        "bgr8": cv2.COLOR_BGR2RGB,
+        "rgba8": cv2.COLOR_RGBA2RGB,
+        "bgra8": cv2.COLOR_BGRA2RGB,
+        "mono8": cv2.COLOR_GRAY2RGB,
+    }
+    if message.encoding not in codes:
+        raise ValueError(f"Cannot convert {message.encoding!r} to RGB8")
     return np.asarray(cv2.cvtColor(pixels, codes[message.encoding]), dtype=np.uint8)

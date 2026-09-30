@@ -523,7 +523,7 @@ A transport works on its own. Init one and send/receive from a plain script, no 
 
 ```python skip
 from dimos.core.transport import LCMTransport
-from dimos.msgs.std_msgs.String import String
+from dimos_generated.std_msgs.msg import String
 
 chat = LCMTransport("/chat", String)
 
@@ -550,7 +550,7 @@ from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
 from dimos.core.transport import LCMTransport
-from dimos.msgs.std_msgs.String import String
+from dimos_generated.std_msgs.msg import String
 
 class Dyn(Module):
     @rpc
@@ -590,11 +590,11 @@ Externally attached output: Out words[String] @ Dyn
 
 Inputs:
 {'echo': <dimos.core.stream.In object at 0x7f03b4bb32c0>}
-In echo[String] @ Dyn via LCMTransport(/words#std_msgs.String)
+In echo[String] @ Dyn via LCMTransport(/words#std_msgs/msg/String)
 
 Outputs:
 {'words': <dimos.core.stream.Out object at 0x7f03b4b7f860>}
-Out words[String] @ Dyn via LCMTransport(/words#std_msgs.String)
+Out words[String] @ Dyn via LCMTransport(/words#std_msgs/msg/String)
 \Send/Receive Test:
 <dimos.msgs.std_msgs.String.String object at 0x7f03eb2d10d0>
 ```

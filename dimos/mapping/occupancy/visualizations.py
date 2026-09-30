@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from functools import lru_cache
 from typing import Literal, TypeAlias
 
-import cv2
 from dimos_generated.nav_msgs.msg import OccupancyGrid, Path
 from dimos_generated.sensor_msgs.msg import Image
 import matplotlib.pyplot as plt
@@ -47,6 +48,8 @@ def visualize_occupancy_grid(
 
 
 def _draw_path(occupancy_grid: OccupancyGrid, bgr_image: NDArray[np.uint8], path: Path) -> None:
+    import cv2
+
     occupancy_extent(occupancy_grid)
     world_to_grid = np.linalg.inv(pose_matrix(occupancy_grid.info.origin))
     points = []
@@ -73,6 +76,8 @@ def rainbow_image(grid: NDArray[np.int8]) -> NDArray[np.uint8]:
     Returns:
         Image with rainbow visualization of the occupancy grid
     """
+    import cv2
+
     # Create a copy of the grid for visualization
     # Map values to 0-255 range for colormap
     height, width = grid.shape

@@ -19,7 +19,6 @@ import json
 from typing import Any
 import warnings
 
-import cv2
 from dimos_generated.sensor_msgs.msg import Image
 
 from dimos.core.resource import Resource
@@ -200,6 +199,8 @@ class VlModel(Captioner, Resource, Configurable):
         Returns:
             Tuple of (prepared_image, scale_factor). Scale factor is 1.0 if no resize.
         """
+        import cv2
+
         if self.config.auto_resize is not None:
             max_w, max_h = self.config.auto_resize
             if max_w <= 0 or max_h <= 0:
@@ -265,6 +266,8 @@ class VlModel(Captioner, Resource, Configurable):
 
     def start(self) -> None:
         """Start the model by running a simple query (Resource interface)."""
+        import cv2
+
         try:
             pixels = cv2.imread(str(get_data("cafe-smol.jpg")))
             if pixels is None:

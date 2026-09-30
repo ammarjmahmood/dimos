@@ -28,7 +28,6 @@ import threading
 import time
 from typing import Any
 
-import cv2
 from dimos_generated.sensor_msgs.msg import Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
@@ -132,6 +131,8 @@ class CameraMuxModule(Module):
     def _composite(self) -> Image | None:
         """Selected frames → one even-sized Image; None on any error (a raise
         would kill the RxPY camera subscription)."""
+        import cv2
+
         with self._cam_lock:
             order = [c for c in self._cam_order if c in self._cam_selected]
             imgs = [self._cam_frames[c] for c in order if c in self._cam_frames]
@@ -186,6 +187,8 @@ class CameraMuxModule(Module):
     def _downscale(self, img: Image) -> Image:
         """Cap publish width at config.video_max_width (0 = off). Runs before
         _stamp so the strip's 16px cells stay decodable at the sent size."""
+        import cv2
+
         max_w = self.config.video_max_width
         if max_w <= 0 or image_view(img).ndim < 2:
             return img

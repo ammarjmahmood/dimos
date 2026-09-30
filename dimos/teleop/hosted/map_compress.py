@@ -27,7 +27,6 @@ import json
 import time
 from typing import Any
 
-import cv2
 from dimos_generated.geometry_msgs.msg import PoseStamped
 from dimos_generated.nav_msgs.msg import OccupancyGrid
 import numpy as np
@@ -80,6 +79,8 @@ class MapCompressModule(Module):
 
     def _on_costmap(self, grid: OccupancyGrid) -> None:
         """Throttle → coarsen → colorize → PNG → map_out (under the 32 KB cap)."""
+        import cv2
+
         now = time.monotonic()
         if now - self._last_map_pub < 1.0 / self.config.map_hz:
             return

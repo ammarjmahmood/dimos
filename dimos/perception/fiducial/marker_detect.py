@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import cv2
 from dimos_generated.geometry_msgs.msg import TransformStamped, Vector3
 from dimos_generated.sensor_msgs.msg import CameraInfo, Image
 from dimos_generated.std_msgs.msg import Header
@@ -53,6 +52,8 @@ def detect_markers_in_image(
     dist_coeffs: np.ndarray[Any, np.dtype[Any]] | None = None,
 ) -> list[Detection3DMarker]:
     """Detect markers in one image and return rich world-frame 3D detections."""
+    import cv2
+
     if marker_length_m <= 0:
         raise ValueError(f"marker_length_m must be > 0, got {marker_length_m}")
     if (

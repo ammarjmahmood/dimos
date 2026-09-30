@@ -14,6 +14,11 @@
 
 """Rerun presentation helpers kept separate from generated wire types."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from dimos_generated.foxglove_msgs.msg import CompressedVideo
 from dimos_generated.geometry_msgs.msg import PointStamped, PoseStamped
 from dimos_generated.nav_msgs.msg import OccupancyGrid, Odometry, Path
 from dimos_generated.sensor_msgs.msg import CameraInfo, CompressedImage, Image, PointCloud2
@@ -21,15 +26,19 @@ from dimos_generated.tf2_msgs.msg import TFMessage
 from dimos_generated.vision_msgs.msg import Detection3DArray
 import matplotlib
 import numpy as np
-import rerun as rr
 
 from dimos.msgs.image import image_to_jpeg, image_view
 from dimos.msgs.occupancy import grid_to_world, occupancy_view
 from dimos.msgs.pointcloud import pointcloud_rgb, pointcloud_xyz
 
+if TYPE_CHECKING:
+    import rerun as rr
+
 
 def tf_archetypes(message: TFMessage) -> list[tuple[str, rr.Transform3D]]:
     """Render named TF edges without embedding viewer behavior in messages."""
+    import rerun as rr
+
     result = []
     for edge in message.transforms:
         t, q = edge.transform.translation, edge.transform.rotation
@@ -49,6 +58,8 @@ def tf_archetypes(message: TFMessage) -> list[tuple[str, rr.Transform3D]]:
 
 def register_colormap_annotation(name: str = "turbo") -> None:
     """Register 256 class colors for clouds carrying colormap indices."""
+    import rerun as rr
+
     colors = (matplotlib.colormaps[name](np.linspace(0, 1, 256))[:, :3] * 255).astype(np.uint8)
     rr.log(
         "/",
@@ -66,6 +77,8 @@ def register_colormap_annotation(name: str = "turbo") -> None:
 
 def camera_pinhole(info: CameraInfo) -> rr.Pinhole:
     """Calibration attached to the camera's optical frame."""
+    import rerun as rr
+
     return rr.Pinhole(
         focal_length=[info.k[0], info.k[4]],
         principal_point=[info.k[2], info.k[5]],
@@ -78,6 +91,8 @@ def camera_pinhole(info: CameraInfo) -> rr.Pinhole:
 
 def image_archetype(message: Image | CompressedImage) -> rr.Image | rr.DepthImage | rr.EncodedImage:
     """Render ROS image encodings without adding methods to generated values."""
+    import rerun as rr
+
     if isinstance(message, CompressedImage):
         format_name = message.format.lower()
         if "jpeg" in format_name or "jpg" in format_name:
@@ -98,6 +113,8 @@ def image_archetype(message: Image | CompressedImage) -> rr.Image | rr.DepthImag
 
 def detection_boxes(message: Detection3DArray) -> rr.Boxes3D:
     """Render detection geometry and labels from generated values."""
+    import rerun as rr
+
     centers = []
     half_sizes = []
     rotations = []
@@ -127,6 +144,8 @@ def detection_boxes(message: Detection3DArray) -> rr.Boxes3D:
 
 def cloud_archetype(message: PointCloud2, *, voxel_size: float = 0.05) -> rr.Points3D:
     """Render finite XYZ points with packed RGB or an explicit height colormap."""
+    import rerun as rr
+
     points = pointcloud_xyz(message)
     colors = pointcloud_rgb(message)
     keep = np.isfinite(points).all(axis=1)
@@ -146,6 +165,8 @@ def navigation_archetype(
     message: PointStamped | PoseStamped | Odometry | Path,
 ) -> rr.Points3D | rr.Transform3D | rr.LineStrips3D:
     """Render generated navigation values in their declared parent frame."""
+    import rerun as rr
+
     if isinstance(message, PointStamped):
         p = message.point
         return rr.Points3D([[p.x, p.y, p.z]])
@@ -165,6 +186,8 @@ def navigation_archetype(
 
 def occupancy_mesh(message: OccupancyGrid) -> rr.Mesh3D:
     """Render an occupancy texture on the grid's fully transformed plane."""
+    import rerun as rr
+
     cells = occupancy_view(message)
     if cells.size == 0:
         return rr.Mesh3D(vertex_positions=[])
@@ -182,3 +205,20 @@ def occupancy_mesh(message: OccupancyGrid) -> rr.Mesh3D:
         vertex_texcoords=[[0, 1], [1, 1], [1, 0], [0, 0]],
         albedo_texture=np.ascontiguousarray(rgba[::-1]),
     )
+
+
+def video_archetype(message: CompressedVideo) -> rr.VideoStream:
+    """Log an encoded packet; inter-frame codecs require ordered packets from a keyframe."""
+    import rerun as rr
+
+    codecs = {
+        "h264": rr.VideoCodec.H264,
+        "h265": rr.VideoCodec.H265,
+        "av1": rr.VideoCodec.AV1,
+        "vp8": rr.VideoCodec.VP8,
+        "vp9": rr.VideoCodec.VP9,
+    }
+    codec = codecs.get(message.format.lower())
+    if codec is None:
+        raise ValueError(f"no rerun VideoCodec for format {message.format!r}")
+    return rr.VideoStream(codec, sample=bytes(message.data))

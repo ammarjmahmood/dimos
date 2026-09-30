@@ -24,6 +24,8 @@ from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from numpy.typing import NDArray
 
+from dimos.msgs.time import to_nanoseconds
+
 _FIELD_KINDS = {1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4", 7: "f4", 8: "f8"}
 
 
@@ -151,3 +153,39 @@ def pointcloud_rgb(message: PointCloud2) -> NDArray[np.uint8] | None:
         raise ValueError("packed point cloud color must be a scalar FLOAT32 or UINT32 field")
     packed = field.view(np.dtype(">u4" if message.is_bigendian else "<u4")).ravel()
     return np.stack([(packed >> shift) & 255 for shift in (16, 8, 0)], axis=-1).astype(np.uint8)
+
+
+def concatenate_clouds(first: PointCloud2, second: PointCloud2) -> PointCloud2:
+    """Join compatible point records, preserving fields, endian, and point padding.
+
+    Row padding is removed. The first frame and newest exact source stamp survive.
+    Empty inputs are identities; differing nonempty frames/layouts are rejected.
+    """
+    pointcloud_view(first)
+    pointcloud_view(second)
+    if not first.width * first.height:
+        return PointCloud2.decode(second.encode())
+    if not second.width * second.height:
+        return PointCloud2.decode(first.encode())
+    if first.header.frame_id != second.header.frame_id:
+        raise ValueError("cannot concatenate point clouds in different frames")
+    if (
+        first.fields != second.fields
+        or first.point_step != second.point_step
+        or first.is_bigendian != second.is_bigendian
+    ):
+        raise ValueError("cannot concatenate point clouds with different record layouts")
+    a = select_points(first, np.ones(first.width * first.height, dtype=np.bool_))
+    b = select_points(second, np.ones(second.width * second.height, dtype=np.bool_))
+    stamp = max((first.header.stamp, second.header.stamp), key=to_nanoseconds)
+    return PointCloud2(
+        header=Header(frame_id=first.header.frame_id, stamp=stamp),
+        height=1,
+        width=a.width + b.width,
+        fields=first.fields,
+        is_bigendian=first.is_bigendian,
+        point_step=first.point_step,
+        row_step=a.row_step + b.row_step,
+        data=bytes(a.data) + bytes(b.data),
+        is_dense=first.is_dense and second.is_dense,
+    )
