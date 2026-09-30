@@ -16,10 +16,10 @@
 //! Anything calibrated per pixel to the recent lidar scans (see the depth2depth crate).
 //!
 //! Images arrive faster than the model runs, so a worker thread runs it on the newest frame
-//! whose transform is known (see `next_frame`) while a second thread calibrates the previous
-//! frame on the CPU. Frames and lidar scans both wait up to `max_tf_lag_s` for odometry, which
-//! can publish a pose well after its scan. Scans are kept for `lidar_history_s` in the world
-//! frame, so the anchors include ground the lidar saw a moment ago and the camera sees now.
+//! whose transform is known while a second thread calibrates the previous frame on the CPU.
+//! Frames and lidar scans wait up to `max_tf_lag_s` for their pose. Scans are kept for
+//! `lidar_history_s` in the world frame, so the anchors include ground the lidar saw a moment
+//! ago and the camera sees now.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
@@ -41,10 +41,6 @@ use crate::undistort::{Lens, UndistortMap};
 const TIMING_REPORT_EVERY: Duration = Duration::from_secs(5);
 /// How often the worker looks again for a frame whose transform has arrived.
 const TF_POLL: Duration = Duration::from_millis(20);
-/// Frames that become known together are run this far apart (in stamp time)...
-const FRAME_SPACING_S: f64 = 0.05;
-/// ...while that keeps within this of the newest known frame.
-const MAX_BACKLOG_S: f64 = 0.3;
 /// Scans up to this far after a frame still anchor it...
 const SCAN_LEAD_S: f64 = 0.5;
 /// ...and history is kept this far past `lidar_history_s`, since frames run behind the newest scan.
@@ -85,7 +81,7 @@ pub struct Config {
     #[validate(range(min = 0.0, max = 5.0))]
     tf_tolerance_s: f64,
     /// Frames and scans wait this long for their transform before they are dropped.
-    #[validate(range(min = 0.0, max = 30.0))]
+    #[validate(range(min = 0.0, max = 2.0))]
     max_tf_lag_s: f64,
     /// Calibration, see `depth2depth::CalibrationConfig`.
     #[validate(range(min = 1.0, max = 1000.0))]
@@ -263,7 +259,6 @@ impl Worker {
             }
         };
         let mut undistort: Option<(CameraInfo, usize, Arc<UndistortMap>)> = None;
-        let mut last_stamp = f64::NEG_INFINITY;
         loop {
             if let Err(RecvTimeoutError::Disconnected) = woken.recv_timeout(TF_POLL) {
                 return;
@@ -276,10 +271,9 @@ impl Worker {
                 warn_throttled!(Duration::from_secs(5), "No CameraInfo yet, waiting.");
                 continue;
             };
-            let Some((image, frame_id, poses)) = self.next_frame(&info, last_stamp) else {
+            let Some((image, frame_id, poses)) = self.next_frame(&info) else {
                 continue;
             };
-            last_stamp = seconds(&image.header.stamp);
             let started = Instant::now();
             let Some((rgb, width, height)) = decode_rgb(&image, cfg.decode_scale as usize) else {
                 warn_throttled!(Duration::from_secs(5), format = %image.format, "Could not decode a frame, skipped it.");
@@ -287,7 +281,11 @@ impl Worker {
             };
             let decoded = Instant::now();
             if !undistort.as_ref().is_some_and(|(held, held_width, _)| {
-                held.K == info.K && held.D == info.D && *held_width == width
+                held.K == info.K
+                    && held.D == info.D
+                    && held.distortion_model == info.distortion_model
+                    && held.width == info.width
+                    && *held_width == width
             }) {
                 let scale = if info.width > 0 {
                     width as f64 / info.width as f64
@@ -297,7 +295,8 @@ impl Worker {
                 let Some(lens) = Lens::from_info(&info, scale) else {
                     warn_throttled!(
                         Duration::from_secs(5),
-                        "CameraInfo has no usable intrinsics, skipped a frame."
+                        model = %info.distortion_model,
+                        "CameraInfo has no usable intrinsics or an unsupported distortion model, skipped a frame."
                     );
                     continue;
                 };
@@ -441,38 +440,19 @@ impl Worker {
         history.retain(|scan| scan.stamp >= newest - cfg.lidar_history_s - HISTORY_MARGIN_S);
     }
 
-    /// The next frame to run: normally the newest whose transforms are known. When a late odometry message
-    /// makes several known at once, they are taken in order, `FRAME_SPACING_S` apart, as long as that keeps
-    /// within `MAX_BACKLOG_S` of the newest. The chosen frame and every older one leave the queue.
-    fn next_frame(
-        &self,
-        info: &CameraInfo,
-        last_stamp: f64,
-    ) -> Option<(CompressedImage, String, Poses)> {
+    /// The newest frame whose transforms are known; it and every older frame leave the queue.
+    fn next_frame(&self, info: &CameraInfo) -> Option<(CompressedImage, String, Poses)> {
         let mut frames = self.shared.frames.lock().unwrap();
-        let resolve = |image: &CompressedImage| {
-            let frame_id = resolve_frame_id(
-                &self.config.frame_id,
-                &info.header.frame_id,
-                &image.header.frame_id,
-            );
-            let poses = self.poses(frame_id, seconds(&image.header.stamp))?;
-            Some((frame_id.to_string(), poses))
-        };
-        let (newest, resolved) = frames
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, image)| Some((i, resolve(image)?)))?;
-        let target = (last_stamp + FRAME_SPACING_S)
-            .max(seconds(&frames[newest].header.stamp) - MAX_BACKLOG_S);
-        let (index, (frame_id, poses)) = frames
-            .iter()
-            .enumerate()
-            .take(newest)
-            .filter(|(_, image)| seconds(&image.header.stamp) >= target)
-            .find_map(|(i, image)| Some((i, resolve(image)?)))
-            .unwrap_or((newest, resolved));
+        let (index, (frame_id, poses)) =
+            frames.iter().enumerate().rev().find_map(|(i, image)| {
+                let frame_id = resolve_frame_id(
+                    &self.config.frame_id,
+                    &info.header.frame_id,
+                    &image.header.frame_id,
+                );
+                let poses = self.poses(frame_id, seconds(&image.header.stamp))?;
+                Some((i, (frame_id.to_string(), poses)))
+            })?;
         let image = frames.drain(..=index).next_back()?;
         Some((image, frame_id, poses))
     }
