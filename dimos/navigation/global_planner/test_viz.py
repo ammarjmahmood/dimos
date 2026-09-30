@@ -20,6 +20,7 @@ import rerun as rr
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.global_planner import viz
 
 
@@ -38,6 +39,19 @@ def test_empty_path_keeps_the_last_one_drawn() -> None:
     np.testing.assert_allclose(
         path.strips.as_arrow_array().to_pylist(), [[[1, 0, lift], [2, 0, lift]]], atol=1e-6
     )
+
+
+def test_seed_regions_land_on_their_own_entities() -> None:
+    near = PointCloud2.from_numpy(np.array([[1.0, 1.0, 0.0], [1.2, 1.0, 0.0]], dtype=np.float32))
+    far = PointCloud2.from_numpy(np.array([[5.0, 5.0, 0.0]], dtype=np.float32))
+    empty = PointCloud2.from_numpy(np.zeros((0, 3), dtype=np.float32))
+    (near_path, _), (far_path, _) = (
+        viz.render_seed_region(near, 0.1)[0],
+        viz.render_seed_region(far, 0.1)[0],
+    )
+    assert near_path.startswith("world/seed_map/") and far_path.startswith("world/seed_map/")
+    assert near_path != far_path
+    assert viz.render_seed_region(empty, 0.1) is None
 
 
 def test_bridge_config_pickles_for_the_workers() -> None:

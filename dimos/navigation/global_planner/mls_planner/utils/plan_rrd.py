@@ -15,8 +15,8 @@
 """Replay a lidar .db through RayTraceMap and the MLS planner into rerun.
 
 Pass one or more --config clearance,buffer,weight to overlay each as a colored path.
-A loaded_map stream in the recording seeds the mapper at its timestamp and each
-planner then ingests the full map tile by tile, one tile per frame.
+A loaded_map stream in the recording seeds the mapper at its timestamp, one region
+per frame, and each planner ingests every region as it lands.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import numpy as np
 from numpy.typing import NDArray
 import typer
 
-from dimos.mapping.ray_tracing.module import TF_MATCH_TOLERANCE_S
+from dimos.mapping.ray_tracing.module import TF_MATCH_TOLERANCE_S, RayTracingVoxelMapConfig
 from dimos.mapping.ray_tracing.transformer import RayTraceMap, pose_from_tf
 from dimos.mapping.ray_tracing.utils.loaded_map import (
     LOADED_MAP_STREAM,
@@ -45,7 +45,6 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
 from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
 from dimos.navigation.global_planner.mls_planner.mls_planner import MLSPlanner
-from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNativeConfig
 from dimos.navigation.global_planner.mls_planner.viz import graph_edges, graph_nodes, surface_points
 from dimos.navigation.global_planner.viz import (
     PATH_COLOR,
@@ -108,7 +107,7 @@ SIZE_SERIES = [
     ("nodes", "4_nodes", "nodes", TURBO_BLUE),
 ]
 # Logged only on seeded runs.
-TILES_LEFT_SERIES = "metrics/size/5_tiles"
+REGIONS_LEFT_SERIES = "metrics/size/5_regions"
 
 
 class LocalCrop(NamedTuple):
@@ -324,19 +323,28 @@ def _init_recording(db_path: FsPath, out: FsPath | None, live: bool, crop: Local
             )
 
 
-def _seed(
+def _start_seed(
     ray: RayTraceMap,
-    planners: list[MLSPlanner],
     seed_pts: NDArray[np.float32],
     start: tuple[float, float, float],
+    region_m: float,
 ) -> int:
-    """Seed the mapper and start the planners' tiled load. Returns the most tiles left."""
-    created = ray.mapper.seed_points(seed_pts)
-    full = ray.mapper.full_map()
-    tiles_left = max(p.start_full_map_load(full, (start[0], start[1])) for p in planners)
+    """Partition the premap for a region-by-region seed. Returns the region count."""
+    regions = ray.mapper.start_seed(seed_pts, start, region_m)
     log_loaded_map(seed_pts)
-    print(f"\nseeded {created} voxels, loading {tiles_left} tiles")
-    return tiles_left
+    print(f"\nseeding {len(seed_pts)} premap points in {regions} regions")
+    return regions
+
+
+def _seed_next_region(ray: RayTraceMap, planners: list[MLSPlanner]) -> bool:
+    """Seed one region into the mapper and hand it to every planner, as the modules do."""
+    region = ray.mapper.seed_next_region()
+    if region is None:
+        return False
+    (cx, cy, radius, z_min, z_max), points = region
+    for p in planners:
+        p.update_seed_region(points, (cx, cy), radius, z_min, z_max)
+    return True
 
 
 def _build_planners(
@@ -348,7 +356,6 @@ def _build_planners(
     node_spacing: float,
     step_height: float,
     step_penalty_weight: float,
-    full_map_tile_m: float,
 ) -> list[tuple[str, tuple[int, int, int], MLSPlanner]]:
     planners: list[tuple[str, tuple[int, int, int], MLSPlanner]] = []
     for i, (clr, buf, wgt) in enumerate(configs):
@@ -363,7 +370,6 @@ def _build_planners(
             wall_buffer_weight=wgt,
             step_threshold_m=step_height,
             step_penalty_weight=step_penalty_weight,
-            full_map_tile_m=full_map_tile_m,
         )
         color = PATH_PALETTE[i % len(PATH_PALETTE)]
         label = f"cfg{i}_c{clr:g}_b{buf:g}_w{wgt:g}"
@@ -514,10 +520,10 @@ def main(
         "--loaded-map-stream",
         help="Stream holding a map cloud to seed at its timestamp, placed by tf, when present",
     ),
-    tile_m: float = typer.Option(
-        MLSPlannerNativeConfig.model_fields["full_map_tile_m"].default,
-        "--tile-m",
-        help="Tile grid spacing (m) for loading the seeded map into the planner",
+    region_m: float = typer.Option(
+        RayTracingVoxelMapConfig.model_fields["seed_region_m"].default,
+        "--region-m",
+        help="Region size (m) the seeded map is handed to the planner in",
     ),
     live: bool = typer.Option(
         False, "--live", help="Also spawn the rerun viewer when --out is set"
@@ -594,11 +600,11 @@ def main(
 
         loaded_map = first_loaded_map(store, loaded_map_stream)
         seeded_run = loaded_map is not None
-        tiles_left = 0
+        regions_left = 0
         if loaded_map is not None:
             rr.log(
-                TILES_LEFT_SERIES,
-                rr.SeriesLines(colors=[[255, 255, 255]], names=["tiles_left"]),
+                REGIONS_LEFT_SERIES,
+                rr.SeriesLines(colors=[[255, 255, 255]], names=["regions_left"]),
                 static=True,
             )
             print(f"loaded_map at ts={loaded_map.ts:.3f}; seeding when reached")
@@ -614,7 +620,6 @@ def main(
             node_spacing=node_spacing,
             step_height=step_height,
             step_penalty_weight=step_penalty_weight,
-            full_map_tile_m=tile_m,
         )
 
         rr.log("world/goal", goal_point(goal), static=True)
@@ -662,14 +667,15 @@ def main(
                 )
                 if loaded_map is not None and ray_obs.ts >= loaded_map.ts:
                     seed_pts = place_loaded_map(loaded_map, tf_lookup, world_frame, ray_obs.ts)
-                    tiles_left = _seed(ray, [p for _, _, p in planners], seed_pts, start)
+                    regions_left = _start_seed(ray, seed_pts, start, region_m)
                     loaded_map = None
-                elif tiles_left:
-                    tiles_left = max(p.apply_full_map_tile() or 0 for _, _, p in planners)
-                    if tiles_left == 0:
-                        print("\nfull map load finished")
+                elif regions_left:
+                    if _seed_next_region(ray, [p for _, _, p in planners]):
+                        regions_left -= 1
+                    if regions_left == 0:
+                        print("\nseed finished")
                 if seeded_run:
-                    rr.log(TILES_LEFT_SERIES, rr.Scalars(float(tiles_left)))
+                    rr.log(REGIONS_LEFT_SERIES, rr.Scalars(float(regions_left)))
                 _log_odometry(ray_obs.pose_tuple, ray_obs.ts, sensor_trail, base)
                 frame += 1
                 print(

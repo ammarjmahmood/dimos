@@ -82,8 +82,26 @@ class VoxelRayMapper:
         """Return the centers of all healthy voxels as (M, 3) float32."""
         ...
 
-    def full_map(self) -> NDArray[np.float32]:
-        """Return the support-gated snapshot of the whole map as (M, 3) float32."""
+    def start_seed(
+        self,
+        points: NDArray[np.float32],
+        origin: tuple[float, float, float],
+        region_m: float,
+    ) -> int:
+        """Partition a world-frame map cloud into regions nearest origin first.
+
+        Points are (N, 3) float32. Returns the region count.
+        """
+        ...
+
+    def seed_next_region(
+        self,
+    ) -> tuple[tuple[float, float, float, float, float], NDArray[np.float32]] | None:
+        """Seed the next pending region and return it as the map now holds it.
+
+        The tuple is (cx, cy, radius, z_min, z_max) with the support-gated
+        (M, 3) float32 points inside. None once every region has landed.
+        """
         ...
 
     def global_map_normals(self) -> tuple[NDArray[np.float32], NDArray[np.float32]]:

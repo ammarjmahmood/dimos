@@ -19,7 +19,9 @@ use pyo3::prelude::*;
 use validator::Validate;
 
 use dimos_voxel_ray_tracing::mapper::{Mapper, Pose};
-use dimos_voxel_ray_tracing::voxel_ray_tracer::{iter_global_normals, Config, LocalBounds};
+use dimos_voxel_ray_tracing::voxel_ray_tracer::{
+    iter_global_normals, partition_seed, Config, LocalBounds, SeedPartition,
+};
 
 fn extract_tuples(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<(f32, f32, f32)>> {
     let arr: PyReadonlyArray2<'_, f32> = arr.extract().map_err(|_| {
@@ -78,7 +80,12 @@ fn flat_to_array(py: Python<'_>, points: Vec<f32>) -> Bound<'_, PyArray2<f32>> {
 #[pyclass]
 pub struct VoxelRayMapper {
     mapper: Mapper,
+    // A region-by-region seed in progress, as the module applies one.
+    seed: Option<(SeedPartition, usize)>,
 }
+
+/// A seeded region for Python: (cx, cy, radius, z_min, z_max) and its points.
+type SeededRegion<'py> = ((f32, f32, f32, f32, f32), Bound<'py, PyArray2<f32>>);
 
 #[pymethods]
 impl VoxelRayMapper {
@@ -137,12 +144,14 @@ impl VoxelRayMapper {
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
             worker_threads,
+            seed_region_m: 4.0,
         };
         config
             .validate()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self {
             mapper: Mapper::new(config),
+            seed: None,
         })
     }
 
@@ -213,11 +222,46 @@ impl VoxelRayMapper {
         flat_to_array(py, points)
     }
 
-    /// Support-gated snapshot of the whole map as (M, 3) float32.
-    fn full_map<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
-        let mapper = &self.mapper;
-        let points = py.allow_threads(|| mapper.full_points());
-        flat_to_array(py, points)
+    /// Partition a world-frame map cloud into `region_m` regions nearest
+    /// `origin` first, ready for seed_next_region. Returns the region count.
+    fn start_seed(
+        &mut self,
+        py: Python<'_>,
+        points: &Bound<'_, PyAny>,
+        origin: (f32, f32, f32),
+        region_m: f32,
+    ) -> PyResult<usize> {
+        let pts = extract_tuples(points, "points")?;
+        let voxel_size = self.mapper.config().voxel_size;
+        let part = py.allow_threads(|| partition_seed(&pts, voxel_size, origin, region_m));
+        self.mapper.reserve_voxels(part.voxels);
+        let regions = part.regions.len();
+        self.seed = Some((part, 0));
+        Ok(regions)
+    }
+
+    /// Seed the next pending region and return it as the map now holds it:
+    /// (cx, cy, radius, z_min, z_max) and the support-gated (M, 3) float32
+    /// points inside. None once every region has landed.
+    fn seed_next_region<'py>(&mut self, py: Python<'py>) -> Option<SeededRegion<'py>> {
+        let (part, next) = self.seed.as_mut()?;
+        let Some(region) = part.regions.get(*next) else {
+            self.seed = None;
+            return None;
+        };
+        *next += 1;
+        let mapper = &mut self.mapper;
+        let points = py.allow_threads(|| {
+            for tile in &region.tiles {
+                mapper.seed_tile(tile);
+            }
+            mapper.local_points(&region.cylinder.bounds())
+        });
+        let c = region.cylinder;
+        Some((
+            (c.cx, c.cy, c.radius, c.z_min, c.z_max),
+            flat_to_array(py, points),
+        ))
     }
 
     /// Healthy voxel centers and their surface normals, both (M, 3) float32 in

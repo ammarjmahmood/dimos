@@ -57,7 +57,7 @@ _nav_rerun_config = {
     "static": nav_static(ROBOT_LENGTH, ROBOT_WIDTH, ROBOT_HEIGHT, wall_clearance_m),
     "visual_override": {
         **rerun_config["visual_override"],
-        # The raw premap is millions of points. The seeded voxels are full_map.
+        # The raw premap is millions of points. The seeded voxels arrive on seed_map.
         "world/loaded_map": None,
         "world/camera_info": None,
         "world/color_image": None,

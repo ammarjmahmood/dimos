@@ -179,20 +179,6 @@ impl Mapper {
         })
     }
 
-    /// Support-gated healthy voxel centers over the whole map, plus live
-    /// voxels, flat triples.
-    pub fn full_points(&self) -> Vec<f32> {
-        self.pool.install(|| {
-            emit_points(
-                &self.map,
-                self.config.voxel_size,
-                None,
-                self.config.support_min,
-                &self.live.coarse,
-            )
-        })
-    }
-
     /// Support-gated healthy voxel centers within `bounds`, plus live voxels,
     /// flat triples.
     pub fn local_points(&self, bounds: &LocalBounds) -> Vec<f32> {
@@ -304,6 +290,7 @@ mod tests {
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
             worker_threads: 4,
+            seed_region_m: 4.0,
         }
     }
 
@@ -453,7 +440,7 @@ mod tests {
 
     /// full_points applies the support gate. global_points stays unfiltered.
     #[test]
-    fn full_points_apply_support_gate() {
+    fn local_points_apply_support_gate() {
         let cfg = Config {
             support_min: 3,
             ..config()
@@ -468,7 +455,19 @@ mod tests {
         cloud.push((20.5, 20.5, 0.5));
         assert_eq!(mapper.seed_points(&cloud), 10);
 
-        assert_eq!(mapper.full_points().len(), 27, "isolated seed gated out");
+        let everywhere = Cylinder {
+            cx: 0.0,
+            cy: 0.0,
+            radius: 100.0,
+            z_min: -1.0,
+            z_max: 10.0,
+        }
+        .bounds();
+        assert_eq!(
+            mapper.local_points(&everywhere).len(),
+            27,
+            "isolated seed gated out"
+        );
         assert_eq!(mapper.global_points().len(), 30);
     }
 

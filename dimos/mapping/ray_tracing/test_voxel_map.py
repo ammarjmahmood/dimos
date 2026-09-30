@@ -123,18 +123,25 @@ def test_seed_points_creates_only_absent_voxels() -> None:
     assert mapper.seed_points(cloud) == 0
 
 
-def test_full_map_drops_unsupported_voxels() -> None:
+def test_seed_regions_land_nearest_first_and_gate_support() -> None:
     mapper = VoxelRayMapper(voxel_size=1.0, max_range=100.0, min_health=0, support_min=4)
     coords = np.arange(5, dtype=np.float32) + 0.5
     slab = np.array([(x, y, 0.5) for x in coords for y in coords], dtype=np.float32)
-    lone = np.array([[20.5, 20.5, 0.5]], dtype=np.float32)
-    mapper.seed_points(np.vstack([slab, lone]))
+    lone = np.array([[40.5, 40.5, 0.5]], dtype=np.float32)
 
-    full = mapper.full_map()
-    assert full.shape[1] == 3
-    assert full.dtype == np.float32
-    assert any(np.allclose(p, [2.5, 2.5, 0.5]) for p in full)
-    assert not any(np.allclose(p, lone[0]) for p in full)
+    assert mapper.start_seed(np.vstack([slab, lone]), (40.0, 40.0, 0.0), 16.0) == 2
+    (cx, cy, radius, z_min, z_max), points = mapper.seed_next_region()
+    assert (cx, cy) == (40.0, 40.0), "the origin's region lands first"
+    assert z_min < 0.5 < z_max
+    assert points.shape == (0, 3), "an isolated voxel has no support"
+
+    (cx, cy, radius, _, _), points = mapper.seed_next_region()
+    assert (cx, cy) == (8.0, 8.0)
+    assert radius > 8.0
+    assert points.dtype == np.float32
+    assert any(np.allclose(p, [2.5, 2.5, 0.5]) for p in points)
+    assert mapper.seed_next_region() is None
+    assert mapper.voxel_count() == 26
 
 
 def test_add_frame_world_registers_at_world_coordinates() -> None:

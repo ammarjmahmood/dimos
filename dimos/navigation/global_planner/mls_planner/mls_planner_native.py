@@ -53,8 +53,6 @@ class MLSPlannerNativeConfig(NativeModuleConfig):
     step_threshold_m: float = 0.16
     step_penalty_weight: float = 4.0
     goal_tolerance: float = 0.3
-    # full_map load tile spacing, small enough to apply one between live updates.
-    full_map_tile_m: float = 4.0
     viz_publish_hz: float = 2.0
     # Worker threads for parallel planner work.
     worker_threads: int = 4
@@ -72,9 +70,10 @@ class MLSPlannerNative(NativeModule, spec.GlobalPlanner):
     global_map: In[PointCloud2]
     local_map: In[PointCloud2]
     region_bounds: In[PoseStamped]
-    # Whole-map snapshot loaded tile by tile through the region pipeline,
-    # between live updates. Live updates keep priority.
-    full_map: In[PointCloud2]
+    # A seeded map's regions as RayTracingVoxelMap lands them, applied through
+    # the region pipeline between live updates. Live updates keep priority.
+    seed_map: In[PointCloud2]
+    seed_bounds: In[PoseStamped]
     goal: In[PointStamped]
     tf: In[TFMessage]
 

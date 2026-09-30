@@ -101,6 +101,9 @@ pub struct Config {
     /// Worker threads for parallel map work.
     #[validate(range(min = 1))]
     pub worker_threads: u32,
+    /// Edge of the square regions a seed load is published in.
+    #[validate(range(exclusive_min = 0.0))]
+    pub seed_region_m: f32,
 }
 
 fn validate_config(cfg: &Config) -> Result<(), ValidationError> {
@@ -1034,19 +1037,39 @@ const SEED_HEALTH: VoxelHealth = 1;
 /// One tile of a seed load: the world-frame points falling in one chunk.
 pub type SeedTile = Vec<(f32, f32, f32)>;
 
+/// The chunk tiles under one square of the seed region grid, with the
+/// cylinder that covers them. A consumer fed region by region gets the map
+/// in pieces it can process between live updates.
+pub struct SeedRegion {
+    pub cylinder: Cylinder,
+    pub tiles: Vec<SeedTile>,
+}
+
 /// A cloud split for seeding, with the distinct voxels it covers so the map
 /// can be sized once instead of rehashing mid-load.
 pub struct SeedPartition {
-    pub tiles: Vec<SeedTile>,
+    pub regions: Vec<SeedRegion>,
     pub voxels: usize,
 }
 
-/// Split a world-frame cloud into one tile per chunk, nearest `origin` first,
-/// so a load applied tile by tile brings up the sensor's surroundings first.
+impl SeedPartition {
+    pub fn tiles(&self) -> impl Iterator<Item = &SeedTile> {
+        self.regions.iter().flat_map(|r| r.tiles.iter())
+    }
+
+    pub fn tile_count(&self) -> usize {
+        self.regions.iter().map(|r| r.tiles.len()).sum()
+    }
+}
+
+/// Split a world-frame cloud into `region_m` squares of chunk tiles, nearest
+/// `origin` first at both levels, so a load applied tile by tile brings up the
+/// sensor's surroundings first.
 pub fn partition_seed(
     points: &[(f32, f32, f32)],
     voxel_size: f32,
     origin: (f32, f32, f32),
+    region_m: f32,
 ) -> SeedPartition {
     let inv = 1.0 / voxel_size;
     let mut tiles: AHashMap<ChunkKey, SeedTile> = AHashMap::new();
@@ -1060,19 +1083,84 @@ pub fn partition_seed(
         tiles.entry(chunk_of(key)).or_default().push((x, y, z));
     }
     let edge = CHUNK_SIZE as f32 * voxel_size;
-    let mut ordered: Vec<(f32, SeedTile)> = tiles
+    let mut ordered: Vec<(f32, ChunkKey, SeedTile)> = tiles
         .into_iter()
         .map(|(chunk, tile)| {
             let dx = (chunk.0 as f32 + 0.5) * edge - origin.0;
             let dy = (chunk.1 as f32 + 0.5) * edge - origin.1;
             let dz = (chunk.2 as f32 + 0.5) * edge - origin.2;
-            (dx * dx + dy * dy + dz * dz, tile)
+            (dx * dx + dy * dy + dz * dz, chunk, tile)
         })
         .collect();
     ordered.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    // Group chunks by the region grid cell their center falls in, then size
+    // each region's cylinder to the chunk boxes it holds, so a chunk larger
+    // than the grid still lies inside its region.
+    let cell_m = region_m.max(edge);
+    let mut regions: AHashMap<(i32, i32), (Aabb, Vec<SeedTile>)> = AHashMap::new();
+    let mut order: Vec<(i32, i32)> = Vec::new();
+    for (_, chunk, tile) in ordered {
+        let lo = (
+            chunk.0 as f32 * edge,
+            chunk.1 as f32 * edge,
+            chunk.2 as f32 * edge,
+        );
+        let hi = (lo.0 + edge, lo.1 + edge, lo.2 + edge);
+        let cell = (
+            ((lo.0 + edge * 0.5) / cell_m).floor() as i32,
+            ((lo.1 + edge * 0.5) / cell_m).floor() as i32,
+        );
+        let (aabb, tiles) = regions.entry(cell).or_insert_with(|| {
+            order.push(cell);
+            (Aabb { lo, hi }, Vec::new())
+        });
+        aabb.lo = (
+            aabb.lo.0.min(lo.0),
+            aabb.lo.1.min(lo.1),
+            aabb.lo.2.min(lo.2),
+        );
+        aabb.hi = (
+            aabb.hi.0.max(hi.0),
+            aabb.hi.1.max(hi.1),
+            aabb.hi.2.max(hi.2),
+        );
+        tiles.push(tile);
+    }
     SeedPartition {
-        tiles: ordered.into_iter().map(|(_, tile)| tile).collect(),
+        regions: order
+            .into_iter()
+            .map(|cell| {
+                let (aabb, tiles) = regions.remove(&cell).expect("region recorded in order");
+                SeedRegion {
+                    cylinder: aabb.covering_cylinder(voxel_size),
+                    tiles,
+                }
+            })
+            .collect(),
         voxels: keys.len(),
+    }
+}
+
+/// An axis-aligned box of world-frame chunk extents.
+struct Aabb {
+    lo: (f32, f32, f32),
+    hi: (f32, f32, f32),
+}
+
+impl Aabb {
+    /// The cylinder on the box's xy center that reaches its corners with a
+    /// voxel of margin all round.
+    fn covering_cylinder(&self, margin: f32) -> Cylinder {
+        let hx = (self.hi.0 - self.lo.0) * 0.5;
+        let hy = (self.hi.1 - self.lo.1) * 0.5;
+        Cylinder {
+            cx: self.lo.0 + hx,
+            cy: self.lo.1 + hy,
+            radius: hx.hypot(hy) + margin,
+            z_min: self.lo.2 - margin,
+            z_max: self.hi.2 + margin,
+        }
     }
 }
 
@@ -1108,10 +1196,10 @@ pub fn seed_tile(
 /// Bulk-load a whole world-frame cloud in one call, tile by tile. Returns
 /// how many voxels were created.
 pub fn seed_points(map: &mut VoxelMap, points: &[(f32, f32, f32)], cfg: &Config) -> usize {
-    let part = partition_seed(points, cfg.voxel_size, (0.0, 0.0, 0.0));
+    let region_m = CHUNK_SIZE as f32 * cfg.voxel_size;
+    let part = partition_seed(points, cfg.voxel_size, (0.0, 0.0, 0.0), region_m);
     map.reserve(part.voxels);
-    part.tiles
-        .iter()
+    part.tiles()
         .map(|tile| seed_tile(map, tile, cfg).len())
         .sum()
 }

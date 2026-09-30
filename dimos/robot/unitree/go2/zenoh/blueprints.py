@@ -328,9 +328,9 @@ go2_dds_motion_pointlio = autoconnect(
 
 # The relocalizer matches the raycaster's local map against the premap, publishes the
 # odom -> map fix on tf and the placed premap on loaded_map, which the raycaster seeds
-# from and passes on to the planner as full_map. The republish covers a raycaster that
-# missed the one-shot loaded_map publish. The raw premap is millions of points, so the
-# view keeps the seeded voxels on full_map instead.
+# from and hands on to the planner region by region as seed_map. The republish covers a
+# raycaster that missed the one-shot loaded_map publish. The raw premap is millions of
+# points, so the view keeps the seeded voxels on seed_map instead.
 go2_dds_motion_pointlio_relocalization = autoconnect(
     go2_dds_motion_pointlio,
     vis_module(
@@ -366,7 +366,8 @@ go2_viewer = autoconnect(
                 "nodes",
                 "node_edges",
                 "surface_map",
-                "full_map",
+                "seed_map",
+                "seed_bounds",
                 "goal",
                 "way_point",
                 "goal_reached",

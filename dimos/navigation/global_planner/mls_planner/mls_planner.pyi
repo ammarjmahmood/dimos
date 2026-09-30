@@ -24,7 +24,6 @@ class MLSPlanner:
         voxel_size: float,
         robot_height: float,
         max_overhead_m: float = 2.0,
-        full_map_tile_m: float = 4.0,
         surface_closing_radius: float = 0.3,
         node_spacing_m: float = 1.0,
         wall_clearance_m: float = 0.1,
@@ -53,23 +52,17 @@ class MLSPlanner:
         """
         ...
 
-    def start_full_map_load(
+    def update_seed_region(
         self,
         points: NDArray[np.float32],
-        center: tuple[float, float],
-    ) -> int:
-        """Partition a whole-map cloud into full_map_tile_m tiles, nearest center first.
+        origin: tuple[float, float],
+        radius: float,
+        z_min: float,
+        z_max: float,
+    ) -> None:
+        """Apply one region of a seeded map through the region pipeline.
 
-        Replaces any pending tiles. Returns the tile count.
-        """
-        ...
-
-    def apply_full_map_tile(self) -> int | None:
-        """Apply the next pending tile through the region pipeline.
-
-        What a later update_region covered is left as it is. Returns how many
-        tiles remain, 0 once this one finished the load, or None when no load
-        is pending.
+        Points are (N, 3) float32. The z band is the premap's own, uncapped.
         """
         ...
 

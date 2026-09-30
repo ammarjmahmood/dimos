@@ -15,34 +15,43 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-fn tiles_for(
-    p: &Planner,
-    points: &[(f32, f32, f32)],
-    center: (f32, f32),
-    cfg: &Config,
-) -> Vec<MapTile> {
-    let part = partition_cloud(points, cfg.full_map_tile_m, cfg.voxel_size);
-    p.finish_partition(part, center, cfg)
-}
+type SeedRegions = Vec<(RegionBounds, Vec<(f32, f32, f32)>)>;
 
-fn load_full_map(p: &mut Planner, points: &[(f32, f32, f32)], center: (f32, f32), cfg: &Config) {
-    for tile in tiles_for(p, points, center, cfg) {
-        p.update_region(&tile.points, &tile.bounds, cfg);
+/// A world as the ray tracer hands a seeded map on: `s` meter squares,
+/// nearest `center` first, each region's cloud being every point of the map
+/// whose voxel center falls in the square's covering cylinder.
+fn seed_regions(points: &[(f32, f32, f32)], s: f32, center: (f32, f32), vs: f32) -> SeedRegions {
+    let mut cells: BTreeMap<(i32, i32), (f32, f32)> = BTreeMap::new();
+    for &(x, y, z) in points {
+        let cell = ((x / s).floor() as i32, (y / s).floor() as i32);
+        let band = cells.entry(cell).or_insert((z, z));
+        band.0 = band.0.min(z);
+        band.1 = band.1.max(z);
     }
+    let mut regions: SeedRegions = cells
+        .into_iter()
+        .map(|((cx, cy), (z_lo, z_hi))| {
+            let bounds = RegionBounds {
+                origin_x: (cx as f32 + 0.5) * s,
+                origin_y: (cy as f32 + 0.5) * s,
+                radius: s * std::f32::consts::FRAC_1_SQRT_2 + vs,
+                z_min: z_lo - vs,
+                z_max: z_hi + vs,
+            };
+            let cloud = slice(points, &bounds, vs);
+            (bounds, cloud)
+        })
+        .collect();
+    let dist = |b: &RegionBounds| (b.origin_x - center.0).powi(2) + (b.origin_y - center.1).powi(2);
+    regions.sort_by(|a, b| dist(&a.0).total_cmp(&dist(&b.0)));
+    regions
 }
 
-fn queue_load(
-    p: &mut Planner,
-    points: &[(f32, f32, f32)],
-    center: (f32, f32),
-    cfg: &Config,
-) -> usize {
-    let part = partition_cloud(points, cfg.full_map_tile_m, cfg.voxel_size);
-    p.start_load(part, center, &[], cfg)
-}
-
-fn finish_load(p: &mut Planner, cfg: &Config) {
-    while !matches!(p.apply_next_tile(cfg), LoadStep::Idle) {}
+/// Feed a world to the planner region by region, as a seed load arrives.
+fn load_by_regions(p: &mut Planner, points: &[(f32, f32, f32)], center: (f32, f32), cfg: &Config) {
+    for (bounds, cloud) in seed_regions(points, 2.0, center, cfg.voxel_size) {
+        p.update_region(&cloud, &bounds, cfg);
+    }
 }
 
 /// Slack for comparing regional and full-rebuild path lengths. Node
@@ -66,7 +75,6 @@ fn test_config() -> Config {
         step_threshold_m: 0.25,
         step_penalty_weight: 0.0,
         goal_tolerance: 0.3,
-        full_map_tile_m: 2.0,
         viz_publish_hz: 2.0,
         worker_threads: 4,
     }
@@ -807,33 +815,33 @@ fn step_penalty_diverts_path_around_ridge() {
     );
 }
 
-/// Loading a whole cloud tile by tile must build exactly what a full
+/// A seeded map fed region by region must build exactly what a full
 /// rebuild builds, and plan equivalently.
 #[test]
-fn full_map_load_matches_full_rebuild() {
+fn seed_regions_match_full_rebuild() {
     let cfg = test_config();
     let all = big_world();
 
     let mut full = Planner::new(cfg.worker_threads);
     full.update_global_map(&all, &cfg);
 
-    let mut loaded = Planner::new(cfg.worker_threads);
-    load_full_map(&mut loaded, &all, (0.5, 0.5), &cfg);
+    let mut seeded = Planner::new(cfg.worker_threads);
+    load_by_regions(&mut seeded, &all, (0.5, 0.5), &cfg);
 
-    assert_eq!(voxel_set(&loaded), voxel_set(&full), "voxel mismatch");
-    assert_eq!(surface_set(&loaded), surface_set(&full), "surface mismatch");
+    assert_eq!(voxel_set(&seeded), voxel_set(&full), "voxel mismatch");
+    assert_eq!(surface_set(&seeded), surface_set(&full), "surface mismatch");
     assert_eq!(
-        cell_edges(&loaded),
+        cell_edges(&seeded),
         cell_edges(&full),
         "cell edges mismatch"
     );
-    assert_plans_equivalent(&full, &loaded, &cfg);
+    assert_plans_equivalent(&full, &seeded, &cfg);
 }
 
-/// Tiles must claim points by voxel center, so an off-center cloud loads
-/// the same voxels a full rebuild quantizes.
+/// Regions claim points by voxel center, so an off-center cloud seeds the
+/// same voxels a full rebuild quantizes.
 #[test]
-fn full_map_load_matches_full_rebuild_off_center() {
+fn seed_regions_match_full_rebuild_off_center() {
     let cfg = test_config();
     let vs = cfg.voxel_size;
     let mut seed: u32 = 12345;
@@ -849,42 +857,17 @@ fn full_map_load_matches_full_rebuild_off_center() {
     let mut full = Planner::new(cfg.worker_threads);
     full.update_global_map(&all, &cfg);
 
-    let mut loaded = Planner::new(cfg.worker_threads);
-    load_full_map(&mut loaded, &all, (0.5, 0.5), &cfg);
+    let mut seeded = Planner::new(cfg.worker_threads);
+    load_by_regions(&mut seeded, &all, (0.5, 0.5), &cfg);
 
-    assert_eq!(voxel_set(&loaded), voxel_set(&full), "voxel mismatch");
-    assert_eq!(surface_set(&loaded), surface_set(&full), "surface mismatch");
+    assert_eq!(voxel_set(&seeded), voxel_set(&full), "voxel mismatch");
+    assert_eq!(surface_set(&seeded), surface_set(&full), "surface mismatch");
 }
 
-/// A load sweeps every voxel absent from the cloud, including stale
-/// geometry outside the cloud's xy extent and above its ceiling.
+/// Reseeding the same map is a no-op: nodes placed before it survive
+/// untouched.
 #[test]
-fn full_map_load_sweeps_absent_voxels() {
-    let cfg = test_config();
-    let all = big_world();
-
-    let mut junk = all.clone();
-    junk.push((15.05, 15.05, 0.05));
-    junk.push((2.05, 2.05, 5.05));
-    let mut p = Planner::new(cfg.worker_threads);
-    p.update_global_map(&junk, &cfg);
-
-    load_full_map(&mut p, &all, (0.5, 0.5), &cfg);
-
-    let mut clean = Planner::new(cfg.worker_threads);
-    clean.update_global_map(&all, &cfg);
-    assert_eq!(
-        voxel_set(&p),
-        voxel_set(&clean),
-        "stale voxels survived the load"
-    );
-    assert_eq!(surface_set(&p), surface_set(&clean));
-}
-
-/// Reloading the same cloud is a no-op: nodes placed before the load
-/// survive untouched.
-#[test]
-fn full_map_reload_leaves_graph_bit_identical() {
+fn reseeding_leaves_graph_bit_identical() {
     let cfg = test_config();
     let all = big_world();
     let mut p = Planner::new(cfg.worker_threads);
@@ -893,16 +876,16 @@ fn full_map_reload_leaves_graph_bit_identical() {
     let before_nodes = node_coords(&p);
     let before_edges = node_edge_pairs(&p);
 
-    load_full_map(&mut p, &all, (4.0, 4.0), &cfg);
+    load_by_regions(&mut p, &all, (4.0, 4.0), &cfg);
 
-    assert_eq!(cell_edges(&p), before_cells, "cells changed on reload");
-    assert_eq!(node_coords(&p), before_nodes, "nodes moved on reload");
-    assert_eq!(node_edge_pairs(&p), before_edges, "edges changed on reload");
+    assert_eq!(cell_edges(&p), before_cells, "cells changed on reseed");
+    assert_eq!(node_coords(&p), before_nodes, "nodes moved on reseed");
+    assert_eq!(node_edge_pairs(&p), before_edges, "edges changed on reseed");
 }
 
-/// Distant sticky nodes survive a load that carries a small local change.
+/// Distant sticky nodes survive a seed that carries a small local change.
 #[test]
-fn full_map_load_keeps_distant_nodes_sticky() {
+fn seed_regions_keep_distant_nodes_sticky() {
     let cfg = test_config();
     let all = big_world();
     let vs = cfg.voxel_size;
@@ -912,7 +895,7 @@ fn full_map_load_keeps_distant_nodes_sticky() {
 
     let mut changed = all.clone();
     changed.push((1.05, 1.05, 0.45));
-    load_full_map(&mut p, &changed, (1.0, 1.0), &cfg);
+    load_by_regions(&mut p, &changed, (1.0, 1.0), &cfg);
 
     let after = node_coords(&p);
     let far = |c: &VoxelKey| {
@@ -921,14 +904,14 @@ fn full_map_load_keeps_distant_nodes_sticky() {
         ((x - 1.0).powi(2) + (y - 1.0).powi(2)).sqrt() > 3.5
     };
     for c in before.iter().filter(|c| far(c)) {
-        assert!(after.contains(c), "distant node {c:?} moved on a load");
+        assert!(after.contains(c), "distant node {c:?} moved on a seed");
     }
 }
 
-/// The load takes its z band from the cloud, so geometry far above any
+/// A seed region's z band is the premap's own, so geometry far above any
 /// sensor overhead cap still lands.
 #[test]
-fn full_map_load_keeps_high_geometry() {
+fn seed_regions_keep_high_geometry() {
     let cfg = test_config();
     let vs = cfg.voxel_size;
     let half = vs * 0.5;
@@ -943,290 +926,43 @@ fn full_map_load_keeps_high_geometry() {
         }
     }
     let mut p = Planner::new(cfg.worker_threads);
-    load_full_map(&mut p, &all, (0.5, 0.5), &cfg);
+    load_by_regions(&mut p, &all, (0.5, 0.5), &cfg);
     assert!(
         p.voxel_map.contains(&(15, 15, 30)),
         "high platform truncated"
     );
 }
 
-/// Tiles come back nearest the given center first.
+/// A live update inside a seeded area, and a seed region over a live area,
+/// both end at the map's current state, so order between the two sources
+/// never leaves geometry the other saw removed.
 #[test]
-fn partition_orders_tiles_near_center_first() {
+fn live_and_seed_regions_converge_in_either_order() {
     let cfg = test_config();
+    let vs = cfg.voxel_size;
     let all = big_world();
-    let p = Planner::new(cfg.worker_threads);
-    let tiles = tiles_for(&p, &all, (0.0, 0.0), &cfg);
-    assert!(tiles.len() >= 4);
-    let d: Vec<f32> = tiles
-        .iter()
-        .map(|t| t.bounds.origin_x.powi(2) + t.bounds.origin_y.powi(2))
-        .collect();
-    assert!(
-        d.windows(2).all(|w| w[0] <= w[1]),
-        "tiles not sorted near-first: {d:?}"
-    );
-}
-
-fn cyl(x: f32, y: f32, r: f32) -> RegionBounds {
-    RegionBounds {
-        origin_x: x,
-        origin_y: y,
-        radius: r,
-        z_min: -1.0,
-        z_max: 1.0,
-    }
-}
-
-#[test]
-fn map_load_skips_only_tiles_inside_applied_regions() {
-    let cfg = test_config();
-    let mut p = Planner::new(cfg.worker_threads);
-    let tile = |x: f32| MapTile {
-        bounds: cyl(x, 0.0, 1.0),
-        points: Vec::new(),
-    };
-    p.load = Some(MapLoad::new(
-        vec![tile(0.0), tile(2.0), tile(4.0), tile(6.0)],
-        &[],
-    ));
-    assert!(matches!(
-        p.apply_next_tile(&cfg),
-        LoadStep::Applied { remaining: 3 }
-    ));
-
-    // A region grazing the second tile does not cover it, so it applies.
-    p.update_region(&[], &cyl(2.5, 0.0, 1.0), &cfg);
-    assert!(matches!(
-        p.apply_next_tile(&cfg),
-        LoadStep::Applied { remaining: 2 }
-    ));
-
-    // A region covering the third tile makes it stale, so the last applies.
-    p.update_region(&[], &cyl(4.0, 0.0, 1.5), &cfg);
-    assert!(matches!(p.apply_next_tile(&cfg), LoadStep::Finished { .. }));
-    assert!(!p.loading());
-    assert!(matches!(p.apply_next_tile(&cfg), LoadStep::Idle));
-}
-
-#[test]
-fn map_load_keeps_only_regions_no_other_covers() {
-    let mut load = MapLoad::new(Vec::new(), &[]);
-    load.region_applied(cyl(0.0, 0.0, 2.0));
-    load.region_applied(cyl(0.5, 0.0, 1.0));
-    assert_eq!(load.regions.len(), 1, "a covered region is dropped");
-    load.region_applied(cyl(0.0, 0.0, 5.0));
-    assert_eq!(
-        load.regions.len(),
-        1,
-        "a covering region replaces the one under it"
-    );
-    assert_eq!(load.regions[0].radius, 5.0);
-    load.region_applied(cyl(9.0, 0.0, 1.0));
-    assert_eq!(load.regions.len(), 2, "a disjoint region is kept");
-}
-
-/// A live region landing mid-load leaves nothing unloaded: the tiles it
-/// straddles still apply, so the map ends equal to the cloud.
-#[test]
-fn full_map_load_covers_around_a_live_region() {
-    let cfg = test_config();
-    let all = big_world();
-    let mut p = Planner::new(cfg.worker_threads);
-    queue_load(&mut p, &all, (4.0, 4.0), &cfg);
-    assert!(matches!(p.apply_next_tile(&cfg), LoadStep::Applied { .. }));
-
     let live = RegionBounds {
-        origin_x: 4.0,
-        origin_y: 4.0,
-        radius: 3.0,
-        z_min: -0.1,
-        z_max: 2.0,
-    };
-    p.update_region(&slice(&all, &live, cfg.voxel_size), &live, &cfg);
-    finish_load(&mut p, &cfg);
-    assert!(!p.loading());
-
-    let mut clean = Planner::new(cfg.worker_threads);
-    clean.update_global_map(&all, &cfg);
-    assert_eq!(
-        voxel_set(&p),
-        voxel_set(&clean),
-        "a tile straddling the live region went unloaded"
-    );
-    assert_eq!(surface_set(&p), surface_set(&clean));
-}
-
-/// big_world plus a 3x3 column box, 5 voxels tall, astride (4.0, 4.0).
-fn boxed_world() -> Vec<(f32, f32, f32)> {
-    let vs = 0.1_f32;
-    let half = vs * 0.5;
-    let mut pts = big_world();
-    for ix in 39..42 {
-        for iy in 39..42 {
-            for iz in 0..5 {
-                pts.push((
-                    ix as f32 * vs + half,
-                    iy as f32 * vs + half,
-                    iz as f32 * vs + half,
-                ));
-            }
-        }
-    }
-    pts
-}
-
-/// A live region straddling the 2 m tiles around (4.0, 4.0) without
-/// covering any of them.
-fn straddling_live() -> RegionBounds {
-    RegionBounds {
         origin_x: 4.0,
         origin_y: 4.0,
         radius: 1.5,
         z_min: -0.1,
         z_max: 2.0,
-    }
-}
-
-/// A tile only partly under a live region must not paste snapshot
-/// geometry back where the live update cleared it.
-#[test]
-fn tile_straddling_a_live_region_keeps_what_live_cleared() {
-    let cfg = test_config();
-    let vs = cfg.voxel_size;
-    let snapshot = boxed_world();
-    let cleared = big_world();
-
-    let mut p = Planner::new(cfg.worker_threads);
-    queue_load(&mut p, &snapshot, (0.5, 0.5), &cfg);
-    assert!(matches!(p.apply_next_tile(&cfg), LoadStep::Applied { .. }));
-
-    let live = straddling_live();
-    let tiles = &p.load.as_ref().expect("load pending").tiles;
-    assert!(tiles.iter().all(|t| !live.covers_xy(&t.bounds)));
-    assert!(tiles.iter().any(|t| live.intersects(&t.bounds)));
-    p.update_region(&slice(&cleared, &live, vs), &live, &cfg);
-    finish_load(&mut p, &cfg);
-    assert!(!p.loading());
-
-    let mut clean = Planner::new(cfg.worker_threads);
-    clean.update_global_map(&cleared, &cfg);
-    assert_eq!(
-        voxel_set(&p),
-        voxel_set(&clean),
-        "a straddling tile pasted the snapshot over the live region"
-    );
-    assert_eq!(surface_set(&p), surface_set(&clean));
-}
-
-/// A tile only partly under a live region must not delete what the live
-/// update saw and the snapshot lacks.
-#[test]
-fn tile_straddling_a_live_region_keeps_what_live_saw() {
-    let cfg = test_config();
-    let vs = cfg.voxel_size;
-    let snapshot = big_world();
-    let seen = boxed_world();
-
-    let mut p = Planner::new(cfg.worker_threads);
-    queue_load(&mut p, &snapshot, (0.5, 0.5), &cfg);
-    assert!(matches!(p.apply_next_tile(&cfg), LoadStep::Applied { .. }));
-
-    let live = straddling_live();
-    p.update_region(&slice(&seen, &live, vs), &live, &cfg);
-    finish_load(&mut p, &cfg);
-    assert!(!p.loading());
-
-    let mut clean = Planner::new(cfg.worker_threads);
-    clean.update_global_map(&seen, &cfg);
-    assert_eq!(
-        voxel_set(&p),
-        voxel_set(&clean),
-        "a straddling tile deleted what the live region saw"
-    );
-    assert_eq!(surface_set(&p), surface_set(&clean));
-}
-
-/// A live region applied after the snapshot but before its load starts
-/// survives the load when passed as a keep region.
-#[test]
-fn keep_region_protects_a_live_update_from_before_the_load() {
-    let cfg = test_config();
-    let vs = cfg.voxel_size;
-    let snapshot = boxed_world();
-    let cleared = big_world();
-    let live = straddling_live();
-
-    let loaded = |keep: &[RegionBounds]| {
-        let mut p = Planner::new(cfg.worker_threads);
-        p.update_global_map(&snapshot, &cfg);
-        p.update_region(&slice(&cleared, &live, vs), &live, &cfg);
-        let part = partition_cloud(&snapshot, cfg.full_map_tile_m, cfg.voxel_size);
-        p.start_load(part, (0.5, 0.5), keep, &cfg);
-        finish_load(&mut p, &cfg);
-        voxel_set(&p)
     };
 
-    let mut clean = Planner::new(cfg.worker_threads);
-    clean.update_global_map(&cleared, &cfg);
-    assert_eq!(
-        loaded(&[live]),
-        voxel_set(&clean),
-        "the load pasted the snapshot over a kept live region"
-    );
-    assert_ne!(
-        loaded(&[]),
-        voxel_set(&clean),
-        "without the keep region the snapshot must come back"
-    );
-}
+    let mut seed_then_live = Planner::new(cfg.worker_threads);
+    load_by_regions(&mut seed_then_live, &all, (0.5, 0.5), &cfg);
+    seed_then_live.update_region(&slice(&all, &live, vs), &live, &cfg);
 
-/// A tile a capped live region covers must not paste the snapshot back
-/// over it, while its ceiling above the cap still loads.
-#[test]
-fn capped_live_region_still_makes_the_tile_under_it_stale() {
-    let cfg = test_config();
-    let vs = cfg.voxel_size;
-    let half = vs * 0.5;
-    let mut snapshot = big_world();
-    let mut cleared = snapshot.clone();
-    for ix in 8..11 {
-        for iy in 8..11 {
-            for iz in 0..5 {
-                snapshot.push((
-                    ix as f32 * vs + half,
-                    iy as f32 * vs + half,
-                    iz as f32 * vs + half,
-                ));
-            }
-        }
-    }
-    // A ceiling everywhere, above what any live region can reach.
-    for ix in 0..80 {
-        for iy in 0..80 {
-            let p = (ix as f32 * vs + half, iy as f32 * vs + half, 3.0 + half);
-            snapshot.push(p);
-            cleared.push(p);
-        }
-    }
-
-    let mut p = Planner::new(cfg.worker_threads);
-    queue_load(&mut p, &snapshot, (1.0, 1.0), &cfg);
-
-    // The box is gone by the time the live region lands.
-    let live = RegionBounds::capped(1.0, 1.0, 3.0, -0.1, 5.0, 0.3, cfg.max_overhead_m);
-    assert!(live.z_max < 3.0);
-    p.update_region(&slice(&cleared, &live, vs), &live, &cfg);
-    finish_load(&mut p, &cfg);
+    let mut live_then_seed = Planner::new(cfg.worker_threads);
+    live_then_seed.update_region(&slice(&all, &live, vs), &live, &cfg);
+    load_by_regions(&mut live_then_seed, &all, (0.5, 0.5), &cfg);
 
     let mut clean = Planner::new(cfg.worker_threads);
-    clean.update_global_map(&cleared, &cfg);
-    assert_eq!(
-        voxel_set(&p),
-        voxel_set(&clean),
-        "the tile under the live region pasted the snapshot back"
-    );
-    assert_eq!(surface_set(&p), surface_set(&clean));
+    clean.update_global_map(&all, &cfg);
+    assert_eq!(voxel_set(&seed_then_live), voxel_set(&clean));
+    assert_eq!(voxel_set(&live_then_seed), voxel_set(&clean));
+    assert_eq!(surface_set(&seed_then_live), surface_set(&clean));
+    assert_eq!(surface_set(&live_then_seed), surface_set(&clean));
 }
 
 #[test]

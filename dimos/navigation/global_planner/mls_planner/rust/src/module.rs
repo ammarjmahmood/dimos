@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::mls_planner::{
-    partition_cloud, CloudPartition, Config, LoadStep, Planner, RegionBounds,
-};
+use crate::mls_planner::{Config, Planner, RegionBounds};
 use crate::voxel::{surface_point_xyz, VoxelKey};
 use dimos_module::time::now;
 use dimos_module::{error_throttled, warn_throttled, Input, Module, Output, Tf};
@@ -28,7 +26,7 @@ use lcm_msgs::nav_msgs::Path;
 use lcm_msgs::sensor_msgs::{PointCloud2, PointField};
 use lcm_msgs::std_msgs::{Header, Time};
 use tokio::sync::Notify;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// A point in the planner's world frame.
 type Xyz = (f32, f32, f32);
@@ -36,9 +34,6 @@ type Xyzi = (f32, f32, f32, f32);
 
 /// State shared between the handle loop and the worker.
 type Shared<T> = Arc<Mutex<Option<T>>>;
-
-/// How many recent live regions the worker remembers for a full map load.
-const RECENT_REGIONS_CAPACITY: usize = 64;
 
 /// A map input handed from the handle loop to the worker. Only the newest is
 /// kept, so a dropped intermediate frame is harmless.
@@ -52,60 +47,42 @@ enum MapUpdate {
     },
 }
 
-/// A partitioned full map, tagged with how many global maps had arrived when
-/// its cloud did. A global map that arrives later makes it stale.
-struct PendingFullMap {
-    global_maps_seen: u64,
-    // Stamp of the last lidar frame the snapshot holds.
-    stamp: f64,
-    partition: CloudPartition,
+/// One region of a seeded map, as the ray tracer hands them on. Every one
+/// must land, so they queue rather than replace each other.
+struct SeedRegion {
+    cloud: PointCloud2,
+    bounds: PoseStamped,
 }
 
-/// Live regions recently applied, each with its frame stamp. A full map load
-/// keeps the ones newer than its snapshot.
+/// Seed clouds and bounds waiting for their counterpart, keyed by the region
+/// number in their header seq. Every region of a seed shares one stamp and
+/// the two topics can interleave, so a newest-wins slot would mispair them.
 #[derive(Default)]
-struct RecentRegions(VecDeque<(f64, RegionBounds)>);
-
-impl RecentRegions {
-    fn push(&mut self, stamp: f64, bounds: RegionBounds) {
-        self.0.retain(|(_, r)| !bounds.covers(r));
-        if self.0.len() == RECENT_REGIONS_CAPACITY {
-            self.0.pop_front();
-        }
-        self.0.push_back((stamp, bounds));
-    }
-
-    /// Regions from frames at or after the given stamp.
-    fn since(&self, stamp: f64) -> Vec<RegionBounds> {
-        self.0
-            .iter()
-            .filter(|(s, _)| *s >= stamp)
-            .map(|&(_, r)| r)
-            .collect()
-    }
+struct SeedPairs {
+    clouds: HashMap<i32, PointCloud2>,
+    bounds: HashMap<i32, PoseStamped>,
 }
 
-/// Extract and partition a full-map cloud. None when unusable or empty.
-fn extract_and_partition(msg: &PointCloud2, config: &Config) -> Option<CloudPartition> {
-    let points = match extract_xyz(msg) {
-        Ok(p) => p,
-        Err(e) => {
-            warn_throttled!(
-                Duration::from_secs(1),
-                error = %e,
-                "Failed to extract full map points, dropped a load.",
-            );
-            return None;
+impl SeedPairs {
+    fn cloud(&mut self, msg: PointCloud2) -> Option<SeedRegion> {
+        match self.bounds.remove(&msg.header.seq) {
+            Some(bounds) => Some(SeedRegion { cloud: msg, bounds }),
+            None => {
+                self.clouds.insert(msg.header.seq, msg);
+                None
+            }
         }
-    };
-    if points.is_empty() {
-        return None;
     }
-    Some(partition_cloud(
-        &points,
-        config.full_map_tile_m,
-        config.voxel_size,
-    ))
+
+    fn bounds(&mut self, msg: PoseStamped) -> Option<SeedRegion> {
+        match self.clouds.remove(&msg.header.seq) {
+            Some(cloud) => Some(SeedRegion { cloud, bounds: msg }),
+            None => {
+                self.bounds.insert(msg.header.seq, msg);
+                None
+            }
+        }
+    }
 }
 
 #[derive(Module)]
@@ -120,10 +97,13 @@ pub struct MlsPlanner {
     #[input(decode = PoseStamped::decode, handler = on_region_bounds)]
     region_bounds: Input<PoseStamped>,
 
-    // Whole-map snapshot loaded tile by tile through the region pipeline,
-    // between live updates. Live updates keep priority.
-    #[input(decode = PointCloud2::decode, handler = on_full_map)]
-    full_map: Input<PointCloud2>,
+    // A seeded map's regions as the ray tracer lands them, applied through
+    // the region pipeline between live updates. Live updates keep priority.
+    #[input(decode = PointCloud2::decode, handler = on_seed_map)]
+    seed_map: Input<PointCloud2>,
+
+    #[input(decode = PoseStamped::decode, handler = on_seed_bounds)]
+    seed_bounds: Input<PoseStamped>,
 
     #[input(decode = PointStamped::decode, handler = on_goal)]
     goal: Input<PointStamped>,
@@ -150,18 +130,12 @@ pub struct MlsPlanner {
     // Held on the handle loop until stamps match, then handed off paired.
     pending_local: Option<PointCloud2>,
     pending_bounds: Option<PoseStamped>,
+    pending_seeds: SeedPairs,
 
     // Written by the handle loop, read by the worker, so the loop never blocks
-    // on map processing. The full-map partition has its own slot, so a live
-    // update arriving first cannot clobber it.
+    // on map processing. Seed regions queue in arrival order.
     pending: Shared<MapUpdate>,
-    pending_full_map: Shared<PendingFullMap>,
-    // Counts global maps as they arrive, so a full map still being partitioned
-    // when a newer global map lands is discarded rather than loaded over it.
-    global_maps_seen: Arc<AtomicU64>,
-    // The global map count the last finished full map load was current for.
-    // Republished full maps are dropped until a newer global map lands.
-    full_map_loaded_for: Shared<u64>,
+    seed_regions: Arc<Mutex<VecDeque<SeedRegion>>>,
     active_goal: Shared<Xyz>,
     goal_changed: Arc<AtomicBool>,
     wake: Arc<Notify>,
@@ -173,9 +147,7 @@ impl MlsPlanner {
     async fn spawn_worker(&mut self) {
         let worker = Worker {
             pending: Arc::clone(&self.pending),
-            pending_full_map: Arc::clone(&self.pending_full_map),
-            global_maps_seen: Arc::clone(&self.global_maps_seen),
-            full_map_loaded_for: Arc::clone(&self.full_map_loaded_for),
+            seed_regions: Arc::clone(&self.seed_regions),
             active_goal: Arc::clone(&self.active_goal),
             goal_changed: Arc::clone(&self.goal_changed),
             wake: Arc::clone(&self.wake),
@@ -196,34 +168,7 @@ impl MlsPlanner {
     }
 
     async fn on_global_map(&mut self, msg: PointCloud2) {
-        self.global_maps_seen.fetch_add(1, Ordering::SeqCst);
         self.hand_off(MapUpdate::Global { cloud: msg });
-    }
-
-    /// Partition the cloud on a blocking thread, so neither the handle loop
-    /// nor the worker stalls on a building-scale message.
-    async fn on_full_map(&mut self, msg: PointCloud2) {
-        let global_maps_seen = self.global_maps_seen.load(Ordering::SeqCst);
-        let loaded_for = *self.full_map_loaded_for.lock().expect("loaded mutex");
-        if loaded_for == Some(global_maps_seen) {
-            debug!("full map dropped, one is already loaded");
-            return;
-        }
-        let slot = Arc::clone(&self.pending_full_map);
-        let wake = Arc::clone(&self.wake);
-        let config = self.config.clone();
-        let stamp = time_secs(&msg.header.stamp);
-        tokio::task::spawn_blocking(move || {
-            let Some(partition) = extract_and_partition(&msg, &config) else {
-                return;
-            };
-            *slot.lock().expect("full map mutex") = Some(PendingFullMap {
-                global_maps_seen,
-                stamp,
-                partition,
-            });
-            wake.notify_one();
-        });
     }
 
     async fn on_local_map(&mut self, msg: PointCloud2) {
@@ -236,6 +181,18 @@ impl MlsPlanner {
         self.try_pair();
     }
 
+    async fn on_seed_map(&mut self, msg: PointCloud2) {
+        if let Some(region) = self.pending_seeds.cloud(msg) {
+            self.queue_seed(region);
+        }
+    }
+
+    async fn on_seed_bounds(&mut self, msg: PoseStamped) {
+        if let Some(region) = self.pending_seeds.bounds(msg) {
+            self.queue_seed(region);
+        }
+    }
+
     /// Hand off the local map and bounds once their stamps match.
     fn try_pair(&mut self) {
         if !stamps_paired(self.pending_bounds.as_ref(), self.pending_local.as_ref()) {
@@ -244,6 +201,14 @@ impl MlsPlanner {
         let bounds = self.pending_bounds.take().expect("checked above");
         let cloud = self.pending_local.take().expect("checked above");
         self.hand_off(MapUpdate::Region { cloud, bounds });
+    }
+
+    fn queue_seed(&self, region: SeedRegion) {
+        self.seed_regions
+            .lock()
+            .expect("seed mutex")
+            .push_back(region);
+        self.wake.notify_one();
     }
 
     fn hand_off(&self, update: MapUpdate) {
@@ -278,9 +243,7 @@ fn goal_position(p: &Point) -> Option<Xyz> {
 /// off the handle loop. Woken by the handlers.
 struct Worker {
     pending: Shared<MapUpdate>,
-    pending_full_map: Shared<PendingFullMap>,
-    global_maps_seen: Arc<AtomicU64>,
-    full_map_loaded_for: Shared<u64>,
+    seed_regions: Arc<Mutex<VecDeque<SeedRegion>>>,
     active_goal: Shared<Xyz>,
     goal_changed: Arc<AtomicBool>,
     wake: Arc<Notify>,
@@ -297,60 +260,34 @@ impl Worker {
         let mut planner = Planner::new(self.config.worker_threads);
         let mut last_path_at: Option<Instant> = None;
         let mut last_viz_at: Option<Instant> = None;
-        let mut recent = RecentRegions::default();
-        let mut load_for: Option<u64> = None;
         loop {
-            // Live updates apply before load tiles.
-            if planner.loading() {
-                tokio::task::yield_now().await;
-            } else {
-                self.wake.notified().await;
-            }
-            let goal_changed = self.goal_changed.swap(false, Ordering::SeqCst);
-            let update = self.pending.lock().expect("pending mutex").take();
-            let live_update = match update {
-                Some(update) => {
-                    self.apply_update(&mut planner, update, &mut recent, &mut last_viz_at)
-                        .await
-                }
-                None => false,
-            };
-            let full = self.pending_full_map.lock().expect("full map mutex").take();
-            if let Some(full) = full {
-                if full.global_maps_seen < self.global_maps_seen.load(Ordering::SeqCst) {
-                    info!("full map load skipped, a newer global map replaced it");
-                } else {
-                    let keep = recent.since(full.stamp);
-                    self.start_load(&mut planner, full.partition, &keep);
-                    load_for = Some(full.global_maps_seen);
-                }
-            }
-            if goal_changed || live_update {
-                self.maybe_replan(&mut planner, &mut last_path_at).await;
-            }
-            // Tiles alone never replan, so a load cannot flood the path topic.
-            match tokio::task::block_in_place(|| planner.apply_next_tile(&self.config)) {
-                LoadStep::Idle => {}
-                LoadStep::Applied { .. } => {
-                    self.publish_viz_if_due(&planner, &mut last_viz_at).await;
-                }
-                LoadStep::Finished { elapsed } => {
-                    info!(load_s = elapsed.as_secs_f64(), "full map load finished");
-                    *self.full_map_loaded_for.lock().expect("loaded mutex") = load_for.take();
-                    self.publish_viz_if_due(&planner, &mut last_viz_at).await;
+            self.wake.notified().await;
+            loop {
+                let goal_changed = self.goal_changed.swap(false, Ordering::SeqCst);
+                let update = self.pending.lock().expect("pending mutex").take();
+                let live_update = match update {
+                    Some(update) => {
+                        self.apply_update(&mut planner, update, &mut last_viz_at)
+                            .await
+                    }
+                    None => false,
+                };
+                if goal_changed || live_update {
                     self.maybe_replan(&mut planner, &mut last_path_at).await;
                 }
+                // Live updates apply first, then one seed region per pass, so a
+                // seed never holds up the map around the robot. Seed regions
+                // alone never replan, so a seed cannot flood the path topic.
+                let seed = self.seed_regions.lock().expect("seed mutex").pop_front();
+                let Some(seed) = seed else {
+                    break;
+                };
+                if tokio::task::block_in_place(|| self.ingest_seed(&mut planner, seed)) {
+                    self.publish_viz_if_due(&planner, &mut last_viz_at).await;
+                }
+                tokio::task::yield_now().await;
             }
         }
-    }
-
-    /// Queue the partitioned cloud as a tiled load, nearest the robot first,
-    /// leaving the kept live regions as they are.
-    fn start_load(&self, planner: &mut Planner, part: CloudPartition, keep: &[RegionBounds]) {
-        let center = self.base_position().map_or((0.0, 0.0), |(x, y, _)| (x, y));
-        let tiles =
-            tokio::task::block_in_place(|| planner.start_load(part, center, keep, &self.config));
-        info!(tiles, "full map load started");
     }
 
     /// Apply one live update and refresh the viz artifacts.
@@ -358,10 +295,9 @@ impl Worker {
         &self,
         planner: &mut Planner,
         update: MapUpdate,
-        recent: &mut RecentRegions,
         last_viz_at: &mut Option<Instant>,
     ) -> bool {
-        let applied = tokio::task::block_in_place(|| self.ingest(planner, update, recent));
+        let applied = tokio::task::block_in_place(|| self.ingest(planner, update));
         if applied {
             self.publish_viz_if_due(planner, last_viz_at).await;
         }
@@ -388,9 +324,8 @@ impl Worker {
         *last_viz_at = Some(now);
     }
 
-    /// Mutate the graph from a map update, recording each live region applied.
-    /// False if the cloud was unusable.
-    fn ingest(&self, planner: &mut Planner, update: MapUpdate, recent: &mut RecentRegions) -> bool {
+    /// Mutate the graph from a map update. False if the cloud was unusable.
+    fn ingest(&self, planner: &mut Planner, update: MapUpdate) -> bool {
         match update {
             MapUpdate::Region { cloud, bounds } => {
                 let points = match extract_xyz(&cloud) {
@@ -425,7 +360,6 @@ impl Worker {
 
                 let update_start = Instant::now();
                 planner.update_region(&points, &region, &self.config);
-                recent.push(time_secs(&bounds.header.stamp), region);
                 debug!(
                     update_ms = update_start.elapsed().as_secs_f64() * 1e3,
                     local_points = points.len(),
@@ -453,6 +387,38 @@ impl Worker {
                 true
             }
         }
+    }
+
+    /// Apply one seed region through the region pipeline. Its bounds are the
+    /// premap's own, so no sensor ceiling applies. False if unusable.
+    fn ingest_seed(&self, planner: &mut Planner, seed: SeedRegion) -> bool {
+        let points = match extract_xyz(&seed.cloud) {
+            Ok(p) => p,
+            Err(e) => {
+                warn_throttled!(
+                    Duration::from_secs(1),
+                    error = %e,
+                    "Failed to extract seed region points, dropped a region.",
+                );
+                return false;
+            }
+        };
+        let b = &seed.bounds.pose;
+        let region = RegionBounds {
+            origin_x: b.position.x as f32,
+            origin_y: b.position.y as f32,
+            radius: b.orientation.x as f32,
+            z_min: b.orientation.y as f32,
+            z_max: b.orientation.z as f32,
+        };
+        let update_start = Instant::now();
+        planner.update_region(&points, &region, &self.config);
+        debug!(
+            update_ms = update_start.elapsed().as_secs_f64() * 1e3,
+            seed_points = points.len(),
+            "seed region processed"
+        );
+        true
     }
 
     fn build_graph_messages(&self, planner: &Planner) -> (PointCloud2, PointCloud2, Path) {
@@ -534,10 +500,6 @@ fn is_at_goal(start: Xyz, goal: Xyz, tol: f32) -> bool {
 
 fn same_stamp(a: &Time, b: &Time) -> bool {
     a.sec == b.sec && a.nsec == b.nsec
-}
-
-fn time_secs(t: &Time) -> f64 {
-    t.sec as f64 + t.nsec as f64 * 1e-9
 }
 
 async fn publish_cloud(out: &Output<PointCloud2>, cloud: &PointCloud2) {
@@ -803,6 +765,28 @@ mod tests {
         assert!(!stamps_paired(Some(&b), None));
         assert!(!stamps_paired(None, Some(&c)));
         assert!(!stamps_paired(None, None));
+    }
+
+    #[test]
+    fn seed_pairs_match_on_seq_whichever_side_lands_first() {
+        let stamp = Time { sec: 2, nsec: 3 };
+        let mut pairs = SeedPairs::default();
+        let mut b1 = bounds_at(stamp.clone());
+        b1.header.seq = 1;
+        let mut b2 = bounds_at(stamp.clone());
+        b2.header.seq = 2;
+        let mut c1 = cloud_at(stamp.clone());
+        c1.header.seq = 1;
+        let mut c2 = cloud_at(stamp);
+        c2.header.seq = 2;
+
+        assert!(pairs.bounds(b1).is_none());
+        assert!(pairs.bounds(b2).is_none());
+        let first = pairs.cloud(c1).expect("region 1 pairs with its own bounds");
+        assert_eq!(first.bounds.header.seq, 1);
+        let second = pairs.cloud(c2).expect("region 2 pairs with its own bounds");
+        assert_eq!(second.bounds.header.seq, 2);
+        assert!(pairs.clouds.is_empty() && pairs.bounds.is_empty());
     }
 
     fn point(x: f64, y: f64, z: f64) -> Point {

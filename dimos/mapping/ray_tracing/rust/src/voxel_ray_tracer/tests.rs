@@ -33,14 +33,16 @@ fn basic_config() -> Config {
         world_frame: "world".to_string(),
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
+        seed_region_m: 4.0,
     }
 }
 
 /// Seed a whole cloud and collect every created key.
 fn seed_all(map: &mut VoxelMap, points: &[(f32, f32, f32)], cfg: &Config) -> AHashSet<VoxelKey> {
-    let part = partition_seed(points, cfg.voxel_size, (0.0, 0.0, 0.0));
+    let region_m = CHUNK_SIZE as f32 * cfg.voxel_size;
+    let part = partition_seed(points, cfg.voxel_size, (0.0, 0.0, 0.0), region_m);
     let mut created = AHashSet::new();
-    for tile in &part.tiles {
+    for tile in part.tiles() {
         created.extend(seed_tile(map, tile, cfg));
     }
     created
@@ -317,6 +319,7 @@ fn ground_clipping_single_ray() {
         world_frame: "world".to_string(),
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
+        seed_region_m: 4.0,
     };
     // Build the floor over a y band so it is a 2d plane, not a wire.
     let max_x = 25.0_f32;
@@ -474,6 +477,7 @@ fn stair_clipping_ray_fan() {
         world_frame: "world".to_string(),
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
+        seed_region_m: 4.0,
     };
 
     // Staircase
@@ -553,6 +557,7 @@ fn landing_floor_ray_fan() {
         world_frame: "world".to_string(),
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
+        seed_region_m: 4.0,
     };
 
     // Flat floor from the sensor out to a vertical wall.
@@ -620,6 +625,7 @@ fn landing_grazed_from_below() {
         world_frame: "world".to_string(),
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
+        seed_region_m: 4.0,
     };
 
     // Staircase topped by a flat landing and a back wall.
@@ -756,6 +762,7 @@ fn grazing_ray_spares_planar_floor() {
         world_frame: "world".to_string(),
         tf_match_tolerance_s: 0.1,
         worker_threads: 4,
+        seed_region_m: 4.0,
     };
     let (mut map, _) = build_surface(&floor, voxel_size, cfg.max_health);
     let row: Vec<VoxelKey> = map
@@ -1701,14 +1708,63 @@ fn partition_seed_orders_tiles_nearest_the_origin_first() {
     let points: Vec<(f32, f32, f32)> = (0..6).map(|i| (i as f32 * edge + 0.5, 0.5, 0.5)).collect();
     let origin = points[3];
 
-    let part = partition_seed(&points, voxel_size, origin);
-    let tiles = part.tiles;
+    let part = partition_seed(&points, voxel_size, origin, edge);
+    let tiles: Vec<&SeedTile> = part.tiles().collect();
 
     assert_eq!(part.voxels, points.len(), "one voxel per point here");
     assert_eq!(tiles.len(), points.len(), "one tile per chunk");
-    assert_eq!(tiles[0], vec![points[3]]);
+    assert_eq!(*tiles[0], vec![points[3]]);
     let distances: Vec<f32> = tiles.iter().map(|t| (t[0].0 - origin.0).abs()).collect();
     assert!(distances.windows(2).all(|w| w[0] <= w[1]), "{distances:?}");
+}
+
+/// Regions are the squares of a `region_m` grid, nearest the origin first,
+/// each sized to the chunks it holds with a voxel to spare all round, so a
+/// consumer applying one region at a time sees whole columns.
+#[test]
+fn partition_seed_groups_chunks_into_regions_with_covering_cylinders() {
+    let voxel_size = 1.0;
+    let edge = CHUNK_SIZE as f32 * voxel_size;
+    let region_m = 2.0 * edge;
+    // Two chunks stacked in z in the first region, one chunk in the next.
+    let points = vec![
+        (0.5, 0.5, 0.5),
+        (0.5, 0.5, edge + 0.5),
+        (2.0 * edge + 0.5, 0.5, 0.5),
+    ];
+    let origin = (2.0 * edge + 0.5, 0.5, 0.5);
+
+    let part = partition_seed(&points, voxel_size, origin, region_m);
+
+    assert_eq!(part.regions.len(), 2);
+    let near = &part.regions[0];
+    assert_eq!(near.tiles.len(), 1, "the origin's region comes first");
+    assert_eq!(near.tiles[0], vec![points[2]]);
+    let far = &part.regions[1];
+    assert_eq!(far.tiles.len(), 2, "both stacked chunks share one region");
+    assert_eq!((far.cylinder.cx, far.cylinder.cy), (edge / 2.0, edge / 2.0));
+    assert_eq!(far.cylinder.z_min, -voxel_size);
+    assert_eq!(far.cylinder.z_max, 2.0 * edge + voxel_size);
+    assert_regions_cover_their_tiles(&part);
+
+    // A region grid finer than a chunk still yields regions covering their chunk.
+    let fine = partition_seed(&points, voxel_size, origin, edge / 4.0);
+    assert_regions_cover_their_tiles(&fine);
+}
+
+fn assert_regions_cover_their_tiles(part: &SeedPartition) {
+    for region in &part.regions {
+        let b = region.cylinder.bounds();
+        for tile in &region.tiles {
+            for &(x, y, z) in tile {
+                assert!(
+                    b.contains(x, y, z),
+                    "point {:?} outside its region",
+                    (x, y, z)
+                );
+            }
+        }
+    }
 }
 
 /// Live frames between seed tiles never see a half-updated map: support
@@ -1731,7 +1787,9 @@ fn seed_tiles_interleaved_with_live_frames_keep_indexes_consistent() {
     let cloud: Vec<(f32, f32, f32)> = (0..1500)
         .map(|_| (next_coord(), next_coord(), next_coord()))
         .collect();
-    let tiles = partition_seed(&cloud, cfg.voxel_size, (0.0, 0.0, 0.0)).tiles;
+    let region_m = CHUNK_SIZE as f32 * cfg.voxel_size;
+    let part = partition_seed(&cloud, cfg.voxel_size, (0.0, 0.0, 0.0), region_m);
+    let tiles: Vec<&SeedTile> = part.tiles().collect();
     assert!(tiles.len() > 4, "the cloud must span several chunks");
 
     let mut map = VoxelMap::default();

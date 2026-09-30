@@ -49,6 +49,15 @@ def render_voxel_map(msg: PointCloud2, voxel_size: float) -> Archetype:
     return voxel_map_points(msg.points_f32(), voxel_size)
 
 
+def render_seed_region(msg: PointCloud2, voxel_size: float) -> list[tuple[str, Archetype]] | None:
+    """Each seeded region on its own child entity, keyed by its center, so they accumulate."""
+    points = msg.points_f32()
+    if len(points) == 0:
+        return None
+    cx, cy = points[:, :2].mean(axis=0)
+    return [(f"world/seed_map/{cx:.1f}_{cy:.1f}", voxel_map_points(points, voxel_size))]
+
+
 def path_strip(
     waypoints: NDArray[np.float32] | None, color: tuple[int, int, int] = PATH_COLOR
 ) -> Archetype:
@@ -137,7 +146,8 @@ def nav_visual_override(
     voxels = partial(render_voxel_map, voxel_size=voxel_size)
     return {
         "world/global_map": voxels,
-        "world/full_map": voxels,
+        "world/seed_map": partial(render_seed_region, voxel_size=voxel_size),
+        "world/seed_bounds": None,
         "world/local_map": voxels,
         "world/path": render_path,
         "world/goal": render_goal,

@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 use crate::mapper::{register, Mapper, Pose};
-use crate::voxel_ray_tracer::{partition_seed, Config, SeedPartition, SeedTile};
+use crate::voxel_ray_tracer::{partition_seed, Config, Cylinder, SeedPartition, SeedRegion};
 use dimos_module::pointcloud::extract_xyz;
 use dimos_module::{error_throttled, warn_throttled, Input, Module, Output, Tf, Transform};
 use lcm_msgs::geometry_msgs::{Point, Pose as PoseMsg, PoseStamped, Quaternion};
@@ -41,6 +41,11 @@ const JOB_QUEUE_CAPACITY: usize = 256;
 
 /// Tiles between seed load progress lines.
 const SEED_PROGRESS_TILES: usize = 100;
+
+/// How long one worker pass may spend on seed tiles before it returns to the
+/// job queue. A lidar frame that takes the whole frame period would otherwise
+/// hold the seed to one tile per frame.
+const SEED_PASS_BUDGET: Duration = Duration::from_millis(20);
 
 #[derive(Module)]
 #[module(name = "ray_tracing", setup = spawn_worker, teardown = stop_worker)]
@@ -69,15 +74,18 @@ pub struct RayTracingVoxelMap {
     #[output(encode = PointCloud2::encode)]
     local_map_fine: Output<PointCloud2>,
 
-    // Support-gated snapshot of the whole map, emitted after the seed and
-    // again for each later loaded map, so a planner that missed one recovers.
-    #[output(encode = PointCloud2::encode)]
-    full_map: Output<PointCloud2>,
-
     // Cylinder bounds of the local map. Position is the center, orientation holds
     // radius, z_min, z_max. Stamped like local_map so consumers pair them.
     #[output(encode = PoseStamped::encode)]
     region_bounds: Output<PoseStamped>,
+
+    // One region of a seeded map as it lands, support-gated like local_map,
+    // with its bounds encoded like region_bounds and stamped alike.
+    #[output(encode = PointCloud2::encode)]
+    seed_map: Output<PointCloud2>,
+
+    #[output(encode = PoseStamped::encode)]
+    seed_bounds: Output<PoseStamped>,
 
     #[config]
     config: Config,
@@ -97,8 +105,9 @@ impl RayTracingVoxelMap {
             global_map: self.global_map.clone(),
             local_map: self.local_map.clone(),
             local_map_fine: self.local_map_fine.clone(),
-            full_map: self.full_map.clone(),
             region_bounds: self.region_bounds.clone(),
+            seed_map: self.seed_map.clone(),
+            seed_bounds: self.seed_bounds.clone(),
         };
         self.jobs = Some(tx);
         self.worker = Some(tokio::spawn(worker.run()));
@@ -136,10 +145,14 @@ impl RayTracingVoxelMap {
     }
 }
 
-/// A seed load in progress, applied one tile per pass of the worker.
+/// A seed load in progress, applied a pass budget of tiles at a time and
+/// handed on region by region as each one completes.
 struct SeedLoad {
-    tiles: Vec<SeedTile>,
-    next: usize,
+    regions: Vec<SeedRegion>,
+    next_region: usize,
+    next_tile: usize,
+    tiles: usize,
+    done: usize,
     created: usize,
     started: Instant,
     // The longest tile is the most a queued lidar frame ever waited.
@@ -149,7 +162,30 @@ struct SeedLoad {
 
 impl SeedLoad {
     fn mean_tile_ms(&self) -> f64 {
-        self.sum_tile_ms / self.next.max(1) as f64
+        self.sum_tile_ms / self.done.max(1) as f64
+    }
+
+    /// Apply the next tile. The region it completed, if any.
+    fn step(&mut self, mapper: &mut Mapper) -> Option<Cylinder> {
+        let region = self.regions.get(self.next_region)?;
+        let tile = &region.tiles[self.next_tile];
+        let tile_start = Instant::now();
+        self.created += tokio::task::block_in_place(|| mapper.seed_tile(tile));
+        let tile_ms = tile_start.elapsed().as_secs_f64() * 1e3;
+        self.done += 1;
+        self.max_tile_ms = self.max_tile_ms.max(tile_ms);
+        self.sum_tile_ms += tile_ms;
+        self.next_tile += 1;
+        if self.next_tile < region.tiles.len() {
+            return None;
+        }
+        self.next_tile = 0;
+        self.next_region += 1;
+        Some(region.cylinder)
+    }
+
+    fn finished(&self) -> bool {
+        self.next_region >= self.regions.len()
     }
 }
 
@@ -174,8 +210,8 @@ struct State {
 }
 
 /// Owns the mapper and does every map mutation and publish off the handle
-/// loop. Queued jobs go first, and a seed load then advances one tile per
-/// pass, so sustained traffic slows the load but cannot stall it.
+/// loop. Queued jobs go first, and a seed load then gets one pass budget of
+/// tiles, so sustained traffic slows the load but cannot stall it.
 struct Worker {
     jobs: mpsc::Receiver<Job>,
     // Handed to the seed placement task so its result re-enters the queue.
@@ -186,8 +222,9 @@ struct Worker {
     global_map: Output<PointCloud2>,
     local_map: Output<PointCloud2>,
     local_map_fine: Output<PointCloud2>,
-    full_map: Output<PointCloud2>,
     region_bounds: Output<PoseStamped>,
+    seed_map: Output<PointCloud2>,
+    seed_bounds: Output<PoseStamped>,
 }
 
 impl Worker {
@@ -229,16 +266,21 @@ impl Worker {
             Job::LoadedMap(msg) => self.place_loaded_map(state, msg).await,
             Job::SeedPrepared(None) => state.seed = SeedState::Idle,
             Job::SeedPrepared(Some(part)) => {
+                let tiles = part.tile_count();
                 info!(
-                    tiles = part.tiles.len(),
+                    regions = part.regions.len(),
+                    tiles,
                     voxels = part.voxels,
                     "Seed load started."
                 );
                 let mapper = &mut state.mapper;
                 tokio::task::block_in_place(|| mapper.reserve_voxels(part.voxels));
                 state.seed = SeedState::Loading(SeedLoad {
-                    tiles: part.tiles,
-                    next: 0,
+                    regions: part.regions,
+                    next_region: 0,
+                    next_tile: 0,
+                    tiles,
+                    done: 0,
                     created: 0,
                     started: Instant::now(),
                     max_tile_ms: 0.0,
@@ -305,33 +347,8 @@ impl Worker {
 
         // Bounds pair with local_map by stamp, so publish them on its cadence.
         if let Some(c) = region {
-            let bounds_msg = PoseStamped {
-                header: Header {
-                    seq: 0,
-                    stamp: stamp.clone(),
-                    frame_id: out_frame_id.to_string(),
-                },
-                pose: PoseMsg {
-                    position: Point {
-                        x: c.cx as f64,
-                        y: c.cy as f64,
-                        z: 0.0,
-                    },
-                    orientation: Quaternion {
-                        x: c.radius as f64,
-                        y: c.z_min as f64,
-                        z: c.z_max as f64,
-                        w: 0.0,
-                    },
-                },
-            };
-            if let Err(e) = self.region_bounds.publish(&bounds_msg).await {
-                error_throttled!(
-                    Duration::from_secs(1),
-                    error = %e,
-                    "Region bounds failed to publish",
-                );
-            }
+            let bounds_msg = bounds_to_pose(&c, out_frame_id, stamp.clone());
+            publish_bounds(&self.region_bounds, &bounds_msg).await;
         }
 
         if let Some(points) = global_points {
@@ -399,22 +416,18 @@ impl Worker {
     }
 
     /// Place the first loaded map on its own task and tile it off the worker.
-    /// A later map only republishes the full map, since reseeding would
-    /// resurrect voxels live rays have carved.
+    /// A later map is ignored, since reseeding would resurrect voxels live
+    /// rays have carved.
     async fn place_loaded_map(&self, state: &mut State, msg: PointCloud2) {
-        match state.seed {
-            SeedState::Idle => {}
-            SeedState::Done => {
-                self.publish_full_map(state).await;
-                return;
-            }
-            SeedState::Placing | SeedState::Loading(_) => return,
+        if !matches!(state.seed, SeedState::Idle) {
+            return;
         }
         state.seed = SeedState::Placing;
         let tf = self.tf.clone();
         let sender = self.job_sender.clone();
         let world_frame = self.config.world_frame.clone();
         let voxel_size = self.config.voxel_size;
+        let region_m = self.config.seed_region_m;
         let origin = state.mapper.last_origin();
         tokio::spawn(async move {
             let placed = tf
@@ -425,7 +438,7 @@ impl Worker {
                 Some(t) => {
                     let pose = tf_to_pose(&t);
                     tokio::task::spawn_blocking(move || {
-                        prepare_seed(&msg, pose, voxel_size, origin)
+                        prepare_seed(&msg, pose, voxel_size, origin, region_m)
                     })
                     .await
                     .unwrap_or(None)
@@ -445,59 +458,71 @@ impl Worker {
         });
     }
 
-    /// Apply the next seed tile, then emit the full map once the load ends.
+    /// Apply seed tiles for one pass budget, handing each completed region
+    /// on as it lands.
     async fn seed_step(&self, state: &mut State) {
         let SeedState::Loading(load) = &mut state.seed else {
             return;
         };
-        if let Some(tile) = load.tiles.get(load.next) {
-            let mapper = &mut state.mapper;
-            let tile_start = Instant::now();
-            load.created += tokio::task::block_in_place(|| mapper.seed_tile(tile));
-            let tile_ms = tile_start.elapsed().as_secs_f64() * 1e3;
-            load.next += 1;
-            load.max_tile_ms = load.max_tile_ms.max(tile_ms);
-            load.sum_tile_ms += tile_ms;
-            if load.next % SEED_PROGRESS_TILES == 0 {
+        let pass_start = Instant::now();
+        while !load.finished() {
+            let completed = load.step(&mut state.mapper);
+            if load.done % SEED_PROGRESS_TILES == 0 {
                 info!(
-                    tiles_done = load.next,
-                    tiles = load.tiles.len(),
+                    tiles_done = load.done,
+                    tiles = load.tiles,
+                    regions_done = load.next_region,
+                    regions = load.regions.len(),
                     max_tile_ms = load.max_tile_ms,
                     mean_tile_ms = load.mean_tile_ms(),
                     "Seed load in progress."
                 );
             }
+            if let Some(cylinder) = completed {
+                let seq = load.next_region as i32;
+                self.publish_seed_region(&state.mapper, &cylinder, seq, &state.last_frame_stamp)
+                    .await;
+            }
+            if pass_start.elapsed() >= SEED_PASS_BUDGET {
+                break;
+            }
         }
-        if load.next < load.tiles.len() {
+        let SeedState::Loading(load) = &state.seed else {
+            return;
+        };
+        if !load.finished() {
             return;
         }
-        let num_created = load.created;
-        let tiles = load.tiles.len();
-        let load_s = load.started.elapsed().as_secs_f64();
-        let max_tile_ms = load.max_tile_ms;
-        let mean_tile_ms = load.mean_tile_ms();
-        state.seed = SeedState::Done;
         info!(
-            num_created,
-            tiles,
-            load_s,
-            max_tile_ms,
-            mean_tile_ms,
+            num_created = load.created,
+            regions = load.regions.len(),
+            tiles = load.tiles,
+            load_s = load.started.elapsed().as_secs_f64(),
+            max_tile_ms = load.max_tile_ms,
+            mean_tile_ms = load.mean_tile_ms(),
             "Seeded the voxel map from a loaded map cloud."
         );
-        self.publish_full_map(state).await;
+        state.seed = SeedState::Done;
     }
 
-    /// Publish the support-gated whole map, stamped with the last frame in it.
-    async fn publish_full_map(&self, state: &State) {
-        let mapper = &state.mapper;
-        let full = tokio::task::block_in_place(|| mapper.full_points());
-        let cloud = points_to_cloud(
-            &full,
-            &self.config.world_frame,
-            state.last_frame_stamp.clone(),
-        );
-        publish_cloud(&self.full_map, &cloud).await;
+    /// Publish one seeded region as the map now holds it. Cloud and bounds
+    /// carry the region's number as their header seq, which is what a consumer
+    /// pairs them on, since every region of a seed shares one stamp.
+    async fn publish_seed_region(
+        &self,
+        mapper: &Mapper,
+        cylinder: &Cylinder,
+        seq: i32,
+        stamp: &Time,
+    ) {
+        let points = tokio::task::block_in_place(|| mapper.local_points(&cylinder.bounds()));
+        let frame_id = self.config.world_frame.as_str();
+        let mut bounds_msg = bounds_to_pose(cylinder, frame_id, stamp.clone());
+        bounds_msg.header.seq = seq;
+        publish_bounds(&self.seed_bounds, &bounds_msg).await;
+        let mut cloud = points_to_cloud(&points, frame_id, stamp.clone());
+        cloud.header.seq = seq;
+        publish_cloud(&self.seed_map, &cloud).await;
     }
 }
 
@@ -508,6 +533,7 @@ fn prepare_seed(
     pose: Pose,
     voxel_size: f32,
     origin: (f32, f32, f32),
+    region_m: f32,
 ) -> Option<SeedPartition> {
     let mut points = match extract_xyz(msg) {
         Ok(p) => p.into_iter().map(|[x, y, z]| (x, y, z)).collect::<Vec<_>>(),
@@ -520,7 +546,7 @@ fn prepare_seed(
         return None;
     }
     register(&mut points, pose);
-    Some(partition_seed(&points, voxel_size, origin))
+    Some(partition_seed(&points, voxel_size, origin, region_m))
 }
 
 /// How long to wait for a late transform before dropping a cloud.
@@ -531,6 +557,42 @@ const LOADED_MAP_TF_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn time_secs(t: &Time) -> f64 {
     t.sec as f64 + t.nsec as f64 * 1e-9
+}
+
+/// A cylinder as the bounds message: position is the center, orientation
+/// holds radius, z_min, z_max.
+fn bounds_to_pose(c: &Cylinder, frame_id: &str, stamp: Time) -> PoseStamped {
+    PoseStamped {
+        header: Header {
+            seq: 0,
+            stamp,
+            frame_id: frame_id.to_string(),
+        },
+        pose: PoseMsg {
+            position: Point {
+                x: c.cx as f64,
+                y: c.cy as f64,
+                z: 0.0,
+            },
+            orientation: Quaternion {
+                x: c.radius as f64,
+                y: c.z_min as f64,
+                z: c.z_max as f64,
+                w: 0.0,
+            },
+        },
+    }
+}
+
+async fn publish_bounds(out: &Output<PoseStamped>, msg: &PoseStamped) {
+    if let Err(e) = out.publish(msg).await {
+        error_throttled!(
+            Duration::from_secs(1),
+            error = %e,
+            topic = %out.topic,
+            "Bounds failed to publish",
+        );
+    }
 }
 
 /// The f32 pose of a transform, for registering clouds.
@@ -634,6 +696,7 @@ mod tests {
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
             worker_threads: 4,
+            seed_region_m: 4.0,
         }
     }
 
@@ -681,15 +744,17 @@ mod tests {
         let t = Transform::new("odom", "map", 0.0, iso);
         let cloud = points_to_cloud(&[3.5, 0.0, 0.5], "map", Time::default());
 
-        let part = prepare_seed(&cloud, tf_to_pose(&t), 1.0, (0.0, 0.0, 0.0))
+        let part = prepare_seed(&cloud, tf_to_pose(&t), 1.0, (0.0, 0.0, 0.0), 4.0)
             .expect("loaded map must decode");
         assert_eq!(part.voxels, 1);
+        assert_eq!(part.regions.len(), 1);
         let mut mapper = Mapper::new(test_config());
-        let created: usize = part.tiles.iter().map(|tile| mapper.seed_tile(tile)).sum();
+        let created: usize = part.tiles().map(|tile| mapper.seed_tile(tile)).sum();
         assert_eq!(created, 1);
 
-        let full = points_to_cloud(&mapper.full_points(), "odom", Time::default());
-        assert!(cloud_points(&full).contains(&voxel_center(10, 3, 0)));
+        let region = mapper.local_points(&part.regions[0].cylinder.bounds());
+        let seeded = points_to_cloud(&region, "odom", Time::default());
+        assert!(cloud_points(&seeded).contains(&voxel_center(10, 3, 0)));
     }
 
     /// The clear-mask handler names voxels by decoding a cloud and quantizing

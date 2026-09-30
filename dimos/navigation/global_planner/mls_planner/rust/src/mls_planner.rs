@@ -15,7 +15,6 @@
 //! Config and the owned-state Planner that builds and queries the MLS graph.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use ahash::{AHashMap, AHashSet};
 use dimos_module::{native_config, worker_pool};
@@ -77,9 +76,6 @@ pub struct Config {
     /// Ground-plane distance from goal at which the planner stops replanning.
     #[validate(range(exclusive_min = 0.0))]
     pub goal_tolerance: f32,
-    /// Full-map load tile spacing, small enough to apply one between live updates.
-    #[validate(range(exclusive_min = 0.0))]
-    pub full_map_tile_m: f32,
     /// Rate cap for republishing the surface_map / nodes / node_edges viz
     /// artifacts. 0 disables them entirely. The path output is unthrottled.
     #[validate(range(min = 0.0))]
@@ -161,23 +157,6 @@ impl RegionBounds {
         }
     }
 
-    /// Whether `other`'s footprint lies entirely inside this one.
-    fn covers_xy(&self, other: &RegionBounds) -> bool {
-        let d = (other.origin_x - self.origin_x).hypot(other.origin_y - self.origin_y);
-        d + other.radius <= self.radius
-    }
-
-    /// Whether the two cylinders share any volume.
-    fn intersects(&self, other: &RegionBounds) -> bool {
-        let d = (other.origin_x - self.origin_x).hypot(other.origin_y - self.origin_y);
-        d <= self.radius + other.radius && self.z_min <= other.z_max && other.z_min <= self.z_max
-    }
-
-    /// Whether `other` lies entirely inside this cylinder.
-    pub fn covers(&self, other: &RegionBounds) -> bool {
-        self.covers_xy(other) && self.z_min <= other.z_min && other.z_max <= self.z_max
-    }
-
     fn contains_voxel(&self, (kx, ky, kz): VoxelKey, voxel_size: f32) -> bool {
         let half = voxel_size * 0.5;
         let z = kz as f32 * voxel_size + half;
@@ -200,162 +179,6 @@ impl RegionBounds {
     }
 }
 
-/// One tile of a full-map load: a region cylinder and the cloud points
-/// inside it, ready for update_region.
-struct MapTile {
-    bounds: RegionBounds,
-    points: Vec<(f32, f32, f32)>,
-}
-
-/// Inclusive z extent, empty until extended.
-#[derive(Clone, Copy)]
-struct ZBand {
-    min: f32,
-    max: f32,
-}
-
-impl Default for ZBand {
-    fn default() -> Self {
-        ZBand {
-            min: f32::INFINITY,
-            max: f32::NEG_INFINITY,
-        }
-    }
-}
-
-impl ZBand {
-    fn extend(&mut self, z: f32) {
-        self.min = self.min.min(z);
-        self.max = self.max.max(z);
-    }
-}
-
-/// The cloud points one tile covers and their z extent.
-#[derive(Default)]
-struct TileCloud {
-    points: Vec<(f32, f32, f32)>,
-    band: ZBand,
-}
-
-/// Tile clouds keyed by grid cell.
-type TileClouds = AHashMap<(i32, i32), TileCloud>;
-
-/// The cloud half of a full-map partition, computed without the planner so
-/// it can run off the worker thread. `Planner::finish_partition` merges it
-/// against the map.
-pub struct CloudPartition {
-    clouds: TileClouds,
-    tile_size_m: f32,
-}
-
-/// Assign a whole-map cloud to grid tiles. A point lands in every tile whose
-/// cylinder contains its voxel center, the same test the tiles apply when
-/// they replace voxels, so tile order cannot decide whether a point survives.
-pub fn partition_cloud(
-    points: &[(f32, f32, f32)],
-    tile_size_m: f32,
-    voxel_size: f32,
-) -> CloudPartition {
-    let radius = tile_radius(tile_size_m, voxel_size);
-    let half = voxel_size * 0.5;
-    let mut clouds = TileClouds::default();
-    for &p in points {
-        let (kx, ky, _) = voxelize(p, voxel_size);
-        let cx = kx as f32 * voxel_size + half;
-        let cy = ky as f32 * voxel_size + half;
-        covering_cells(cx, cy, tile_size_m, radius, |cell| {
-            let tile = clouds.entry(cell).or_default();
-            tile.points.push(p);
-            tile.band.extend(p.2);
-        });
-    }
-    CloudPartition {
-        clouds,
-        tile_size_m,
-    }
-}
-
-/// Circumradius of an s x s grid cell plus a voxel of margin, so the tile
-/// cylinders cover the plane.
-fn tile_radius(s: f32, voxel_size: f32) -> f32 {
-    s * std::f32::consts::FRAC_1_SQRT_2 + voxel_size
-}
-
-/// A tiled full-map load in progress. Live regions applied meanwhile are
-/// recorded, and every tile leaves them exactly as the live update did.
-struct MapLoad {
-    tiles: Vec<MapTile>,
-    next: usize,
-    regions: Vec<RegionBounds>,
-    started: Instant,
-}
-
-impl MapLoad {
-    fn new(tiles: Vec<MapTile>, keep: &[RegionBounds]) -> Self {
-        let mut load = MapLoad {
-            tiles,
-            next: 0,
-            regions: Vec::new(),
-            started: Instant::now(),
-        };
-        for &bounds in keep {
-            load.region_applied(bounds);
-        }
-        load
-    }
-
-    fn remaining(&self) -> usize {
-        self.tiles.len() - self.next
-    }
-
-    fn finished(&self) -> bool {
-        self.next >= self.tiles.len()
-    }
-
-    fn elapsed(&self) -> Duration {
-        self.started.elapsed()
-    }
-
-    /// Record a live region applied since the load started. Only regions no
-    /// other covers are kept, so the tiles test against a short list.
-    fn region_applied(&mut self, bounds: RegionBounds) {
-        if self.regions.iter().any(|r| r.covers(&bounds)) {
-            return;
-        }
-        self.regions.retain(|r| !bounds.covers(r));
-        self.regions.push(bounds);
-    }
-
-    /// Apply what live regions left of the next tile. False once every tile is consumed.
-    fn apply_next_tile(&mut self, planner: &mut Planner, config: &Config) -> bool {
-        while let Some(tile) = self.tiles.get(self.next) {
-            self.next += 1;
-            let keep: Vec<RegionBounds> = self
-                .regions
-                .iter()
-                .filter(|r| r.intersects(&tile.bounds))
-                .copied()
-                .collect();
-            if keep.iter().any(|r| r.covers(&tile.bounds)) {
-                continue;
-            }
-            planner.update_region_keeping(&tile.points, &tile.bounds, &keep, config);
-            return true;
-        }
-        false
-    }
-}
-
-/// What one pass of a pending full-map load did.
-pub enum LoadStep {
-    /// No load is pending.
-    Idle,
-    /// A tile went in, with this many still to come.
-    Applied { remaining: usize },
-    /// The last tile went in, this long after the load started.
-    Finished { elapsed: Duration },
-}
-
 pub struct Planner {
     // The planner owns its worker pool, so its thread setting cannot collide
     // with other components sharing the process.
@@ -369,9 +192,6 @@ pub struct Planner {
     // Last goal and whether a full plan reached it, so replan outcomes log
     // on transitions instead of every cycle.
     last_result: Option<((f32, f32, f32), bool)>,
-    // A tiled full-map load in progress. update_region records into it and a
-    // full rebuild drops it.
-    load: Option<MapLoad>,
 }
 
 impl Planner {
@@ -383,7 +203,6 @@ impl Planner {
             by_col: ColumnIz::default(),
             last_path: None,
             last_result: None,
-            load: None,
         }
     }
 
@@ -410,8 +229,6 @@ impl Planner {
 
             self.rebuild_graph(config);
         });
-        // A full rebuild replaces everything a load would add.
-        self.load = None;
     }
 
     /// Update planner artifacts within a local region instead of rebuilding
@@ -422,27 +239,13 @@ impl Planner {
         bounds: &RegionBounds,
         config: &Config,
     ) {
-        self.update_region_keeping(local_points, bounds, &[], config);
-        if let Some(load) = self.load.as_mut() {
-            load.region_applied(*bounds);
-        }
-    }
-
-    /// Like update_region, but voxels inside any `keep` region are left as they are.
-    fn update_region_keeping(
-        &mut self,
-        local_points: &[(f32, f32, f32)],
-        bounds: &RegionBounds,
-        keep: &[RegionBounds],
-        config: &Config,
-    ) {
         let pool = Arc::clone(&self.pool);
         pool.install(|| {
             let voxel_size = config.voxel_size;
             let clearance = config.headroom_cells();
             let pad = (2 * config.closing_passes()) as i32;
 
-            let changed = self.replace_region_voxels(local_points, bounds, keep, voxel_size);
+            let changed = self.replace_region_voxels(local_points, bounds, voxel_size);
 
             // No voxel changed, so surfaces and the graph are untouched.
             let Some((bx0, bx1, by0, by1)) = changed else {
@@ -457,97 +260,6 @@ impl Planner {
 
             self.rebuild_region_graph(added, removed, config);
         });
-    }
-
-    /// Finish a cloud partition against the current map, so the tiles also
-    /// sweep every voxel absent from the cloud. Nearest `center` first.
-    fn finish_partition(
-        &self,
-        part: CloudPartition,
-        center: (f32, f32),
-        config: &Config,
-    ) -> Vec<MapTile> {
-        let s = part.tile_size_m;
-        let vs = config.voxel_size;
-        let radius = tile_radius(s, vs);
-        let half = vs * 0.5;
-        let CloudPartition { mut clouds, .. } = part;
-
-        // A stale voxel needs only one covering tile, and its home tile
-        // always covers it.
-        for &(kx, ky, kz) in &self.voxel_map {
-            let x = kx as f32 * vs + half;
-            let y = ky as f32 * vs + half;
-            let cell = ((x / s).floor() as i32, (y / s).floor() as i32);
-            clouds
-                .entry(cell)
-                .or_default()
-                .band
-                .extend(kz as f32 * vs + half);
-        }
-        if clouds.is_empty() {
-            return Vec::new();
-        }
-
-        let mut tiles: Vec<MapTile> = clouds
-            .into_iter()
-            .map(|(cell, cloud)| MapTile {
-                bounds: RegionBounds {
-                    origin_x: (cell.0 as f32 + 0.5) * s,
-                    origin_y: (cell.1 as f32 + 0.5) * s,
-                    radius,
-                    z_min: cloud.band.min - vs,
-                    z_max: cloud.band.max + vs,
-                },
-                points: cloud.points,
-            })
-            .collect();
-        let dist = |t: &MapTile| {
-            (t.bounds.origin_x - center.0).powi(2) + (t.bounds.origin_y - center.1).powi(2)
-        };
-        tiles.sort_unstable_by(|a, b| {
-            dist(a)
-                .total_cmp(&dist(b))
-                .then(a.bounds.origin_x.total_cmp(&b.bounds.origin_x))
-                .then(a.bounds.origin_y.total_cmp(&b.bounds.origin_y))
-        });
-        tiles
-    }
-
-    /// Queue a partitioned full map as a tiled load, nearest `center` first,
-    /// replacing any pending tiles. Tiles leave the `keep` regions as they
-    /// are, like live regions applied during the load. Returns the tile count.
-    pub fn start_load(
-        &mut self,
-        part: CloudPartition,
-        center: (f32, f32),
-        keep: &[RegionBounds],
-        config: &Config,
-    ) -> usize {
-        let tiles = self.finish_partition(part, center, config);
-        let count = tiles.len();
-        self.load = (count > 0).then(|| MapLoad::new(tiles, keep));
-        count
-    }
-
-    pub fn loading(&self) -> bool {
-        self.load.is_some()
-    }
-
-    /// Apply the next pending tile, leaving what live regions covered meanwhile.
-    pub fn apply_next_tile(&mut self, config: &Config) -> LoadStep {
-        let Some(mut load) = self.load.take() else {
-            return LoadStep::Idle;
-        };
-        load.apply_next_tile(self, config);
-        if load.finished() {
-            return LoadStep::Finished {
-                elapsed: load.elapsed(),
-            };
-        }
-        let remaining = load.remaining();
-        self.load = Some(load);
-        LoadStep::Applied { remaining }
     }
 
     /// Patch changed cells, then repair nodes and edges around the change.
@@ -620,20 +332,17 @@ impl Planner {
         );
     }
 
-    /// Replace the cylinder's voxels outside `keep` with the local map points,
-    /// ignoring points outside it. Returns the column bbox of changed voxels.
+    /// Replace the cylinder's voxels with the local map points, ignoring
+    /// points outside it. Returns the column bbox of changed voxels.
     fn replace_region_voxels(
         &mut self,
         local_points: &[(f32, f32, f32)],
         bounds: &RegionBounds,
-        keep: &[RegionBounds],
         voxel_size: f32,
     ) -> Option<(i32, i32, i32, i32)> {
-        let kept = |k: VoxelKey| keep.iter().any(|r| r.contains_voxel(k, voxel_size));
         let new_set: AHashSet<VoxelKey> = local_points
             .iter()
             .map(|&p| voxelize(p, voxel_size))
-            .filter(|&k| !kept(k))
             .collect();
 
         let (x0, x1, y0, y1) = bounds.column_bbox(voxel_size);
@@ -648,8 +357,7 @@ impl Planner {
                     };
                     for &iz in zs {
                         let k = (ix, iy, iz);
-                        if bounds.contains_voxel(k, voxel_size) && !new_set.contains(&k) && !kept(k)
-                        {
+                        if bounds.contains_voxel(k, voxel_size) && !new_set.contains(&k) {
                             local.push(k);
                         }
                     }
@@ -950,23 +658,6 @@ impl Planner {
 
     pub fn voxel_keys(&self) -> impl Iterator<Item = VoxelKey> + '_ {
         self.voxel_map.iter().copied()
-    }
-}
-
-/// Call `f` with every grid cell whose covering cylinder contains (x, y):
-/// the 3x3 neighborhood of the home cell, distance-tested.
-fn covering_cells(x: f32, y: f32, s: f32, radius: f32, mut f: impl FnMut((i32, i32))) {
-    let hx = (x / s).floor() as i32;
-    let hy = (y / s).floor() as i32;
-    let r_sq = radius * radius;
-    for gx in (hx - 1)..=(hx + 1) {
-        for gy in (hy - 1)..=(hy + 1) {
-            let dx = x - (gx as f32 + 0.5) * s;
-            let dy = y - (gy as f32 + 0.5) * s;
-            if dx * dx + dy * dy <= r_sq {
-                f((gx, gy));
-            }
-        }
     }
 }
 
