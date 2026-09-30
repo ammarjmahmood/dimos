@@ -1260,3 +1260,16 @@ libraries to encode each advertised type, and wraps bytes in the existing relay
 data frame with an explicit channel, qualified type and `cdr` encoding. The
 backend rejects unknown channels, mismatched types and unframed legacy bytes.
 This preview requires access to esm.sh for the pinned browser libraries.
+
+### Hosted Go2 command boundaries
+
+Inspect CDR velocity and navigation commands with mocked streams and driver RPC:
+
+```sh
+PYTHONPATH=.:build/message-codegen/demo/cpp/build .venv/bin/python examples/message-codegen/demo_go2_command_cdr.py
+```
+
+The handler harness accepts two CDR commands one nanosecond apart, displays
+the clamped velocity and a generated world-frame navigation goal, and checks
+that E-STOP suppresses publication. It asserts that no driver RPC was called.
+This is a command-boundary demo; it does not start a blueprint or connect to Go2.

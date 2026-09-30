@@ -57,6 +57,23 @@ Standard setuptools egg-info was generated to expose the checkout's declared
 `dimos.messages` entry point; simply putting an uninstalled extension on
 PYTHONPATH does not register an installed provider.
 
+## Continued hosted command cutover
+
+Hosted Go2 command and telemetry boundaries now use generated TwistStamped,
+Twist, PoseStamped and Bool, matching the converted Go2 driver. Drive ordering
+uses integer source nanoseconds, including frames one nanosecond apart. Stale
+and future rejection, finite-velocity validation, limits, idle suppression,
+release-edge stopping and E-STOP remain covered by mocked driver tests. Invalid
+ROS nanoseconds are rejected before telemetry processing. A runnable
+`demo_go2_command_cdr.py` prints clamped drive and navigation fields and asserts
+zero driver calls. Both production modules passed mypy with generated stubs.
+
+The combined phone/Go2/hosted telemetry suite passed 53 tests. Separately, 135
+generated geometry, time, buffer, point-cloud, trajectory, camera-info and
+occupancy helper tests passed. Neither count represents the entire repository.
+Unitree import dependencies were installed in the project venv for these mocked
+regressions; no device connection, microphone or audio capture was started.
+
 ## Remaining gates
 
 The OpenSpec checklist remains unchanged because these slices do not complete
