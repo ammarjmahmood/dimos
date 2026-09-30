@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dimos_generated.sensor_msgs.msg import Image
+from dimos_generated.sensor_msgs.msg import CompressedImage, Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from numpy.typing import NDArray
@@ -97,6 +97,37 @@ def image_to_jpeg(msg: Image, quality: int = 75) -> bytes:
     if not ok:
         raise ValueError("JPEG encoding failed")
     return bytes(encoded)
+
+
+def compressed_image_from_image(message: Image, quality: int = 75) -> CompressedImage:
+    """JPEG-compress pixels in a standard ROS value, retaining the source header."""
+    output_encoding = "mono8" if message.encoding == "mono8" else "bgr8"
+    return CompressedImage(
+        header=message.header,
+        format=f"{message.encoding}; jpeg compressed {output_encoding}",
+        data=image_to_jpeg(message, quality=quality),
+    )
+
+
+def image_from_compressed(message: CompressedImage) -> Image:
+    """Decode standard JPEG/PNG data into explicit generated BGR/gray pixels."""
+    import cv2
+
+    format_name = message.format.lower()
+    if not any(name in format_name for name in ("jpeg", "jpg", "png")):
+        raise ValueError(f"unsupported compressed image format {message.format!r}")
+    pixels = cv2.imdecode(np.frombuffer(bytes(message.data), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if pixels is None:
+        raise ValueError("invalid compressed image data")
+    if pixels.ndim == 2:
+        encoding = "mono16" if pixels.dtype.itemsize == 2 else "mono8"
+    elif pixels.ndim == 3 and pixels.shape[2] == 3:
+        encoding = "bgr8"
+    elif pixels.ndim == 3 and pixels.shape[2] == 4:
+        encoding = "bgra8"
+    else:
+        raise ValueError("unsupported decoded image layout")
+    return image_from_array(pixels, encoding=encoding, header=message.header)
 
 
 def image_brightness(message: Image) -> float:

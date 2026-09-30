@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import cv2
-from dimos_generated.sensor_msgs.msg import JointState
+from dimos_generated.sensor_msgs.msg import Image, JointState
 from dimos_generated.std_msgs.msg import Header
 import h5py
 import numpy as np
@@ -46,7 +46,7 @@ from dimos.imitation.dataprep.core import (
     extract_episodes,
 )
 from dimos.memory.store.sqlite import SqliteStore
-from dimos.msgs.image import image_from_array
+from dimos.msgs.image import image_from_array, image_view
 from dimos.msgs.time import time_from_seconds
 from dimos.utils.testing.waiting import wait_until
 
@@ -237,7 +237,7 @@ def recorded_session(
             (108.0, 110.0, True, "place"),
         ]
         recorded_images: dict[float, np.ndarray[Any, Any]] = {
-            observation.ts: observation.data.data
+            observation.ts: image_view(observation.data)
             for observation in store.stream("color_image", Image).to_list()
         }
 

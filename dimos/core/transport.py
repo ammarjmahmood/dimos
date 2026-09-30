@@ -181,15 +181,20 @@ class LCMTransport(PubSubTransport[T]):
 
 class JpegLcmTransport(LCMTransport):  # type: ignore[type-arg]
     def __init__(self, topic: str, type: type, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        from dimos_generated.sensor_msgs.msg import CompressedImage, Image
+
         from dimos.protocol.pubsub.impl.jpeg_lcm import (
             JpegLCM,
         )  # ~330ms: deferred to avoid pulling in Image/cv2/rerun
 
+        if type is not Image:
+            raise TypeError("JpegLcmTransport requires generated sensor_msgs/Image")
+        self.image_type = type
         self.lcm = JpegLCM(**kwargs)  # type: ignore[assignment]
-        super().__init__(topic, type)
+        super().__init__(topic, CompressedImage)
 
     def __reduce__(self):  # type: ignore[no-untyped-def]
-        return (JpegLcmTransport, (self.topic.topic, self.topic.msg_type))
+        return (JpegLcmTransport, (self.topic.topic, self.image_type))
 
     def start(self) -> None:
         self.lcm.start()
