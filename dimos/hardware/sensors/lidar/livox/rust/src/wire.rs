@@ -61,6 +61,8 @@ pub mod param_key {
     pub const POINT_DATA_HOST_IP_CFG: u16 = 0x0006;
     pub const IMU_HOST_IP_CFG: u16 = 0x0007;
     pub const WORK_MODE: u16 = 0x001A;
+    /// The device's clock now, u64 ns (uptime unless PTP-synced).
+    pub const LOCAL_TIME_NOW: u16 = 0x8009;
     pub const IMU_DATA_EN: u16 = 0x001C;
     pub const FW_TYPE: u16 = 0x8010;
 }
@@ -289,6 +291,17 @@ pub(crate) fn parse_kv_list(mut data: &[u8]) -> Result<Vec<KeyValue<'_>>, WireEr
         data = &data[4 + len..];
     }
     Ok(out)
+}
+
+/// GetInternalInfo (0x0101) request body: key_num u16, rsvd u16, keys u16 each.
+pub fn build_query_body(keys: &[u16]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(4 + 2 * keys.len());
+    body.extend_from_slice(&(keys.len() as u16).to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    for key in keys {
+        body.extend_from_slice(&key.to_le_bytes());
+    }
+    body
 }
 
 /// Param-set (0x0100) request body: key_num u16, rsvd u16, key-value list

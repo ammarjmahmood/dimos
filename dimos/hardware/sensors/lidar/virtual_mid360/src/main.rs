@@ -432,17 +432,31 @@ fn discovery_ack_payload(lidar_ip: Ipv4Addr) -> Vec<u8> {
 
 /// Control-plane ACK bodies. QueryFwType (0x0101) wants fw_type != 0 => app
 /// firmware (not loader/upgrade mode), so the SDK proceeds to normal
-/// operation. The rest reply ret_code=0 (success).
+/// operation; the same query answers the clock (local_time_now). The rest
+/// reply ret_code=0 (success).
 fn control_ack_payload(cmd_id: u16) -> Vec<u8> {
     match cmd_id {
-        wire::cmd_id::GET_INTERNAL_INFO => InternalInfoAck {
-            ret_code: 0,
-            params: vec![KeyValue {
-                key: wire::param_key::FW_TYPE,
-                value: &[wire::FW_TYPE_APP],
-            }],
+        wire::cmd_id::GET_INTERNAL_INFO => {
+            // Streamed stamps are shifted onto the wall clock, so that is the device's clock too.
+            let now_ns = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos() as u64)
+                .to_le_bytes();
+            InternalInfoAck {
+                ret_code: 0,
+                params: vec![
+                    KeyValue {
+                        key: wire::param_key::FW_TYPE,
+                        value: &[wire::FW_TYPE_APP],
+                    },
+                    KeyValue {
+                        key: wire::param_key::LOCAL_TIME_NOW,
+                        value: &now_ns,
+                    },
+                ],
+            }
+            .build()
         }
-        .build(),
         _ => AsyncControlAck {
             ret_code: 0,
             error_key: 0,
@@ -485,15 +499,19 @@ mod tests {
 
     #[test]
     fn fw_type_ack_layout() {
-        // GetInternalInfo body is 8 bytes with fw_type last.
-        assert_eq!(
-            control_ack_payload(wire::cmd_id::GET_INTERNAL_INFO),
-            vec![0, 1, 0, 0x10, 0x80, 1, 0, wire::FW_TYPE_APP]
-        );
+        // The SDK reads fw_type from the first param; the clock follows it.
         let payload = control_ack_payload(wire::cmd_id::GET_INTERNAL_INFO);
+        assert_eq!(payload[..8], [0, 2, 0, 0x10, 0x80, 1, 0, wire::FW_TYPE_APP]);
         let info = InternalInfoAck::parse(&payload).unwrap();
         assert_eq!(info.params[0].key, wire::param_key::FW_TYPE);
         assert_eq!(info.params[0].value, &[wire::FW_TYPE_APP]);
+        assert_eq!(info.params[1].key, wire::param_key::LOCAL_TIME_NOW);
+        let device_ns = u64::from_le_bytes(info.params[1].value.try_into().unwrap());
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        assert!(now_ns - device_ns < 1_000_000_000);
     }
 
     #[test]

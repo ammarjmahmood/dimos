@@ -21,12 +21,13 @@
 
 use crate::pipeline::PacketSource;
 use crate::wire::{
-    self, build_param_set_body, host_ip_config_value, AsyncControlAck, ControlFrame, KeyValue,
+    self, build_param_set_body, host_ip_config_value, AsyncControlAck, ControlFrame,
+    InternalInfoAck, KeyValue,
 };
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -61,6 +62,10 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const HANDSHAKE_ATTEMPTS: u32 =
     (HANDSHAKE_TIMEOUT.as_millis() / HANDSHAKE_RETRY.as_millis()) as u32;
 const RECV_POLL: Duration = Duration::from_millis(200);
+/// Clock queries at startup; the one with the fastest round trip sets the offset.
+const CLOCK_QUERIES: u32 = 5;
+/// No offset measured: packets keep the device's own stamps.
+const NO_OFFSET: i64 = i64::MIN;
 /// About two seconds of Mid-360 data. A stalled consumer drops packets at
 /// this bound instead of growing memory without limit.
 const QUEUE_DEPTH: usize = 4096;
@@ -89,8 +94,8 @@ pub struct LiveSource {
     stop: Arc<AtomicBool>,
     failure: Failure,
     threads: Vec<std::thread::JoinHandle<()>>,
-    /// Host minus device clock, the smallest gap seen: the device counts uptime unless PTP-synced.
-    host_offset_ns: Option<i64>,
+    /// Host minus device clock, set by the handshake: the device counts uptime unless PTP-synced.
+    host_offset_ns: Arc<AtomicI64>,
 }
 
 impl LiveSource {
@@ -127,8 +132,10 @@ impl LiveSource {
             threads.push(spawn_reader("imu", imu, lidar_ip, tx, failure.clone()));
         }
         let handshake_failure = failure.clone();
+        let host_offset_ns = Arc::new(AtomicI64::new(NO_OFFSET));
+        let handshake_offset = host_offset_ns.clone();
         threads.push(std::thread::spawn(move || {
-            run_handshake(&config, &cmd, &handshake_failure)
+            run_handshake(&config, &cmd, &handshake_failure, &handshake_offset)
         }));
 
         Ok(LiveSource {
@@ -136,20 +143,9 @@ impl LiveSource {
             stop,
             failure,
             threads,
-            host_offset_ns: None,
+            host_offset_ns,
         })
     }
-}
-
-/// Restamp a packet onto the host clock, `host_ns` being its arrival time.
-fn to_host_clock(offset_ns: &mut Option<i64>, packet: &mut [u8], host_ns: i64) {
-    let Some(device_ns) = wire::read_timestamp_ns(packet) else {
-        return;
-    };
-    let gap = host_ns - device_ns as i64;
-    let offset = offset_ns.map_or(gap, |o| o.min(gap));
-    *offset_ns = Some(offset);
-    wire::write_timestamp_ns(packet, device_ns.wrapping_add_signed(offset));
 }
 
 impl PacketSource for LiveSource {
@@ -162,10 +158,15 @@ impl PacketSource for LiveSource {
                 Ok(packet) => {
                     let len = packet.len().min(buf.len());
                     buf[..len].copy_from_slice(&packet[..len]);
-                    let host_ns = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_or(0, |d| d.as_nanos() as i64);
-                    to_host_clock(&mut self.host_offset_ns, &mut buf[..len], host_ns);
+                    let offset = self.host_offset_ns.load(Ordering::Relaxed);
+                    if let (Some(device_ns), true) =
+                        (wire::read_timestamp_ns(&buf[..len]), offset != NO_OFFSET)
+                    {
+                        wire::write_timestamp_ns(
+                            &mut buf[..len],
+                            device_ns.wrapping_add_signed(offset),
+                        );
+                    }
                     return Some(len);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -317,9 +318,25 @@ fn handshake_steps(config: &LiveConfig) -> Vec<Step> {
 /// Send each config step as its own request until the device ACKs it. The
 /// work-mode step last starts streaming. A step the device never ACKs, or
 /// explicitly rejects, fails the source.
-fn run_handshake(config: &LiveConfig, cmd: &UdpSocket, failure: &Failure) {
+fn run_handshake(
+    config: &LiveConfig,
+    cmd: &UdpSocket,
+    failure: &Failure,
+    host_offset_ns: &AtomicI64,
+) {
     let device = SocketAddrV4::new(config.lidar_ip, config.ports.cmd_data);
     let mut seq: u32 = 0;
+    match measure_clock_offset(cmd, device, &mut seq, &failure.stop) {
+        Some((offset, rtt)) => {
+            host_offset_ns.store(offset, Ordering::Relaxed);
+            tracing::info!(
+                offset_ns = offset,
+                rtt_us = rtt / 1_000,
+                "stamping on the host clock"
+            );
+        }
+        None => tracing::warn!("device clock query failed; stamps stay on the device's clock"),
+    }
     for step in handshake_steps(config) {
         let mut acked = false;
         for _ in 0..HANDSHAKE_ATTEMPTS {
@@ -375,22 +392,94 @@ enum Ack {
     Timeout,
 }
 
-/// Wait at most one retry interval for the device's param-set ACK matching
-/// `seq`. Datagrams from anyone but the device are ignored, and the deadline
-/// holds even under a steady trickle of unrelated traffic.
+fn host_now_ns() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as i64)
+}
+
+/// Host minus device clock, NTP style: the device's `local_time_now` against the
+/// midpoint of the query's round trip, from the fastest of a few. Returns (offset, rtt).
+fn measure_clock_offset(
+    cmd: &UdpSocket,
+    device: SocketAddrV4,
+    seq: &mut u32,
+    stop: &AtomicBool,
+) -> Option<(i64, i64)> {
+    let body = wire::build_query_body(&[wire::param_key::LOCAL_TIME_NOW]);
+    let mut best: Option<(i64, i64)> = None;
+    for _ in 0..CLOCK_QUERIES {
+        *seq = seq.wrapping_add(1);
+        let request = wire::build_control(
+            *seq,
+            wire::cmd_id::GET_INTERNAL_INFO,
+            wire::CMD_TYPE_REQUEST,
+            wire::SENDER_HOST,
+            &body,
+        );
+        let sent = host_now_ns();
+        if cmd.send_to(&request, device).is_err() {
+            continue;
+        }
+        let Some(reply) = wait_for_reply(cmd, device, wire::cmd_id::GET_INTERNAL_INFO, *seq, stop)
+        else {
+            continue;
+        };
+        let received = host_now_ns();
+        let Some(device_ns) = local_time_now(&reply) else {
+            continue;
+        };
+        let rtt = received - sent;
+        if best.is_none_or(|(_, best_rtt)| rtt < best_rtt) {
+            best = Some(((sent + received) / 2 - device_ns as i64, rtt));
+        }
+    }
+    best
+}
+
+fn local_time_now(reply: &[u8]) -> Option<u64> {
+    let ack = InternalInfoAck::parse(reply).ok()?;
+    let param = ack
+        .params
+        .iter()
+        .find(|p| p.key == wire::param_key::LOCAL_TIME_NOW)?;
+    Some(u64::from_le_bytes(param.value.try_into().ok()?))
+}
+
+/// Wait at most one retry interval for the device's param-set ACK matching `seq`.
 fn wait_for_ack(cmd: &UdpSocket, device: SocketAddrV4, seq: u32, stop: &AtomicBool) -> Ack {
+    let Some(data) = wait_for_reply(cmd, device, wire::cmd_id::PARAM_SET, seq, stop) else {
+        return Ack::Timeout;
+    };
+    match AsyncControlAck::parse(&data) {
+        Ok(ack) if ack.ret_code == 0 && ack.error_key == 0 => Ack::Ok,
+        Ok(ack) => Ack::Rejected(ack),
+        Err(_) => Ack::Timeout,
+    }
+}
+
+/// Wait at most one retry interval for the device's ACK to `cmd_id` matching
+/// `seq`, returning its body. Datagrams from anyone but the device are ignored,
+/// and the deadline holds even under a steady trickle of unrelated traffic.
+fn wait_for_reply(
+    cmd: &UdpSocket,
+    device: SocketAddrV4,
+    cmd_id: u16,
+    seq: u32,
+    stop: &AtomicBool,
+) -> Option<Vec<u8>> {
     let deadline = Instant::now() + HANDSHAKE_RETRY;
     let mut buf = [0u8; 2048];
     loop {
         if stop.load(Ordering::Relaxed) {
-            return Ack::Timeout;
+            return None;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() || cmd.set_read_timeout(Some(remaining)).is_err() {
-            return Ack::Timeout;
+            return None;
         }
         let Ok((len, from)) = cmd.recv_from(&mut buf) else {
-            return Ack::Timeout;
+            return None;
         };
         if from != std::net::SocketAddr::V4(device) {
             continue;
@@ -400,16 +489,12 @@ fn wait_for_ack(cmd: &UdpSocket, device: SocketAddrV4, seq: u32, stop: &AtomicBo
         };
         if frame.cmd_type != wire::CMD_TYPE_ACK
             || frame.sender_type != wire::SENDER_LIDAR
-            || frame.cmd_id != wire::cmd_id::PARAM_SET
+            || frame.cmd_id != cmd_id
             || frame.seq != seq
         {
             continue;
         }
-        match AsyncControlAck::parse(frame.data) {
-            Ok(ack) if ack.ret_code == 0 && ack.error_key == 0 => return Ack::Ok,
-            Ok(ack) => return Ack::Rejected(ack),
-            Err(_) => continue,
-        }
+        return Some(frame.data.to_vec());
     }
 }
 
@@ -433,6 +518,9 @@ mod tests {
 
     /// A minimal in-test device: ACK every param-set, then stream one point
     /// packet and one IMU packet once work mode is set.
+    /// The fake device's uptime clock; its packets are stamped just after this.
+    const FAKE_DEVICE_NOW_NS: u64 = 500;
+
     fn spawn_fake_device(ports: Ports) -> std::thread::JoinHandle<Vec<u16>> {
         std::thread::spawn(move || {
             let loopback = Ipv4Addr::LOCALHOST;
@@ -443,6 +531,25 @@ mod tests {
             loop {
                 let (len, from) = cmd.recv_from(&mut buf).unwrap();
                 let frame = ControlFrame::parse(&buf[..len]).unwrap();
+                if frame.cmd_id == wire::cmd_id::GET_INTERNAL_INFO {
+                    let body = InternalInfoAck {
+                        ret_code: 0,
+                        params: vec![KeyValue {
+                            key: wire::param_key::LOCAL_TIME_NOW,
+                            value: &FAKE_DEVICE_NOW_NS.to_le_bytes(),
+                        }],
+                    }
+                    .build();
+                    let ack = wire::build_control(
+                        frame.seq,
+                        frame.cmd_id,
+                        wire::CMD_TYPE_ACK,
+                        wire::SENDER_LIDAR,
+                        &body,
+                    );
+                    cmd.send_to(&ack, from).unwrap();
+                    continue;
+                }
                 let params = wire::parse_param_set_body(frame.data).unwrap();
                 let key = params[0].key;
                 if keys_seen.last() != Some(&key) {
@@ -545,6 +652,9 @@ mod tests {
             let len = source.recv(&mut buf).expect("packet before shutdown");
             let packet = DataPacket::parse(&buf[..len]).unwrap();
             types_seen.insert(packet.data_type);
+            // Device stamps of 1-2 us of uptime come out on the host clock, within the test's run.
+            let age_ns = host_now_ns() - packet.timestamp_ns as i64;
+            assert!((0..10_000_000_000).contains(&age_ns), "age {age_ns} ns");
         }
         assert!(types_seen.contains(&DataType::CartesianHigh));
         assert!(types_seen.contains(&DataType::Imu));
@@ -560,41 +670,6 @@ mod tests {
                 wire::param_key::IMU_DATA_EN,
                 wire::param_key::WORK_MODE,
             ]
-        );
-    }
-
-    #[test]
-    fn host_clock_offset_is_the_smallest_arrival_delay() {
-        let stamped = |ts_ns: u64| {
-            DataPacket {
-                time_interval: 0,
-                dot_num: 0,
-                data_type: DataType::Imu,
-                timestamp_ns: ts_ns,
-                payload: &[],
-            }
-            .build()
-        };
-        let host = 1_700_000_000_000_000_000_i64;
-        let mut offset = None;
-        let mut late = stamped(1_000);
-        to_host_clock(&mut offset, &mut late, host + 1_000 + 5_000_000);
-        let mut prompt = stamped(2_000);
-        to_host_clock(&mut offset, &mut prompt, host + 2_000 + 1_000_000);
-        assert_eq!(
-            wire::read_timestamp_ns(&late),
-            Some((host + 1_000 + 5_000_000) as u64)
-        );
-        assert_eq!(
-            wire::read_timestamp_ns(&prompt),
-            Some((host + 2_000 + 1_000_000) as u64)
-        );
-        // Later packets use the prompt packet's 1 ms delay, not the late one's 5 ms.
-        let mut next = stamped(3_000);
-        to_host_clock(&mut offset, &mut next, host + 3_000 + 9_000_000);
-        assert_eq!(
-            wire::read_timestamp_ns(&next),
-            Some((host + 3_000 + 1_000_000) as u64)
         );
     }
 
@@ -654,8 +729,7 @@ mod tests {
         let mut buf = [0u8; 4096];
         let len = source.recv(&mut buf).expect("genuine packet delivered");
         let delivered = DataPacket::parse(&buf[..len]).unwrap();
-        // Restamped onto the host clock, so only the forged one would read 7.
-        assert!(delivered.timestamp_ns > 1_000_000_000);
+        assert_eq!(delivered.timestamp_ns, 42);
     }
 
     #[test]
@@ -689,8 +763,14 @@ mod tests {
                 UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, ports.cmd_data)).unwrap();
             cmd.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             let mut buf = [0u8; 2048];
-            let (len, from) = cmd.recv_from(&mut buf).unwrap();
-            let frame = ControlFrame::parse(&buf[..len]).unwrap();
+            // Leave the clock queries unanswered; reject the first param set.
+            let (frame, from) = loop {
+                let (len, from) = cmd.recv_from(&mut buf).unwrap();
+                let frame = ControlFrame::parse(&buf[..len]).unwrap();
+                if frame.cmd_id == wire::cmd_id::PARAM_SET {
+                    break (frame, from);
+                }
+            };
             let nack_body = AsyncControlAck {
                 ret_code: 1,
                 error_key: 0,
