@@ -138,6 +138,8 @@ def pose_from_transform(message: TransformStamped) -> PoseStamped:
 
 def transform_from_pose(message: PoseStamped, *, child_frame_id: str) -> TransformStamped:
     """Copy a stamped pose into TF with an explicit child and unchanged source header."""
+    if not isinstance(message, PoseStamped):
+        raise TypeError("Expected a generated PoseStamped")
     position = message.pose.position
     return TransformStamped(
         header=message.header,
@@ -249,4 +251,124 @@ def wrench_array(message: Wrench) -> NDArray[np.float64]:
             message.torque.z,
         ],
         dtype=np.float64,
+    )
+
+
+def vector_array(value: Vector3 | Point) -> NDArray[np.float64]:
+    """Copy a generated spatial vector/point into an independent XYZ array."""
+    return np.array([value.x, value.y, value.z], dtype=np.float64)
+
+
+def vector_from_array(values: Sequence[float] | NDArray[np.float64]) -> Vector3:
+    """Copy exactly three coordinates into a generated vector."""
+    array = np.asarray(values, dtype=np.float64)
+    if array.shape != (3,):
+        raise ValueError("Expected 3 vector components")
+    return Vector3(x=array[0], y=array[1], z=array[2])
+
+
+def normalized_vector(value: Vector3) -> Vector3:
+    """Return a unit vector; zero length remains zero."""
+    array = vector_array(value)
+    length = float(np.linalg.norm(array))
+    return vector_from_array(array / length) if length else Vector3()
+
+
+def quaternion_array(value: Quaternion) -> NDArray[np.float64]:
+    """Copy XYZW components without normalizing their declared values."""
+    return np.array([value.x, value.y, value.z, value.w], dtype=np.float64)
+
+
+def quaternion_from_array(values: Sequence[float] | NDArray[np.float64]) -> Quaternion:
+    """Copy exactly four XYZW components into a generated quaternion."""
+    array = np.asarray(values, dtype=np.float64)
+    if array.shape != (4,):
+        raise ValueError("Quaternion requires exactly 4 components")
+    return Quaternion(x=array[0], y=array[1], z=array[2], w=array[3])
+
+
+def quaternion_product(first: Quaternion, second: Quaternion) -> Quaternion:
+    """Hamilton product, retaining non-unit magnitudes and multiplication order."""
+    if not isinstance(first, Quaternion) or not isinstance(second, Quaternion):
+        raise TypeError("Cannot multiply Quaternion with a non-quaternion value")
+    a, b = quaternion_array(first), quaternion_array(second)
+    xyz = a[3] * b[:3] + b[3] * a[:3] + np.cross(a[:3], b[:3])
+    return quaternion_from_array(np.append(xyz, a[3] * b[3] - np.dot(a[:3], b[:3])))
+
+
+def quaternion_conjugate(value: Quaternion) -> Quaternion:
+    """Negate the imaginary components, preserving the scalar component."""
+    return Quaternion(x=-value.x, y=-value.y, z=-value.z, w=value.w)
+
+
+def quaternion_inverse(value: Quaternion) -> Quaternion:
+    """Algebraic inverse, including non-unit quaternions."""
+    array = quaternion_array(value)
+    squared = float(np.dot(array, array))
+    if squared == 0:
+        raise ZeroDivisionError("Cannot invert zero quaternion")
+    return quaternion_from_array(quaternion_array(quaternion_conjugate(value)) / squared)
+
+
+def normalized_quaternion(value: Quaternion) -> Quaternion:
+    """Return unit components without changing sign; reject zero norm."""
+    array = quaternion_array(value)
+    length = float(np.linalg.norm(array))
+    if length == 0:
+        raise ZeroDivisionError("Cannot normalize zero quaternion")
+    return quaternion_from_array(array / length)
+
+
+def rotate_vector(rotation: Quaternion, value: Vector3) -> Vector3:
+    """Rotate an XYZ vector using a normalized spatial rotation."""
+    return vector_from_array(_rotation(rotation).apply(vector_array(value)))
+
+
+def point_from_array(values: Sequence[float] | NDArray[np.float64]) -> Point:
+    """Copy exactly three Cartesian coordinates into a generated point."""
+    vector = vector_from_array(values)
+    return Point(x=vector.x, y=vector.y, z=vector.z)
+
+
+def compose_poses(first: Pose, second: Pose) -> Pose:
+    """Compose parent/local poses without mutating inputs or normalizing stored quaternions."""
+    offset = _rotation(first.orientation).apply(vector_array(second.position))
+    return Pose(
+        position=point_from_array(vector_array(first.position) + offset),
+        orientation=quaternion_product(first.orientation, second.orientation),
+    )
+
+
+def compose_transform_values(first: Transform, second: Transform) -> Transform:
+    """Compose unframed spatial transforms in parent/local order."""
+    if not isinstance(first, Transform) or not isinstance(second, Transform):
+        raise TypeError("Expected generated Transform values")
+    return Transform(
+        translation=vector_from_array(
+            vector_array(first.translation)
+            + _rotation(first.rotation).apply(vector_array(second.translation))
+        ),
+        rotation=quaternion_product(first.rotation, second.rotation),
+    )
+
+
+def transform_pose_local(pose: Pose, transform: Transform) -> Pose:
+    """Apply an offset expressed in a pose's local axes."""
+    return compose_poses(
+        pose,
+        Pose(
+            position=point_from_array(vector_array(transform.translation)),
+            orientation=transform.rotation,
+        ),
+    )
+
+
+def relative_pose_transform(first: Pose, second: Pose) -> Transform:
+    """Find the local transform taking the first pose to the second."""
+    rotation = quaternion_inverse(first.orientation)
+    return Transform(
+        translation=vector_from_array(
+            _rotation(rotation).apply(vector_array(second.position) - vector_array(first.position))
+        ),
+        rotation=quaternion_product(rotation, second.orientation),
     )
