@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator, Iterator
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -26,6 +27,7 @@ import pytest
 from dimos.core.coordination.coordinator_rpc import CoordinatorRPC
 from dimos.core.global_config import global_config
 from dimos.core.transport_factory import make_transport
+from dimos.e2e_tests.cdr_replay_fixture import write_go2_cdr_replay
 from dimos.e2e_tests.conf_types import StartPersonTrack
 from dimos.e2e_tests.dim_sim_client import DimSimClient
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
@@ -373,3 +375,11 @@ def explore_house(
         direct_cmd_vel_explorer.follow_points(points)
 
     return explore
+
+
+@pytest.fixture(scope="session")
+def cdr_go2_replay_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Current generated-message replay, independent of retired LFS codecs."""
+    path = tmp_path_factory.mktemp("go2-cdr") / "replay.db"
+    write_go2_cdr_replay(path)
+    return path

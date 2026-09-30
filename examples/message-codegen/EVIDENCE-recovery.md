@@ -74,6 +74,31 @@ occupancy helper tests passed. Neither count represents the entire repository.
 Unitree import dependencies were installed in the project venv for these mocked
 regressions; no device connection, microphone or audio capture was started.
 
+## CI environment and browser-fixture repairs
+
+Both workflows were manually dispatched on `dd9a5e385df9b4966953c50e142bb695f38d3beb`.
+The generator job passed its codec conformance, raw fragmented LCM exchange,
+and transport unit tests before a helper demo failed because PyYAML was absent.
+The workflow now explicitly provisions the lockfile's PyYAML 6.0.3. That helper
+demo passed in a fresh minimal project venv.
+
+Main CI's lint, docs and Rust binding jobs failed during editable installation
+because their Fast CDR preflight was absent. They now run the same pinned setup
+script already used by the test jobs. A real no-dependency editable install
+succeeded in an isolated venv in 1m48s. All jobs that perform `uv sync` now have
+an explicit CDR setup step. This validates installation, not the full jobs.
+
+Web CI passed its Deno/SDK/cockpit checks and seven browser E2E cases; retired
+PoseStamped inputs and an old replay database caused the remaining failures.
+The typed-channel test now uses generated fields and expects the CDR schema
+contract. Go2 cockpit/SDK tests use a deterministic 1.3 MB replay fixture with
+three generated streams, 720 frames each, exact source nanoseconds and changing
+RGB pixels. Images use lossless `lz4+cdr`; the old large LFS fetch is removed
+from the web job. The full fixture was written and reopened locally with type,
+stamp, frame-count and pixel assertions. Generated fixture mypy and Ruff passed.
+61 focused schema/MCAP/teleop checks passed. Browser E2E and full CI acceptance
+for these repairs remain to be verified on the next published commit.
+
 ## Remaining gates
 
 The OpenSpec checklist remains unchanged because these slices do not complete
@@ -103,9 +128,8 @@ At published commit `dbf5583075154f9a174efe59a794ba5167e6592b`, all CodeQL
 language analyses passed. Neither `ci.yml` nor `message-codegen.yml` has a
 pull-request run for #4257 among the latest 100 runs. GitHub reports mergeability
 unknown and exposes only the PR head ref; the missing merge ref may be relevant,
-but a cause has not been established. Manual dispatch is blocked by absent
-authenticated API/CLI access and an unsigned-in browser. SSH Git publishing
-works; it does not confer workflow API access. LCM default
+but a cause has not been established. The desktop browser was unsigned in. Existing authenticated GitHub CLI on
+CC Desktop subsequently enabled manual dispatch without credential changes. LCM default
 multicast self-test is blocked on this host; no networking settings were changed.
 Full blueprint/viewer demo, final installed packaging matrix, authenticated
 Foxglove UI evidence, and exact published-commit CI acceptance remain pending.
