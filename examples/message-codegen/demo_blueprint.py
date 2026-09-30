@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+from functools import partial
 from pathlib import Path
 import socket
 import threading
 from typing import Literal
+from unittest.mock import patch
 import uuid
 
 from dimos_generated.dimos_msgs.msg import LineSegment3D, LineSegments3D
-from dimos_generated.geometry_msgs.msg import Point
+from dimos_generated.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from dimos_generated.sensor_msgs.msg import Image
 import numpy as np
 
@@ -36,6 +38,7 @@ from dimos.core.module import Module
 from dimos.core.native_module import NativeModule
 from dimos.core.stream import In, Out
 from dimos.msgs.time import time_from_nanoseconds, to_nanoseconds
+from dimos.protocol.service.system_configurator.base import configure_system
 from dimos.protocol.service.zenohservice import ZenohConfig, ZenohSessionPool
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +52,7 @@ class PythonRelayDemo(Module):
     l2: In[LineSegments3D]
     i0: Out[Image]
     i2: In[Image]
+    p0: Out[PoseStamped]
 
     @rpc
     def start(self) -> None:
@@ -74,7 +78,7 @@ class PythonRelayDemo(Module):
 
     @rpc
     def exchange(self, sample: int) -> str:
-        self._stamp = _STAMP + sample
+        self._stamp = _STAMP + sample * 100_000_000
         self._lines = None
         self._image = None
         self._received.clear()
@@ -92,7 +96,11 @@ class PythonRelayDemo(Module):
         )
         image.header.stamp = time_from_nanoseconds(self._stamp)
         image.header.frame_id = "camera"
+        pose = PoseStamped(
+            header=lines.header, pose=Pose(position=Point(x=sample), orientation=Quaternion(w=1))
+        )
         for _ in range(60):
+            self.p0.publish(pose)
             self.l0.publish(lines)
             self.i0.publish(image)
             if self._received.wait(0.25):
@@ -130,12 +138,19 @@ class RustRelay(NativeModule):
     image_out: Out[Image]
 
 
-def blueprint(backend: Literal["lcm", "zenoh"], cpp: Path, rust: Path) -> Blueprint:
+def blueprint(
+    backend: Literal["lcm", "zenoh"],
+    cpp: Path,
+    rust: Path,
+    *,
+    recording: Blueprint | None = None,
+) -> Blueprint:
     return (
         autoconnect(
             PythonRelayDemo.blueprint(),
             CppRelay.blueprint(executable=str(cpp.resolve()), stdin_config=True),
             RustRelay.blueprint(executable=str(rust.resolve()), stdin_config=True),
+            *([recording] if recording is not None else []),
         )
         .remappings(
             [
@@ -167,6 +182,13 @@ def main() -> None:
         if not executable.is_file():
             parser.error(f"Build the native relay first: {executable}")
     with ExitStack() as stack:
+        # A hardware-free demo reports host tuning requirements without applying them.
+        stack.enter_context(
+            patch(
+                "dimos.protocol.service.system_configurator.base.configure_system",
+                partial(configure_system, check_only=True),
+            )
+        )
         bp = blueprint(args.transport, args.cpp, args.rust)
         if args.transport == "zenoh":
             with socket.socket() as reservation:

@@ -310,3 +310,18 @@ def test_duplicate_remapped_stream_names_fail_before_launch(
 
     with pytest.raises(ValueError, match="Duplicate recorded stream names"):
         recorder._stream_specs()
+
+
+@pytest.mark.parametrize("record_tf", [False, True])
+def test_launch_topics_match_selected_streams_with_connected_tf(tmp_path, make_recorder, record_tf):
+    recorder = make_recorder(
+        SampleRustRecorder,
+        store=RustMcapStoreConfig(path=str(tmp_path / "recording.mcap")),
+        record_tf=record_tf,
+    )
+    connect(recorder, odometry="/odom", tf="/tf")
+    recorder.config.streams = recorder._stream_specs()
+    topics = recorder._collect_topics()
+    expected = {"odometry": "/odom", "tf": "/tf"} if record_tf else {"odometry": "/odom"}
+    assert topics == expected
+    assert set(topics) == {spec.port for spec in recorder.config.streams}

@@ -202,6 +202,17 @@ class RustRecorder(NativeModule):
         self.config.streams = specs
         super().start()
 
+    def _collect_topics(self) -> dict[str, str]:
+        """Launch only ports declared in the prepared recording configuration.
+
+        A coordinator can wire the inherited TF input even when record_tf is
+        false. Passing that extra topic makes the native module reject startup.
+        """
+        selected = {spec.port for spec in self.config.streams}
+        return {
+            name: topic for name, topic in super()._collect_topics().items() if name in selected
+        }
+
     def _stream_specs(self) -> list[RustStreamSpec]:
         specs: list[RustStreamSpec] = []
         for port_name, port in self.inputs.items():

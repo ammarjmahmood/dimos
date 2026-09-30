@@ -1287,3 +1287,27 @@ It decodes two generated RGB images, combines and scales them, then encodes
 the result as CDR and JPEG. It asserts RGB ordering and the latest source
 timestamp `1700000000123456790ns`. Ports are mocked; it starts no camera,
 video encoder, control loop or robot connection.
+
+## Record and replay the native blueprint
+
+With the runtime installed and the native relay/recorder binaries built, run:
+
+```bash
+python examples/message-codegen/demo_blueprint_recording.py --transport zenoh \
+  --samples 3 --output build/message-codegen/demo/evidence/blueprint-recording.mcap
+```
+
+The output must be a new filename. The demo launches a loopback Zenoh router,
+Python producer, C++ relay, Rust relay, and Rust MCAP recorder. It checks custom
+line edits, exact image bytes, and standard poses, stops the producers, then
+independently decodes the embedded ROS schemas and replays all three streams
+through DimOS. Replay bytes must match the recording in each stream's order.
+Samples have 100 ms timestamp spacing and retain a nonzero nanosecond remainder;
+this avoids collapsing adjacent nanoseconds in the existing float-second replay
+scheduler. Host tuning is checked only, never applied by this demo.
+
+The same command accepts `--transport lcm`; this path requires working multicast
+on the host and has not passed the current host's default-interface gate.
+The recording remains for viewer inspection; no producer or router remains.
+See [recording evidence](evidence/blueprint-recording.md) for the verified run
+and remaining viewer/transport acceptance gates.

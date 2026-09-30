@@ -13,13 +13,14 @@
 # limitations under the License.
 
 from itertools import islice
+from pathlib import Path
 
 from dimos_generated.geometry_msgs.msg import Point
 import pytest
 
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.utils.testing.moment import SensorMoment
-from dimos.utils.testing.replay import TimedSensorReplay, _close_all
+from dimos.utils.testing.replay import TimedSensorReplay, _close_all, _resolve_db_path
 
 
 @pytest.fixture
@@ -66,3 +67,9 @@ def test_sensor_moment_publishes_selected_cdr_value_and_clears_missing_seek(reco
     finally:
         moment.stop()
     transport.stop.assert_called_once_with()
+
+
+def test_missing_explicit_relative_database_does_not_download_a_doubled_suffix(mocker):
+    download = mocker.patch("dimos.utils.testing.replay.get_data")
+    assert _resolve_db_path("missing-recording.db") == Path("missing-recording.db")
+    download.assert_not_called()

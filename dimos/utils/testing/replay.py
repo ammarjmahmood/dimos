@@ -57,7 +57,7 @@ def _resolve_db_path(dataset: str) -> Path:
     - Absolute/relative paths are used as-is.
     """
     p = Path(dataset)
-    if p.is_absolute() or p.exists():
+    if p.is_absolute() or p.suffix == ".db" or p.exists():
         return p
     return get_data(f"{dataset}.db")
 
