@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from collections.abc import Callable, Generator
+import os
 import time
 
 from dimos_generated.sensor_msgs.msg import PointCloud2
@@ -45,7 +46,7 @@ def moment() -> Generator[MomentFactory, None, None]:
     instances: list[Go2MapperMoment] = []
 
     def get_moment(ts: float, publish: bool = True) -> Go2MapperMoment:
-        m = Go2MapperMoment()
+        m = Go2MapperMoment(os.environ["DIMOS_CDR_REPLAY"])
         m.seek(ts)
         if publish:
             m.publish()

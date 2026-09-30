@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+
 import cv2
 from dimos_generated.nav_msgs.msg import OccupancyGrid
 from dimos_generated.std_msgs.msg import Header
@@ -21,6 +23,7 @@ from open3d.geometry import PointCloud
 import pytest
 
 from dimos.core.transport import LCMTransport
+from dimos.e2e_tests.cdr_replay_fixture import write_go2_cdr_replay
 from dimos.mapping.occupancy.visualizations import visualize_occupancy_grid
 from dimos.mapping.pointclouds.occupancy import (
     height_cost_occupancy,
@@ -87,8 +90,10 @@ class HeightCostMoment(Go2Moment):
 
 
 @pytest.fixture
-def height_cost_moment():
-    moment = HeightCostMoment()
+def height_cost_moment(tmp_path: Path):
+    recording = tmp_path / "go2-cdr.db"
+    write_go2_cdr_replay(recording, duration_s=3)
+    moment = HeightCostMoment(recording)
 
     def get_moment(ts: float, publish: bool = True) -> HeightCostMoment:
         moment.seek(ts)
@@ -104,13 +109,14 @@ def height_cost_moment():
             moment.publish()
         return moment
 
-    yield get_moment
-
-    moment.stop()
+    try:
+        yield get_moment
+    finally:
+        moment.stop()
 
 
 def test_height_cost_occupancy_from_lidar(height_cost_moment) -> None:
-    """Test height_cost_occupancy with real lidar data."""
+    """Test height_cost_occupancy with a deterministic CDR lidar recording."""
     moment = height_cost_moment(1.0)
 
     costmap = moment.costmap.value
