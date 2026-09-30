@@ -552,11 +552,17 @@ pub fn read_timestamp_ns(packet: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes.try_into().unwrap()))
 }
 
+/// Overwrite the u64 timestamp of a raw data-plane packet in place.
+pub fn write_timestamp_ns(packet: &mut [u8], ts_ns: u64) {
+    if let Some(bytes) = packet.get_mut(DATA_TIMESTAMP_OFFSET..DATA_TIMESTAMP_OFFSET + 8) {
+        bytes.copy_from_slice(&ts_ns.to_le_bytes());
+    }
+}
+
 /// Shift the u64 timestamp of a raw data-plane packet in place.
 pub fn shift_timestamp_ns(packet: &mut [u8], shift: u64) {
     if let Some(orig) = read_timestamp_ns(packet) {
-        packet[DATA_TIMESTAMP_OFFSET..DATA_TIMESTAMP_OFFSET + 8]
-            .copy_from_slice(&orig.wrapping_add(shift).to_le_bytes());
+        write_timestamp_ns(packet, orig.wrapping_add(shift));
     }
 }
 

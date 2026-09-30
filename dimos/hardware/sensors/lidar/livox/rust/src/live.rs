@@ -29,7 +29,7 @@ use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The ports the live source speaks on: command plane, status push and the
 /// two data streams, each as a device/host pair.
@@ -89,6 +89,8 @@ pub struct LiveSource {
     stop: Arc<AtomicBool>,
     failure: Failure,
     threads: Vec<std::thread::JoinHandle<()>>,
+    /// Host minus device clock, the smallest gap seen: the device counts uptime unless PTP-synced.
+    host_offset_ns: Option<i64>,
 }
 
 impl LiveSource {
@@ -134,8 +136,20 @@ impl LiveSource {
             stop,
             failure,
             threads,
+            host_offset_ns: None,
         })
     }
+}
+
+/// Restamp a packet onto the host clock, `host_ns` being its arrival time.
+fn to_host_clock(offset_ns: &mut Option<i64>, packet: &mut [u8], host_ns: i64) {
+    let Some(device_ns) = wire::read_timestamp_ns(packet) else {
+        return;
+    };
+    let gap = host_ns - device_ns as i64;
+    let offset = offset_ns.map_or(gap, |o| o.min(gap));
+    *offset_ns = Some(offset);
+    wire::write_timestamp_ns(packet, device_ns.wrapping_add_signed(offset));
 }
 
 impl PacketSource for LiveSource {
@@ -148,6 +162,10 @@ impl PacketSource for LiveSource {
                 Ok(packet) => {
                     let len = packet.len().min(buf.len());
                     buf[..len].copy_from_slice(&packet[..len]);
+                    let host_ns = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |d| d.as_nanos() as i64);
+                    to_host_clock(&mut self.host_offset_ns, &mut buf[..len], host_ns);
                     return Some(len);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -546,6 +564,45 @@ mod tests {
     }
 
     #[test]
+    fn host_clock_offset_is_the_smallest_arrival_delay() {
+        let stamped = |ts_ns: u64| {
+            DataPacket {
+                time_interval: 0,
+                dot_num: 0,
+                data_type: DataType::Imu,
+                timestamp_ns: ts_ns,
+                payload: &[],
+            }
+            .build()
+        };
+        let host = 1_700_000_000_000_000_000_i64;
+        let mut offset = None;
+        let mut late = stamped(1_000);
+        to_host_clock(&mut offset, &mut late, host + 1_000 + 5_000_000);
+        let mut prompt = stamped(2_000);
+        to_host_clock(&mut offset, &mut prompt, host + 2_000 + 1_000_000);
+        assert_eq!(
+            wire::read_timestamp_ns(&late),
+            Some((host + 1_000 + 5_000_000) as u64)
+        );
+        assert_eq!(
+            wire::read_timestamp_ns(&prompt),
+            Some((host + 2_000 + 1_000_000) as u64)
+        );
+        // Later packets use the prompt packet's 1 ms delay, not the late one's 5 ms.
+        let mut next = stamped(3_000);
+        to_host_clock(&mut offset, &mut next, host + 3_000 + 9_000_000);
+        assert_eq!(
+            wire::read_timestamp_ns(&next),
+            Some((host + 3_000 + 1_000_000) as u64)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS has no 127.0.0.2 loopback to forge from"
+    )]
     #[file_serial(livox_loopback)]
     fn packets_from_unexpected_senders_are_ignored() {
         let ports = TEST_PORTS;
@@ -597,7 +654,8 @@ mod tests {
         let mut buf = [0u8; 4096];
         let len = source.recv(&mut buf).expect("genuine packet delivered");
         let delivered = DataPacket::parse(&buf[..len]).unwrap();
-        assert_eq!(delivered.timestamp_ns, 42);
+        // Restamped onto the host clock, so only the forged one would read 7.
+        assert!(delivered.timestamp_ns > 1_000_000_000);
     }
 
     #[test]
