@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import cv2
 from dimos_generated.sensor_msgs.msg import CompressedImage, Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
@@ -218,6 +217,8 @@ def image_to_rgb(message: Image) -> NDArray[np.uint8]:
 
 def image_resize_to_fit(message: Image, max_width: int, max_height: int) -> tuple[Image, float]:
     """Downscale a generated image while preserving encoding, aspect and exact header."""
+    import cv2
+
     if min(max_width, max_height, message.width, message.height) <= 0:
         raise ValueError("Image and target dimensions must be positive")
     if message.width <= max_width and message.height <= max_height:

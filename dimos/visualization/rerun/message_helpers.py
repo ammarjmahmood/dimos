@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from dimos_generated.dimos_msgs.msg import EntityMarkers
 from dimos_generated.foxglove_msgs.msg import CompressedVideo
 from dimos_generated.geometry_msgs.msg import PointStamped, PoseStamped
 from dimos_generated.nav_msgs.msg import OccupancyGrid, Odometry, Path
@@ -245,3 +246,22 @@ def video_archetype(message: CompressedVideo) -> rr.VideoStream:
     if codec is None:
         raise ValueError(f"no rerun VideoCodec for format {message.format!r}")
     return rr.VideoStream(codec, sample=bytes(message.data))
+
+
+def entity_points(message: EntityMarkers) -> rr.Points3D:
+    """Render generated entity values with labels/colors outside the wire classes."""
+    import rerun as rr
+
+    colors = {
+        "person": (255, 100, 100, 255),
+        "object": (100, 255, 100, 255),
+        "location": (100, 100, 255, 255),
+    }
+    return rr.Points3D(
+        positions=[
+            [marker.position.x, marker.position.y, marker.position.z] for marker in message.markers
+        ],
+        labels=[f"{marker.entity_id}: {marker.label[:40]}" for marker in message.markers],
+        colors=[colors.get(marker.entity_type, (200, 200, 200, 255)) for marker in message.markers],
+        radii=[0.15] * len(message.markers),
+    )

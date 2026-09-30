@@ -20,6 +20,7 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
 from dimos_generated.sensor_msgs.msg import Image
 from pydantic import Field
 
@@ -43,6 +44,20 @@ def _observation_blocks(obs: Observation[Any], stamp: str) -> Blocks:
         return [
             {"type": "text", "text": stamp},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{jpeg}"}},
+        ]
+    if isinstance(data, PoseStamped):
+        position = data.pose.position
+        orientation = data.pose.orientation
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"{stamp} frame={data.header.frame_id!r} "
+                    f"position=({position.x:.3f}, {position.y:.3f}, {position.z:.3f}) "
+                    f"quaternion=({orientation.x:.3f}, {orientation.y:.3f}, "
+                    f"{orientation.z:.3f}, {orientation.w:.3f})"
+                ),
+            }
         ]
     encoded = data.agent_encode() if hasattr(data, "agent_encode") else None
     if isinstance(encoded, list):  # e.g. Image -> image_url blocks

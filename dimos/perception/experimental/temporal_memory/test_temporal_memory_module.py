@@ -23,6 +23,8 @@ import time
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, create_autospec, patch
 
+from dimos_generated.dimos_msgs.msg import EntityMarker, EntityMarkers
+from dimos_generated.geometry_msgs.msg import Point
 from dimos_generated.sensor_msgs.msg import Image
 import numpy as np
 import pytest
@@ -49,6 +51,7 @@ from dimos.perception.experimental.temporal_memory.temporal_utils.graph_utils im
     extract_time_window,
 )
 from dimos.utils.logging_config import setup_logger
+from dimos.visualization.rerun.message_helpers import entity_points
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -428,20 +431,28 @@ class TestEntityMarkers:
         ids = {m.entity_id for m in msg.markers}
         assert ids == {"E1", "E2"}
         e1 = next(m for m in msg.markers if m.entity_id == "E1")
-        assert e1.x == 1.0
-        assert e1.y == 2.0
+        assert e1.position.x == 1.0
+        assert e1.position.y == 2.0
         tm.stop()
 
     def test_markers_to_rerun(self) -> None:
-        from dimos.msgs.visualization_msgs.EntityMarkers import EntityMarkers, Marker
-
         markers = EntityMarkers(
             markers=[
-                Marker("E1", "person walking", "person", 1.0, 2.0, 0.3),
-                Marker("E2", "wooden table", "object", 3.0, 4.0, 0.3),
+                EntityMarker(
+                    entity_id="E1",
+                    label="person walking",
+                    entity_type="person",
+                    position=Point(x=1.0, y=2.0, z=0.3),
+                ),
+                EntityMarker(
+                    entity_id="E2",
+                    label="wooden table",
+                    entity_type="object",
+                    position=Point(x=3.0, y=4.0, z=0.3),
+                ),
             ]
         )
-        archetype = markers.to_rerun()
+        archetype = entity_points(EntityMarkers.decode(markers.encode()))
         # Should return rr.Points3D
         import rerun as rr
 

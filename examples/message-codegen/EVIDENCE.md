@@ -1304,3 +1304,9 @@ covers the next offline migration batch and its remaining gates.
 
 [Geometry, simulation, eval and experimental consumer evidence](evidence/experimental-consumers.md)
 records terminal CI for the previous batch and standalone Python 3.9 encoding.
+
+## Remaining consumer cutover
+
+See [final-consumer-cutover.md](evidence/final-consumer-cutover.md) for generated
+entity/control/PGO/eval migration, exact previous CI failures, offline evidence
+and remaining legacy retirement boundaries.

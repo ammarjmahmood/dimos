@@ -29,7 +29,8 @@ import threading
 import time
 from typing import Any
 
-from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.dimos_msgs.msg import EntityMarker, EntityMarkers
+from dimos_generated.geometry_msgs.msg import Point, PoseStamped
 from dimos_generated.sensor_msgs.msg import Image
 from reactivex import Subject, interval
 from reactivex.disposable import Disposable
@@ -41,7 +42,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.models.vl.base import VlModel
 from dimos.msgs.image import image_sharpness
-from dimos.msgs.visualization_msgs.EntityMarkers import EntityMarkers, Marker
+from dimos.msgs.time import header_now
 from dimos.utils.logging_config import get_run_log_dir, setup_logger
 from dimos.utils.reactive import quality_barrier
 
@@ -250,7 +251,7 @@ class TemporalMemory(Module):
             if not all_entities:
                 return
 
-            markers: list[Marker] = []
+            markers: list[EntityMarker] = []
             for e in all_entities:
                 meta = e.get("metadata") or {}
                 x = meta.get("world_x")
@@ -259,18 +260,18 @@ class TemporalMemory(Module):
                 if x is None or y is None:
                     continue
                 markers.append(
-                    Marker(
+                    EntityMarker(
                         entity_id=e["entity_id"],
                         label=(e.get("descriptor") or "")[:40],
                         entity_type=e.get("entity_type", "object"),
-                        x=x,
-                        y=y,
-                        z=(z or 0.0) + 0.3,  # Offset up so labels float above ground
+                        position=Point(x=x, y=y, z=(z or 0.0) + 0.3),  # Offset labels above ground
                     )
                 )
 
             if markers:
-                self.entity_markers.publish(EntityMarkers(markers=markers))
+                self.entity_markers.publish(
+                    EntityMarkers(header=header_now("world"), markers=markers)
+                )
                 logger.info(f"[temporal-memory] published {len(markers)} entity markers to Rerun")
         except Exception as e:
             logger.debug(f"entity marker publish error: {e}")

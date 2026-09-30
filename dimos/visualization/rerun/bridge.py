@@ -36,6 +36,7 @@ from typing import (
 )
 from urllib.parse import urlparse
 
+from dimos_generated.dimos_msgs.msg import EntityMarkers
 from dimos_generated.foxglove_msgs.msg import CompressedVideo
 from dimos_generated.geometry_msgs.msg import PointStamped, PoseStamped
 from dimos_generated.nav_msgs.msg import OccupancyGrid, Odometry, Path
@@ -68,6 +69,7 @@ from dimos.visualization.rerun.message_helpers import (
     camera_pinhole,
     cloud_archetype,
     detection_boxes,
+    entity_points,
     image_archetype,
     navigation_archetype,
     occupancy_mesh,
@@ -334,6 +336,8 @@ class RerunBridgeModule(Module):
                 return navigation_archetype(msg)
             if isinstance(msg, PointCloud2):
                 return cloud_archetype(msg)
+            if isinstance(msg, EntityMarkers):
+                return entity_points(msg)
             if isinstance(msg, Detection3DArray):
                 return detection_boxes(msg)
             if isinstance(msg, (Image, CompressedImage)):

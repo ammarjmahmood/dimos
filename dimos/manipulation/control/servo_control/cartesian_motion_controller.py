@@ -31,6 +31,7 @@ import threading
 import time
 from typing import Any
 
+from dimos_generated.dimos_msgs.msg import JointCommand, RobotState
 from dimos_generated.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion, Twist, Vector3
 from dimos_generated.sensor_msgs.msg import JointState
 from dimos_generated.std_msgs.msg import Header
@@ -42,8 +43,6 @@ from dimos.core.stream import In, Out
 from dimos.manipulation.control.arm_driver_spec import ArmDriverSpec
 from dimos.manipulation.planning.utils.kinematics_utils import compute_pose_error
 from dimos.msgs.geometry import pose_matrix, quaternion_euler, quaternion_from_euler
-from dimos.msgs.sensor_msgs.JointCommand import JointCommand
-from dimos.msgs.sensor_msgs.RobotState import RobotState
 from dimos.msgs.time import time_from_seconds
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.simple_controller import PIDController
@@ -549,7 +548,7 @@ class CartesianMotionController(Module):
 
                 # Publish joint command
                 joint_cmd = JointCommand(
-                    timestamp=current_time,
+                    header=Header(stamp=time_from_seconds(current_time)),
                     positions=list(target_joints),
                 )
 

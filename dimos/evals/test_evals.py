@@ -29,6 +29,8 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+from dimos_generated.geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
+from dimos_generated.std_msgs.msg import Header
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import numpy as np
@@ -78,16 +80,12 @@ from dimos.evals.types import (
 )
 from dimos.memory.store.memory import MemoryStore
 from dimos.memory.store.sqlite import SqliteStore
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 
 
 def _pose(x: float, y: float) -> PoseStamped:
     return PoseStamped(
-        position=make_vector3(x, y, 0.0),
-        orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        frame_id="world",
+        header=Header(frame_id="world"),
+        pose=Pose(position=Point(x=x, y=y), orientation=Quaternion(w=1.0)),
     )
 
 
@@ -198,7 +196,7 @@ def test_dataset_start_hands_out_the_selection(dataset: str) -> None:
         assert odom.name == "odom"
         observations = list(odom)
         assert [o.ts for o in observations] == [1000.0, 1001.0]
-        assert observations[0].data.position.x == 0.0
+        assert observations[0].data.pose.position.x == 0.0
         assert running.mcp_url == "" and not env.has_robot
         assert running.artifacts["recording"] == Path(dataset)
     finally:
@@ -664,7 +662,7 @@ def test_recording_helper_opens_the_artifact(dataset: str) -> None:
     with recording(
         Outcome(trajectory=_trajectory("", Path()), artifacts={"recording": Path(dataset)})
     ) as store:
-        assert store.streams.odom.last().data.position.x == 4.0
+        assert store.streams.odom.last().data.pose.position.x == 4.0
 
 
 def test_count_rooms_grader_scores_reply_and_coverage(tmp_path: Path) -> None:
