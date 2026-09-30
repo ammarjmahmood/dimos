@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import operator
+
 import numpy as np
 import pytest
 
@@ -78,7 +80,7 @@ def test_logic_requires_masks(cloud, area):
     count = Count(1, area).run(cloud)
 
     with pytest.raises(ValueError, match="requires a mask"):
-        _ = count & (count > 0)
+        operator.and_(count, count > 0)
 
 
 def test_grids_combine_over_the_cells_both_cover(cloud, area):
@@ -96,9 +98,9 @@ def test_misaligned_or_unnested_cells_are_rejected(cloud, area):
     offset = Grid((0.5, 0), 1, np.zeros((2, 2)))
 
     with pytest.raises(ValueError, match="not aligned"):
-        _ = low - offset
+        operator.sub(low, offset)
     with pytest.raises(ValueError, match="do not nest"):
-        _ = (Count(1, area).run(cloud) > 0) & (Count(0.4, area).run(cloud) > 0)
+        operator.and_(Count(1, area).run(cloud) > 0, Count(0.4, area).run(cloud) > 0)
 
 
 def test_nested_cells_combine_at_the_finer_cell(cloud, area):
