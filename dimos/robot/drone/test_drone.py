@@ -222,7 +222,10 @@ class TestReplayMode(unittest.TestCase):
 
     def test_fake_video_stream_no_throttling(self) -> None:
         """Test FakeDJIVideoStream returns replay stream with format fix."""
-        with patch("dimos.utils.testing.legacy_pickle.LegacyPickleStore") as mock_replay:
+        with (
+            patch("dimos.utils.data.get_data") as mock_get_data,
+            patch("dimos.utils.testing.legacy_pickle.LegacyPickleStore") as mock_replay,
+        ):
             mock_stream = MagicMock()
             mock_replay.return_value.stream.return_value = mock_stream
 
@@ -230,6 +233,7 @@ class TestReplayMode(unittest.TestCase):
             stream.get_stream()
 
             # Verify replay store was created and stream was piped (for BGR→RGB fix)
+            mock_get_data.assert_called_once_with("drone")
             mock_replay.assert_called_once_with("drone/video")
             mock_replay.return_value.stream.assert_called_once()
             mock_stream.pipe.assert_called_once()
