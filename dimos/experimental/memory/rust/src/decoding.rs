@@ -18,7 +18,6 @@ use lcm_msgs::geometry_msgs::{
     PointStamped, PoseStamped, PoseWithCovarianceStamped, TwistStamped, TwistWithCovarianceStamped,
     WrenchStamped,
 };
-use lcm_msgs::imitation_msgs::EpisodeStatus;
 use lcm_msgs::nav_msgs::{OccupancyGrid, Odometry, Path};
 use lcm_msgs::sensor_msgs::{
     CameraInfo, CompressedImage, Image, Imu, JointState, Joy, PointCloud2,
@@ -143,9 +142,24 @@ fn source_timestamp(payload_type: &str, data: &[u8], reception_ts: f64) -> Resul
             (message.timestamp.sec, message.timestamp.nanosec)
         }
         "dimos.msgs.imitation_msgs.EpisodeStatus.EpisodeStatus" => {
-            let message =
-                EpisodeStatus::decode(data).context("invalid LCM imitation_msgs.EpisodeStatus")?;
-            (message.header.stamp.sec, message.header.stamp.nsec)
+            let message = lcm_msgs::std_msgs::String::decode(data)
+                .context("invalid EpisodeStatus String envelope")?;
+            #[derive(serde::Deserialize)]
+            struct EpisodeTimestamp {
+                schema_version: u8,
+                ts: f64,
+            }
+            let status: EpisodeTimestamp = serde_json::from_str(&message.data)
+                .context("invalid EpisodeStatus JSON timestamp")?;
+            anyhow::ensure!(
+                status.schema_version == 1,
+                "unsupported EpisodeStatus schema version"
+            );
+            anyhow::ensure!(
+                status.ts.is_finite(),
+                "EpisodeStatus timestamp must be finite"
+            );
+            return Ok(status.ts);
         }
         "dimos.msgs.geometry_msgs.Transform.Transform" => {
             let message = TFMessage::decode(data).context("invalid LCM TFMessage")?;
@@ -169,24 +183,14 @@ pub(crate) fn header_timestamp(sec: i32, nsec: i32, fallback: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use lcm_msgs::imitation_msgs::EpisodeStatus;
-    use lcm_msgs::std_msgs::{Header, Time};
+    use lcm_msgs::std_msgs::String as LcmString;
 
     use super::source_timestamp;
 
     #[test]
     fn episode_status_uses_source_timestamp() {
-        let status = EpisodeStatus {
-            header: Header {
-                stamp: Time {
-                    sec: 42,
-                    nsec: 250_000_000,
-                },
-                ..Header::default()
-            },
-            state: "recording".to_string(),
-            last_event: "start".to_string(),
-            ..EpisodeStatus::default()
+        let status = LcmString {
+            data: r#"{"schema_version":1,"ts":42.25,"state":"recording","episodes_saved":0,"episodes_discarded":0,"last_event":"start","task_label":null}"#.to_string(),
         };
 
         let timestamp = source_timestamp(
@@ -194,8 +198,47 @@ mod tests {
             &status.encode(),
             99.0,
         )
-        .expect("generated status should decode");
+        .expect("JSON status should decode");
 
         assert_eq!(timestamp, 42.25);
+    }
+
+    #[test]
+    fn episode_status_rejects_invalid_timestamp_or_version() {
+        for data in [
+            r#"{"ts":42.25}"#,
+            r#"{"schema_version":1}"#,
+            r#"{"schema_version":1,"ts":"bad"}"#,
+            r#"{"schema_version":2,"ts":42.25}"#,
+            "not json",
+        ] {
+            let status = LcmString {
+                data: data.to_string(),
+            };
+            assert!(source_timestamp(
+                "dimos.msgs.imitation_msgs.EpisodeStatus.EpisodeStatus",
+                &status.encode(),
+                99.0,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn unrelated_string_payloads_keep_reception_timestamp() {
+        for data in [
+            "not json",
+            r#"{"schema_version":1,"ts":42.25}"#,
+            r#"{"schema_version":2,"ts":42.25}"#,
+        ] {
+            let message = LcmString {
+                data: data.to_string(),
+            };
+            assert_eq!(
+                source_timestamp("dimos.msgs.std_msgs.String.String", &message.encode(), 99.0,)
+                    .expect("ordinary strings must remain opaque"),
+                99.0,
+            );
+        }
     }
 }

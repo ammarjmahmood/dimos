@@ -16,21 +16,26 @@ from __future__ import annotations
 
 from typing import ClassVar, Literal, TypeAlias, cast
 
-from dimos_lcm.imitation_msgs import EpisodeStatus as LCMEpisodeStatus
-from pydantic import BaseModel
-
-from dimos.msgs.std_msgs.Header import Header
+from dimos_lcm.std_msgs import String as LCMString
+from pydantic import BaseModel, FiniteFloat
 
 EpisodeEvent: TypeAlias = Literal["start", "save", "discard", "init"]
 RecordingState: TypeAlias = Literal["idle", "recording"]
 
 
 class EpisodeStatus(BaseModel):
-    """Source-timestamped status update for an imitation-learning episode."""
+    """Source-timestamped status update for an imitation-learning episode.
+
+    Versioned JSON uses the existing std_msgs.String LCM envelope. Native
+    recording keeps those bytes and extracts ``ts`` for the observation time.
+    Readers support schema version 1 only; legacy generated-message recordings
+    are intentionally unsupported.
+    """
 
     msg_name: ClassVar[str] = "imitation_msgs.EpisodeStatus"
 
-    ts: float
+    schema_version: Literal[1] = 1
+    ts: FiniteFloat
     state: RecordingState
     episodes_saved: int
     episodes_discarded: int
@@ -38,27 +43,12 @@ class EpisodeStatus(BaseModel):
     task_label: str | None = None
 
     def lcm_encode(self) -> bytes:
-        return cast(
-            "bytes",
-            LCMEpisodeStatus(
-                header=Header(self.ts),
-                state=self.state,
-                episodes_saved=self.episodes_saved,
-                episodes_discarded=self.episodes_discarded,
-                last_event=self.last_event,
-                task_label=self.task_label or "",
-            ).lcm_encode(),
-        )
+        """Carry validated episode JSON in the existing String wire envelope."""
+        return cast("bytes", LCMString(data=self.model_dump_json()).lcm_encode())
 
     @classmethod
     def lcm_decode(cls, data: bytes) -> EpisodeStatus:
-        message = LCMEpisodeStatus.lcm_decode(data)
-        stamp = message.header.stamp
-        return cls(
-            ts=stamp.sec + stamp.nsec / 1_000_000_000,
-            state=message.state,
-            episodes_saved=message.episodes_saved,
-            episodes_discarded=message.episodes_discarded,
-            last_event=message.last_event,
-            task_label=message.task_label or None,
-        )
+        status = cls.model_validate_json(LCMString.lcm_decode(data).data)
+        if "schema_version" not in status.model_fields_set:
+            raise ValueError("EpisodeStatus JSON requires schema_version")
+        return status
