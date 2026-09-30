@@ -260,12 +260,19 @@ and point clouds are zero-copy end to end. Real-time pacing is not lockstep
 determinism or a faster-than-real-time training scheduler. The ideal lidar
 does not establish MID360 timing/noise or Point-LIO fidelity.
 
-The strongest proposed comparison with main is the same scene, robot and
-policy while increasing camera count/resolution and lidar load. Record physics
-real-time factor, control p95/p99 tick intervals, achieved sensor rate/frame age
-and RAM. Also measure repeated reset latency without recompilation and show
-the same application using real versus simulated devices. These comparisons
-are planned, not results established by the smoke measurements above.
+The [matched G1 benchmark](/experiments/sim2_timing/README.md) now measures
+the old engine, current sim2 and a benchmark-only two-worker sim2 arrangement
+on an M4 Max. Under sensor load both sim2 arrangements maintained about 200 Hz
+physics while the old inline-sensor loop slowed down. Compact placement had
+similar timing and used less memory; dedicated processes per sensor are not
+established as optimal by those results. Kitchen lidar missed its requested
+20 Hz even though physics stayed real-time. The report includes sensor age,
+command consumption, incomplete private-memory accounting and an OpenMP
+CPU/latency tradeoff rather than claiming unconditional superiority.
+
+Multiple cameras/robots, viewer/mapping load, other hardware, the ten-minute
+30 Hz camera gate, repeated-reset latency and a measured real/sim device swap
+remain separate acceptance work. The short comparison does not close them.
 
 ## Scene Interface
 
