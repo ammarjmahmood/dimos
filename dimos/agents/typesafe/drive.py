@@ -192,7 +192,11 @@ def decode(answers: Answers, *, stop_threshold: float) -> Drive:
     confs: list[float] = []
     for axis, pos, _neg in AXES:
         a = _choice(answers, f"drive.{axis}")
-        label, conf = (a["choice"], a["confidence"]) if a else ("none", 0.0)
+        label, conf = (
+            (a["choice"], a["confidence"])
+            if a and a["choice"] in (pos, "none", _neg)
+            else ("none", 0.0)
+        )
         vals.append(0.0 if stop or label == "none" else 1.0 if label == pos else -1.0)
         labels.append(label)
         confs.append(conf)

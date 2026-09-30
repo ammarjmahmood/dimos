@@ -94,10 +94,13 @@ def test_set_trace_dir_records_each_call(
     a.text.transport.publish("hello")
     assert calls.wait(3)
     deadline = time.monotonic() + 3
-    while not (tmp_path / "1-response.json").exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    request = json.loads((tmp_path / "1-request.json").read_text())
-    response = json.loads((tmp_path / "1-response.json").read_text())
+    while time.monotonic() < deadline:
+        try:
+            request = json.loads((tmp_path / "1-request.json").read_text())
+            response = json.loads((tmp_path / "1-response.json").read_text())
+            break
+        except (OSError, ValueError):  # not written yet, or written half-way
+            time.sleep(0.02)
     assert request["body"]["state"] == {"text": "hello"} and "started_at" in request
     assert response["body"]["answers"]["urgent"]["noul"] == 0.1 and "usage" in response["body"]
     assert "latency_s" in response
