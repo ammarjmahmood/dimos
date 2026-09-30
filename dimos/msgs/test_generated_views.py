@@ -28,6 +28,7 @@ import pytest
 
 from dimos.msgs.geometry import yaw
 from dimos.msgs.image import (
+    image_brightness,
     image_from_array,
     image_sharpness,
     image_to_jpeg,
@@ -186,3 +187,18 @@ def test_mosaic_uses_generated_pixels_and_preserves_rgb_colors() -> None:
     np.testing.assert_array_equal(image_to_rgb(result), [[[255, 0, 0], [0, 0, 255]]])
     assert observation.tags == {"mosaic": True}
     assert observation.pose is None
+
+
+def test_brightness_ignores_padding_and_normalizes_big_endian_u16() -> None:
+    message = Image(
+        width=2,
+        height=1,
+        step=6,
+        encoding="mono16",
+        is_bigendian=1,
+        data=[0, 0, 255, 255, 255, 255],
+    )
+    assert image_brightness(message) == pytest.approx(0.5)
+    depth = image_from_array(np.array([[1.0]], dtype=np.float32), encoding="32FC1")
+    with pytest.raises(ValueError, match="unsigned integer"):
+        image_brightness(depth)

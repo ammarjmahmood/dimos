@@ -99,6 +99,19 @@ def image_to_jpeg(msg: Image, quality: int = 75) -> bytes:
     return bytes(encoded)
 
 
+def image_brightness(message: Image) -> float:
+    """Sample mean pixel intensity in [0, 1] for 8/16-bit image encodings.
+
+    Respect row padding and endian. Floating-point depth has no normalized
+    intensity scale and is rejected rather than treated as a color image.
+    """
+    pixels = image_view(message)
+    if pixels.dtype.kind != "u":
+        raise ValueError("brightness requires unsigned integer pixels")
+    stride = max(1, max(message.height, message.width) // 256)
+    return float(pixels[::stride, ::stride].mean() / np.iinfo(pixels.dtype).max)
+
+
 def image_sharpness(message: Image) -> float:
     """Laplacian variance of an 8-bit visual image, downsampled to 160 pixels wide."""
     import cv2
