@@ -30,7 +30,7 @@ import matplotlib
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.msgs.image import image_to_jpeg, image_view
+from dimos.msgs.image import image_from_compressed, image_to_jpeg, image_view
 from dimos.msgs.occupancy import grid_to_world, occupancy_view
 from dimos.msgs.pointcloud import pointcloud_rgb, pointcloud_xyz
 
@@ -99,6 +99,8 @@ def image_archetype(message: Image | CompressedImage) -> rr.Image | rr.DepthImag
 
     if isinstance(message, CompressedImage):
         format_name = message.format.lower()
+        if "jxl" in format_name:
+            return image_archetype(image_from_compressed(message))
         if "jpeg" in format_name or "jpg" in format_name:
             media_type = "image/jpeg"
         elif "png" in format_name:

@@ -217,3 +217,16 @@ def test_image_file_decodes_rgb_and_preserves_source_header(tmp_path, mode):
     assert message.encoding == "rgb8"
     assert message.header.encode() == header.encode()
     np.testing.assert_array_equal(image_view(message), [[[7, 7, 7], [19, 19, 19]]])
+
+
+@pytest.mark.parametrize(
+    "encoding,dtype,shape",
+    [("64FC1", ">f8", (3, 4)), ("16SC1", ">i2", (3, 4)), ("32FC3", ">f4", (3, 4, 3))],
+)
+def test_remaining_raw_encodings_keep_signed_float_and_endian_values(encoding, dtype, shape):
+    pixels = (np.arange(np.prod(shape)).reshape(shape) - 5).astype(dtype)
+    source = image_from_array(pixels, encoding=encoding)
+    decoded = Image.decode(source.encode())
+    assert decoded.encoding == encoding
+    assert decoded.is_bigendian == 1
+    np.testing.assert_array_equal(image_view(decoded), pixels)

@@ -34,6 +34,9 @@ _FORMATS = {
     "mono16": ("u2", 1),
     "16UC1": ("u2", 1),
     "32FC1": ("f4", 1),
+    "64FC1": ("f8", 1),
+    "16SC1": ("i2", 1),
+    "32FC3": ("f4", 3),
 }
 
 
@@ -101,21 +104,93 @@ def image_to_jpeg(msg: Image, quality: int = 75) -> bytes:
     return bytes(encoded)
 
 
-def compressed_image_from_image(message: Image, quality: int = 75) -> CompressedImage:
-    """JPEG-compress pixels in a standard ROS value, retaining the source header."""
-    output_encoding = "mono8" if message.encoding == "mono8" else "bgr8"
+def compressed_image_from_image(
+    message: Image,
+    quality: int = 75,
+    *,
+    format: str = "jpeg",
+    max_width: int | None = None,
+    effort: int | None = None,
+) -> CompressedImage:
+    """Compress generated pixels, retaining the exact header.
+
+    PNG preserves uint16 depth. JXL preserves uint16/float32 depth losslessly;
+    it requires imagecodecs and is an explicit codec extension for consumers.
+    """
+    if not isinstance(message, Image):
+        raise TypeError("compression expects a generated Image")
+    if max_width is not None:
+        message, _ = image_resize_to_fit(message, max_width, max_width)
+    if format == "jpeg":
+        output_encoding = "mono8" if message.encoding == "mono8" else "bgr8"
+        data = image_to_jpeg(message, quality=quality)
+    elif format == "png":
+        import cv2
+
+        pixels = image_view(message)
+        if pixels.dtype.kind != "u" or pixels.dtype.itemsize not in (1, 2):
+            raise ValueError("PNG cannot encode floating-point depth")
+        if message.encoding in ("rgb8", "rgba8"):
+            code = cv2.COLOR_RGB2BGR if message.encoding == "rgb8" else cv2.COLOR_RGBA2BGRA
+            pixels = cv2.cvtColor(pixels, code)
+        pixels = np.ascontiguousarray(pixels, dtype=pixels.dtype.newbyteorder("="))
+        ok, encoded = cv2.imencode(".png", pixels)
+        if not ok:
+            raise ValueError("PNG encoding failed")
+        data = bytes(encoded)
+        output_encoding = {"rgb8": "bgr8", "rgba8": "bgra8"}.get(message.encoding, message.encoding)
+    elif format == "jxl":
+        import imagecodecs
+
+        pixels = image_view(message)
+        if pixels.dtype.kind not in ("u", "f") or (
+            pixels.dtype.kind,
+            pixels.dtype.itemsize,
+        ) not in (("u", 1), ("u", 2), ("f", 4)):
+            raise ValueError(f"JXL cannot encode dtype {pixels.dtype}")
+        if message.encoding == "bgr8":
+            pixels = pixels[..., ::-1]
+        elif message.encoding == "bgra8":
+            pixels = pixels[..., [2, 1, 0, 3]]
+        pixels = np.ascontiguousarray(pixels, dtype=pixels.dtype.newbyteorder("="))
+        if pixels.dtype == np.uint8:
+            data = bytes(imagecodecs.jpegxl_encode(pixels, level=quality, effort=effort or 3))
+        else:
+            data = bytes(imagecodecs.jpegxl_encode(pixels, lossless=True, effort=effort or 1))
+        output_encoding = {"bgr8": "rgb8", "bgra8": "rgba8"}.get(message.encoding, message.encoding)
+    else:
+        raise ValueError(f"unsupported compression format {format!r}")
     return CompressedImage(
         header=message.header,
-        format=f"{message.encoding}; jpeg compressed {output_encoding}",
-        data=image_to_jpeg(message, quality=quality),
+        format=f"{message.encoding}; {format} compressed {output_encoding}",
+        data=data,
     )
 
 
 def image_from_compressed(message: CompressedImage) -> Image:
-    """Decode standard JPEG/PNG data into explicit generated BGR/gray pixels."""
+    """Decode JPEG/PNG or the JXL extension into explicitly encoded generated pixels."""
     import cv2
 
     format_name = message.format.lower()
+    if "jxl" in format_name:
+        import imagecodecs
+
+        jxl_pixels = imagecodecs.jpegxl_decode(bytes(message.data))
+        if jxl_pixels.ndim == 2:
+            encoding = {
+                np.dtype("float32"): "32FC1",
+                np.dtype("uint16"): "mono16",
+                np.dtype("uint8"): "mono8",
+            }.get(jxl_pixels.dtype)
+        elif jxl_pixels.ndim == 3 and jxl_pixels.shape[2] in (3, 4):
+            encoding = "rgb8" if jxl_pixels.shape[2] == 3 else "rgba8"
+        else:
+            encoding = None
+        if encoding is None:
+            raise ValueError("unsupported decoded JXL layout")
+        if encoding == "mono16" and format_name.startswith("16uc1;"):
+            encoding = "16UC1"
+        return image_from_array(jxl_pixels, encoding=encoding, header=message.header)
     if not any(name in format_name for name in ("jpeg", "jpg", "png")):
         raise ValueError(f"unsupported compressed image format {message.format!r}")
     pixels = cv2.imdecode(np.frombuffer(bytes(message.data), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
@@ -129,6 +204,8 @@ def image_from_compressed(message: CompressedImage) -> Image:
         encoding = "bgra8"
     else:
         raise ValueError("unsupported decoded image layout")
+    if encoding == "mono16" and format_name.startswith("16uc1;"):
+        encoding = "16UC1"
     return image_from_array(pixels, encoding=encoding, header=message.header)
 
 

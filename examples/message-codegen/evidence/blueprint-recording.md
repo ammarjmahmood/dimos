@@ -46,3 +46,37 @@ convenience constructors, custom string formatting, inheritance, Path-based
 line packing and implicit timestamps are intentionally retired. Generated ROS
 time overflow now reports an explicit ValueError; both int32 boundaries and
 values immediately outside them are covered. Scoped mypy passed time.py.
+
+## Future cross-stack compatibility note
+
+Parent review on 2026-09-30 identified EpisodeStatus in the independent open
+chain #3854 -> #3855 -> #3921 -> #3931 -> #3942. It is used by typed live Out,
+collection recorder input/source timestamp extraction, offline episode boundaries
+and TUI RPC. That type is absent from this CDR checkout. Its eventual integration
+would need a coordinated generated CDR design if that proposal is adopted; a JSON substitution would not satisfy
+the typed CDR recorder contract. The user has not selected the integration design.
+No code or commits from that chain were imported or changed. This is an explicit
+future compatibility note, not a regression introduced by this branch.
+CDR is not a prerequisite for merging that separate stack: it targets current
+main and remains independent. No merge is authorized for this CDR draft.
+
+## Image and value-type retirement follow-up
+
+Local verification after `0bac7f454`: 52 Path/basic-covariance checks, five
+CameraInfo calibration checks, and 58 generated-image/compression/detection/heavy-import
+checks passed. Strict mypy passed image.py, Rerun message_helpers.py and both
+manual message tools. The original JPEG/JXL mean-error and compressed-size
+thresholds, lossless PNG/JXL depth, codec effort comparison, camera calibration
+values, Rerun box geometry/labels and path sequence behavior are retained.
+
+PNG/JXL encoding and decoding live in external functions over generated values.
+Source headers and 16UC1 depth units survive, including big-endian inputs. Raw
+64FC1, 16SC1 and 32FC3 views remain supported; unsupported compression types are
+rejected explicitly. The local venv was missing the existing lockfile dependency
+imagecodecs 2026.6.26; its 27.5 MiB wheel was installed without changing project
+dependencies or system packages.
+
+Image file/selection tests use deterministic temporary pixels and real sharpness
+calculation in virtual-time windows. The manual pickle tool retains only its
+raw-array input path, converting to generated images after loading; no old typed
+message decoding was added. Manual publishers and hardware tools were not run.
