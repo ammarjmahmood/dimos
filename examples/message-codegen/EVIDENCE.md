@@ -1301,3 +1301,6 @@ covers the subsequent offline consumer batch.
 
 [Hosted arm, robot and simulation consumer evidence](evidence/robot-simulation-consumers.md)
 covers the next offline migration batch and its remaining gates.
+
+[Geometry, simulation, eval and experimental consumer evidence](evidence/experimental-consumers.md)
+records terminal CI for the previous batch and standalone Python 3.9 encoding.

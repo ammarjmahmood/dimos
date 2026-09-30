@@ -20,9 +20,10 @@ import re
 import threading
 from typing import Any
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
+
 from dimos.core.global_config import global_config
 from dimos.core.transport_factory import transport_topic
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.protocol import DimosMsg
 from dimos.protocol.pubsub.impl.lcmpubsub import LCMPubSubBase, Topic
 from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic, ZenohPubSubBase
@@ -183,7 +184,7 @@ class LcmSpy:
         self, x: float, y: float, threshold: float = 1, timeout: float = 60
     ) -> None:
         def predicate(msg: PoseStamped) -> bool:
-            pos = msg.position
+            pos = msg.pose.position
             distance = math.sqrt((pos.x - x) ** 2 + (pos.y - y) ** 2)
             return distance < threshold
 

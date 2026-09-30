@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import cv2
 from dimos_generated.sensor_msgs.msg import CompressedImage, Image
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
@@ -213,3 +214,18 @@ def image_to_rgb(message: Image) -> NDArray[np.uint8]:
     if message.encoding not in codes:
         raise ValueError(f"Cannot convert {message.encoding!r} to RGB8")
     return np.asarray(cv2.cvtColor(pixels, codes[message.encoding]), dtype=np.uint8)
+
+
+def image_resize_to_fit(message: Image, max_width: int, max_height: int) -> tuple[Image, float]:
+    """Downscale a generated image while preserving encoding, aspect and exact header."""
+    if min(max_width, max_height, message.width, message.height) <= 0:
+        raise ValueError("Image and target dimensions must be positive")
+    if message.width <= max_width and message.height <= max_height:
+        return message, 1.0
+    scale = min(max_width / message.width, max_height / message.height)
+    pixels = cv2.resize(
+        image_view(message),
+        (max(1, int(message.width * scale)), max(1, int(message.height * scale))),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    return image_from_array(pixels, encoding=message.encoding, header=message.header), scale
