@@ -21,10 +21,12 @@ import time
 from typing import Any
 from unittest.mock import MagicMock
 
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
 import pytest
 
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+from dimos.msgs.camera_info import camera_info_from_intrinsics
+from dimos.msgs.time import to_seconds
 from dimos.simulation.engines.mujoco_engine import CameraFrame, MujocoEngine
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule, MujocoSimModuleConfig
 
@@ -510,8 +512,14 @@ def test_publish_loop_stamps_messages_with_frame_timestamp() -> None:
     module = MujocoSimModule()
     try:
         module.config = MujocoSimModuleConfig(fps=1000)
-        module._camera_info_base = CameraInfo.from_intrinsics(
-            width=1, height=1, fx=1.0, fy=1.0, cx=0.5, cy=0.5, frame_id="wrist_camera_color_frame"
+        module._camera_info_base = camera_info_from_intrinsics(
+            width=1,
+            height=1,
+            fx=1.0,
+            fy=1.0,
+            cx=0.5,
+            cy=0.5,
+            header=Header(frame_id="wrist_camera_color_frame"),
         )
         color: list[Any] = []
         depth: list[Any] = []
@@ -525,13 +533,13 @@ def test_publish_loop_stamps_messages_with_frame_timestamp() -> None:
         _run_publish_loop(module, frame_ts)
         module._publish_camera_info()
 
-        assert [img.ts for img in color] == frame_ts
-        assert [img.ts for img in depth] == frame_ts
+        assert [to_seconds(img.header.stamp) for img in color] == frame_ts
+        assert [to_seconds(img.header.stamp) for img in depth] == frame_ts
         assert [msg.transforms[0].ts for msg in tf] == frame_ts
         # camera_info rides the latest frame's sim clock, not wall time.
-        assert info[-1].ts == frame_ts[-1]
-        assert module.get_color_camera_info().ts == frame_ts[-1]
-        assert module.get_depth_camera_info().ts == frame_ts[-1]
+        assert to_seconds(info[-1].header.stamp) == frame_ts[-1]
+        assert to_seconds(module.get_color_camera_info().header.stamp) == frame_ts[-1]
+        assert to_seconds(module.get_depth_camera_info().header.stamp) == frame_ts[-1]
     finally:
         module.stop()
 
@@ -540,8 +548,14 @@ def test_camera_info_falls_back_to_wall_clock_before_first_frame() -> None:
     module = MujocoSimModule()
     try:
         module.config = MujocoSimModuleConfig()
-        module._camera_info_base = CameraInfo.from_intrinsics(
-            width=1, height=1, fx=1.0, fy=1.0, cx=0.5, cy=0.5, frame_id="wrist_camera_color_frame"
+        module._camera_info_base = camera_info_from_intrinsics(
+            width=1,
+            height=1,
+            fx=1.0,
+            fy=1.0,
+            cx=0.5,
+            cy=0.5,
+            header=Header(frame_id="wrist_camera_color_frame"),
         )
         assert module._latest_frame_ts is None
         assert module._camera_info_ts() == pytest.approx(time.time(), abs=5.0)

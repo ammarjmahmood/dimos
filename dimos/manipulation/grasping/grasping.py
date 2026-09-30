@@ -34,7 +34,7 @@ from dimos.perception.experimental.object_scene_registration_spec import ObjectS
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+    from dimos_generated.sensor_msgs.msg import PointCloud2
 
 logger = setup_logger()
 

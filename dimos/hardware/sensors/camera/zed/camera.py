@@ -18,6 +18,8 @@ import atexit
 import threading
 import time
 
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image, PointCloud2
+from dimos_generated.std_msgs.msg import Header
 from pydantic import Field
 import pyzed.sl as sl
 import reactivex as rx
@@ -33,13 +35,14 @@ from dimos.hardware.sensors.camera.spec import (
     DepthCameraConfig,
     DepthCameraHardware,
 )
+from dimos.msgs.camera_info import camera_info_with_stamp
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.image import image_from_array
+from dimos.msgs.pointcloud import pointcloud_from_rgbd, voxel_downsample_cloud
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.msgs.time import time_from_seconds
 from dimos.spec import perception
 from dimos.utils.reactive import backpressure
 
@@ -131,11 +134,13 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
     def _publish_camera_info(self) -> None:
         ts = time.time()
         if self._color_camera_info:
-            self._color_camera_info.ts = ts
-            self.camera_info.publish(self._color_camera_info)
+            self.camera_info.publish(
+                camera_info_with_stamp(self._color_camera_info, time_from_seconds(ts))
+            )
         if self._depth_camera_info:
-            self._depth_camera_info.ts = ts
-            self.depth_camera_info.publish(self._depth_camera_info)
+            self.depth_camera_info.publish(
+                camera_info_with_stamp(self._depth_camera_info, time_from_seconds(ts))
+            )
 
     @rpc
     def start(self) -> None:
@@ -232,10 +237,11 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
             height=self._stream_height,
             width=self._stream_width,
             distortion_model="plumb_bob",
-            D=D,
-            K=K,
-            P=P,
-            frame_id=frame_id,
+            d=D,
+            k=K,
+            r=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            p=P,
+            header=Header(frame_id=frame_id),
         )
 
     def _get_extrinsics(self) -> None:
@@ -301,11 +307,10 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                 if color_data.ndim == 3 and color_data.shape[2] == 4:
                     color_data = color_data[:, :, :3]
                 color_data = cv2.cvtColor(color_data, cv2.COLOR_BGR2RGB)
-                color_img = Image(
-                    data=color_data,
-                    format=ImageFormat.RGB,
-                    frame_id=self._color_optical_frame,
-                    ts=ts,
+                color_img = image_from_array(
+                    color_data,
+                    encoding="rgb8",
+                    header=Header(frame_id=self._color_optical_frame, stamp=time_from_seconds(ts)),
                 )
                 self.color_image.publish(color_img)
 
@@ -320,11 +325,10 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
                     if self.config.align_depth_to_color
                     else self._depth_optical_frame
                 )
-                depth_img = Image(
-                    data=depth_data,
-                    format=ImageFormat.DEPTH,
-                    frame_id=depth_frame_id,
-                    ts=ts,
+                depth_img = image_from_array(
+                    depth_data,
+                    encoding="32FC1",
+                    header=Header(frame_id=depth_frame_id, stamp=time_from_seconds(ts)),
                 )
                 self.depth_image.publish(depth_img)
 
@@ -436,13 +440,13 @@ class ZEDCamera(DepthCameraHardware, Module, perception.DepthCamera):
             return
 
         try:
-            pcd = PointCloud2.from_rgbd(
-                color_image=color_img,
-                depth_image=depth_img,
-                camera_info=self._color_camera_info,
+            pcd = pointcloud_from_rgbd(
+                color=color_img,
+                depth=depth_img,
+                calibration=self._color_camera_info,
                 depth_scale=self._depth_scale,
             )
-            pcd = pcd.voxel_downsample(0.005)
+            pcd = voxel_downsample_cloud(pcd, 0.005)
             self.pointcloud.publish(pcd)
         except Exception as e:
             print(f"Pointcloud generation error: {e}")

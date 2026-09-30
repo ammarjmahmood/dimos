@@ -294,3 +294,46 @@ def pointcloud_from_rgbd(
         )
     )
     return pointcloud_from_xyz_rgb(xyz, image_to_rgb(color)[valid], header=depth.header)
+
+
+def voxel_downsample_cloud(message: PointCloud2, voxel_size: float = 0.025) -> PointCloud2:
+    """Downsample XYZ/RGB clouds with the existing Open3D tensor backend.
+
+    Non-positive sizes and clouds below twenty points retain the existing fast
+    path. Unsupported extra fields are rejected rather than silently dropped.
+    Source headers are preserved; generated messages own no numerical methods.
+    """
+    if not math.isfinite(voxel_size):
+        raise ValueError("voxel_size must be finite")
+    if voxel_size <= 0 or message.width * message.height < 20:
+        return message
+    names = {field.name for field in message.fields}
+    if names not in ({"x", "y", "z"}, {"x", "y", "z", "rgb"}):
+        raise ValueError("voxel downsampling supports only XYZ and optional RGB fields")
+    points = pointcloud_xyz(message).astype(np.float32)
+    if not np.isfinite(points).all():
+        raise ValueError("voxel downsampling requires finite XYZ positions")
+    colors = pointcloud_rgb(message)
+    import open3d as o3d  # type: ignore[import-untyped]
+
+    cloud = o3d.t.geometry.PointCloud(o3d.core.Tensor(points))
+    if colors is not None:
+        cloud.point["colors"] = o3d.core.Tensor(colors.astype(np.float32) / 255.0)
+    reduced = cloud.voxel_down_sample(voxel_size)
+    xyz = reduced.point["positions"].numpy()
+    if colors is None:
+        return pointcloud_from_xyz(xyz, header=message.header)
+    rgb = np.clip(reduced.point["colors"].numpy() * 255.0, 0, 255).astype(np.uint8)
+    return pointcloud_from_xyz_rgb(xyz, rgb, header=message.header)
+
+
+def pointcloud_to_open3d(message: PointCloud2) -> Any:
+    """Copy generated XYZ/RGB values into a native geometry algorithm input."""
+    import open3d as o3d  # type: ignore[import-untyped]
+
+    result = o3d.geometry.PointCloud()
+    result.points = o3d.utility.Vector3dVector(pointcloud_xyz(message))
+    colors = pointcloud_rgb(message)
+    if colors is not None:
+        result.colors = o3d.utility.Vector3dVector(colors.astype(np.float64) / 255.0)
+    return result

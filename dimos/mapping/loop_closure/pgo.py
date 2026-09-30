@@ -48,11 +48,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar, cast
 
+from dimos_generated.geometry_msgs.msg import PoseStamped
+from dimos_generated.std_msgs.msg import Header
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from dimos.memory.transform import Transformer
 from dimos.memory.type.observation import Observation
+from dimos.msgs.geometry import pose_from_matrix, pose_matrix
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -187,8 +190,12 @@ class PoseGraph(Transformer[Any, Any]):
             if ps is None:
                 yield obs
                 continue
-            raw_tf = Transform.from_pose(FRAME_BODY, ps)
-            yield obs.derive(data=obs.data, pose=self.correct(raw_tf))
+            correction = self.correction_at(obs.ts)
+            corrected = PoseStamped(
+                header=Header(stamp=ps.header.stamp, frame_id=FRAME_WORLD_CORRECTED),
+                pose=pose_from_matrix(correction.to_matrix() @ pose_matrix(ps.pose)),
+            )
+            yield obs.derive(data=obs.data, pose=corrected)
 
     def _interp(self) -> Callable[[float], Transform]:
         """Lazy slerp/lerp drift-correction lookup keyed by ts."""

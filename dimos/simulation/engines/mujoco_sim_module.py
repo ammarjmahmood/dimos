@@ -32,6 +32,8 @@ import threading
 import time
 from typing import Any
 
+from dimos_generated.sensor_msgs.msg import CameraInfo, Image, PointCloud2
+from dimos_generated.std_msgs.msg import Header
 import mujoco
 import numpy as np
 from numpy.typing import NDArray
@@ -43,16 +45,17 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
 from dimos.hardware.sensors.camera.spec import DepthCameraConfig, DepthCameraHardware
+from dimos.msgs.camera_info import camera_info_from_intrinsics, camera_info_with_stamp
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.image import image_from_array
+from dimos.msgs.pointcloud import pointcloud_from_rgbd, pointcloud_from_xyz, voxel_downsample_cloud
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.msgs.time import time_from_seconds
 from dimos.simulation.engines.mujoco_engine import (
     CameraConfig,
     CameraFrame,
@@ -392,7 +395,7 @@ class MujocoSimModule(
             base = self._camera_info_base
         if base is None:
             return None
-        return base.with_ts(self._camera_info_ts())
+        return camera_info_with_stamp(base, time_from_seconds(self._camera_info_ts()))
 
     @rpc
     def get_depth_camera_info(self) -> CameraInfo | None:
@@ -400,7 +403,7 @@ class MujocoSimModule(
             base = self._camera_info_base
         if base is None:
             return None
-        return base.with_ts(self._camera_info_ts())
+        return camera_info_with_stamp(base, time_from_seconds(self._camera_info_ts()))
 
     @rpc
     def get_depth_scale(self) -> float:
@@ -859,14 +862,14 @@ class MujocoSimModule(
         fovy_rad = math.radians(fovy_deg)
         fy = h / (2.0 * math.tan(fovy_rad / 2.0))
         fx = fy  # square pixels
-        camera_info = CameraInfo.from_intrinsics(
+        camera_info = camera_info_from_intrinsics(
             fx=fx,
             fy=fy,
             cx=w / 2.0,
             cy=h / 2.0,
             width=w,
             height=h,
-            frame_id=self._color_optical_frame,
+            header=Header(frame_id=self._color_optical_frame),
         )
         with self._state_lock:
             self._camera_info_base = camera_info
@@ -914,20 +917,18 @@ class MujocoSimModule(
                 self._latest_frame_ts = ts
 
             if self.config.enable_color:
-                color_img = Image(
-                    data=frame.rgb,
-                    format=ImageFormat.RGB,
-                    frame_id=self._color_optical_frame,
-                    ts=ts,
+                color_img = image_from_array(
+                    frame.rgb,
+                    encoding="rgb8",
+                    header=Header(frame_id=self._color_optical_frame, stamp=time_from_seconds(ts)),
                 )
                 self.color_image.publish(color_img)
 
             if self.config.enable_depth:
-                depth_img = Image(
-                    data=frame.depth,
-                    format=ImageFormat.DEPTH,
-                    frame_id=self._color_optical_frame,
-                    ts=ts,
+                depth_img = image_from_array(
+                    frame.depth,
+                    encoding="32FC1",
+                    header=Header(frame_id=self._color_optical_frame, stamp=time_from_seconds(ts)),
                 )
                 self.depth_image.publish(depth_img)
 
@@ -952,16 +953,7 @@ class MujocoSimModule(
         if base is None:
             return
         ts = self._camera_info_ts()
-        info = CameraInfo(
-            height=base.height,
-            width=base.width,
-            distortion_model=base.distortion_model,
-            D=base.D,
-            K=base.K,
-            P=base.P,
-            frame_id=base.frame_id,
-            ts=ts,
-        )
+        info = camera_info_with_stamp(base, time_from_seconds(ts))
         self.camera_info.publish(info)
         self.depth_camera_info.publish(info)
 
@@ -1018,25 +1010,27 @@ class MujocoSimModule(
         if frame is None:
             return
         try:
-            color_img = Image(
-                data=frame.rgb,
-                format=ImageFormat.RGB,
-                frame_id=self._color_optical_frame,
-                ts=frame.timestamp,
+            color_img = image_from_array(
+                frame.rgb,
+                encoding="rgb8",
+                header=Header(
+                    frame_id=self._color_optical_frame, stamp=time_from_seconds(frame.timestamp)
+                ),
             )
-            depth_img = Image(
-                data=frame.depth,
-                format=ImageFormat.DEPTH,
-                frame_id=self._color_optical_frame,
-                ts=frame.timestamp,
+            depth_img = image_from_array(
+                frame.depth,
+                encoding="32FC1",
+                header=Header(
+                    frame_id=self._color_optical_frame, stamp=time_from_seconds(frame.timestamp)
+                ),
             )
-            pcd = PointCloud2.from_rgbd(
-                color_image=color_img,
-                depth_image=depth_img,
-                camera_info=camera_info,
+            pcd = pointcloud_from_rgbd(
+                color=color_img,
+                depth=depth_img,
+                calibration=camera_info,
                 depth_scale=1.0,
             )
-            pcd = pcd.voxel_downsample(0.005)
+            pcd = voxel_downsample_cloud(pcd, 0.005)
             self.pointcloud.publish(pcd)
         except Exception as exc:
             logger.error("Pointcloud generation error", error=str(exc))
@@ -1064,12 +1058,11 @@ class MujocoSimModule(
             return
 
         try:
-            pcd = PointCloud2.from_numpy(
+            pcd = pointcloud_from_xyz(
                 np.vstack(all_points),
-                frame_id="world",
-                timestamp=latest_ts or time.time(),
+                header=Header(frame_id="world", stamp=time_from_seconds(latest_ts or time.time())),
             )
-            pcd = pcd.voxel_downsample(self.config.mujoco_lidar_voxel_size)
+            pcd = voxel_downsample_cloud(pcd, self.config.mujoco_lidar_voxel_size)
             self.pointcloud.publish(pcd)
         except Exception as exc:
             logger.error("MuJoCo lidar pointcloud generation error", error=str(exc))

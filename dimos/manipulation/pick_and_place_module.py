@@ -102,7 +102,7 @@ class PickAndPlaceModule(Module):
         ]
         self._objects = {str(obj["object_id"]): obj for obj in objects if "object_id" in obj}
         return SkillResult.ok(
-            f"Detected {detections.detections_length} object(s)",
+            f"Detected {len(detections.detections)} object(s)",
             prompts=prompts,
             objects=list(self._objects.values()),
         )

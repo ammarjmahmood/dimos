@@ -37,6 +37,7 @@ from dimos.msgs.pointcloud import (
     pointcloud_xyz,
     select_points,
     transform_cloud,
+    voxel_downsample_cloud,
 )
 
 
@@ -359,3 +360,25 @@ def test_transform_rejects_coordinate_overflow():
     with pytest.raises(ValueError, match="exceed field range"):
         transform_cloud(cloud, transform)
     assert np.isfinite(pointcloud_xyz(cloud)).all()
+
+
+def test_voxel_downsample_retains_existing_small_cloud_fast_path():
+    message = pointcloud_from_xyz(np.zeros((19, 3)), header=Header(frame_id="lidar"))
+    assert voxel_downsample_cloud(message, 0.5) is message
+    assert voxel_downsample_cloud(message, 0.0) is message
+    with pytest.raises(ValueError, match="finite"):
+        voxel_downsample_cloud(message, float("nan"))
+
+
+def test_voxel_downsample_native_centroids_colors_and_exact_header():
+    pytest.importorskip("open3d", reason="native tensor downsampling requires Open3D")
+    points = np.repeat([[0.1, 0.1, 0.1], [0.3, 0.3, 0.3]], 20, axis=0)
+    colors = np.repeat([[0, 0, 0], [255, 255, 255]], 20, axis=0).astype(np.uint8)
+    header = Header(frame_id="optical", stamp=Time(sec=5, nanosec=123456789))
+    source = pointcloud_from_xyz_rgb(points, colors, header=header)
+    result = voxel_downsample_cloud(source, 1.0)
+    assert result.header == header
+    assert result.width == 1
+    np.testing.assert_allclose(pointcloud_xyz(result), [[0.2, 0.2, 0.2]], atol=1e-6)
+    np.testing.assert_array_equal(pointcloud_rgb(result), [[127, 127, 127]])
+    assert source.width == 40

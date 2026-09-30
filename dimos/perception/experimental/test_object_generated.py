@@ -19,8 +19,11 @@ from dimos_generated.geometry_msgs.msg import PoseStamped, Vector3
 from dimos_generated.sensor_msgs.msg import Image, PointCloud2
 from dimos_generated.std_msgs.msg import Header
 from dimos_generated.vision_msgs.msg import Detection3D
+import numpy as np
 
-from dimos.perception.experimental.object import Object
+from dimos.msgs.image import image_from_array
+from dimos.msgs.pointcloud import pointcloud_from_xyz_rgb, pointcloud_rgb, pointcloud_xyz
+from dimos.perception.experimental.object import Object, aggregate_pointclouds
 from dimos.perception.experimental.objectDB import ObjectDB
 
 
@@ -69,3 +72,25 @@ def test_spatial_deduplication_and_nearest_lookup_use_generated_centers():
     assert database.add_objects([distant]) == [distant]
     assert database.find_nearest(Vector3(x=1.8)) is distant
     assert database.find_nearest(Vector3(x=0.2)) is first
+
+
+def test_generated_object_cloud_aggregation_and_dictionary_preserve_values():
+    obj = _object("abc", 0.2, 1.0)
+    stamp = Time(sec=1700000000, nanosec=987654321)
+    obj.pointcloud = pointcloud_from_xyz_rgb(
+        np.array([[1.0, 2.0, 3.0]], dtype=np.float32),
+        np.array([[255, 128, 0]], dtype=np.uint8),
+        header=Header(frame_id="world", stamp=stamp),
+    )
+    pixels = np.zeros((2, 3, 3), dtype=np.uint8)
+    obj.image = image_from_array(pixels, encoding="rgb8", header=obj.pointcloud.header)
+    exported = obj.to_dict()
+    np.testing.assert_array_equal(exported["pointcloud"][0], [[1.0, 2.0, 3.0]])
+    np.testing.assert_allclose(exported["pointcloud"][1], [[1.0, 128 / 255.0, 0.0]])
+    np.testing.assert_array_equal(exported["image"], pixels)
+    merged = aggregate_pointclouds([obj])
+    decoded = PointCloud2.decode(merged.encode())
+    assert decoded.header.stamp == stamp and decoded.header.frame_id == "world"
+    np.testing.assert_array_equal(pointcloud_xyz(decoded), [[1.0, 2.0, 3.0]])
+    assert pointcloud_rgb(decoded) is not None
+    assert aggregate_pointclouds([]).width == 0

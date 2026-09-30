@@ -28,6 +28,7 @@ from dimos.msgs.camera_info import (
     camera_info_from_fov,
     camera_info_from_intrinsics,
     camera_info_from_yaml,
+    camera_info_with_stamp,
     intrinsic_matrix,
 )
 
@@ -98,3 +99,29 @@ def test_yaml_rejects_invalid_camera_matrix(tmp_path, mutation):
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(ValueError, match="camera_matrix"):
         camera_info_from_yaml(path, header=Header())
+
+
+def test_stamp_copy_preserves_calibration_and_does_not_mutate_prior_publish():
+    original = camera_info_from_intrinsics(
+        500,
+        510,
+        320,
+        240,
+        640,
+        480,
+        header=Header(frame_id="optical", stamp=Time(sec=1, nanosec=987654321)),
+    )
+    original.binning_x = 2
+    original.roi.x_offset = 12
+    stamp = Time(sec=2, nanosec=123456789)
+    copied = camera_info_with_stamp(original, stamp)
+    assert copied.header.stamp == stamp
+    assert copied.header.frame_id == original.header.frame_id
+    assert list(copied.k) == list(original.k)
+    assert copied.binning_x == 2 and copied.roi.x_offset == 12
+    copied.k[0] = 100
+    copied.roi.x_offset = 24
+    stamp.nanosec = 0
+    assert original.k[0] == 500 and original.roi.x_offset == 12
+    assert original.header.stamp == Time(sec=1, nanosec=987654321)
+    assert copied.header.stamp.nanosec == 123456789

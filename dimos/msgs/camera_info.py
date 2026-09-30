@@ -14,10 +14,12 @@
 
 """Calibration construction and array access for generated ROS CameraInfo values."""
 
+from copy import deepcopy
 import math
 from pathlib import Path
 from typing import Any, Literal
 
+from dimos_generated.builtin_interfaces.msg import Time
 from dimos_generated.sensor_msgs.msg import CameraInfo
 from dimos_generated.std_msgs.msg import Header
 import numpy as np
@@ -116,3 +118,10 @@ def camera_info_from_yaml(path: str | Path, *, header: Header) -> CameraInfo:
 def intrinsic_matrix(message: CameraInfo) -> NDArray[np.float64]:
     """Copy the 3x3 intrinsic matrix into independently mutable NumPy storage."""
     return np.array(message.k, dtype=np.float64, copy=True).reshape(3, 3)
+
+
+def camera_info_with_stamp(message: CameraInfo, stamp: Time) -> CameraInfo:
+    """Copy a calibration with an exact source stamp, without mutating prior publishes."""
+    result = deepcopy(message)
+    result.header.stamp = deepcopy(stamp)
+    return result
