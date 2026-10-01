@@ -133,3 +133,42 @@ depth, and robot TF are distinct from task-object/evaluator truth. Any deliberat
 oracle action intent given to the model must retain its provenance and be labeled
 script reproduction. Agent value requires a separate observation-driven change
 of instruction, target, or recovery decision; another replay is not that evidence.
+
+## Completed real-model CPU pilot
+
+The authorized pilot used the public OpenAI API model `gpt-6-luna` through the
+existing official Dimcode gateway. The pinned Pi catalog lacked Luna, so a
+scratch, session-local extension registered verified model metadata using Pi's
+supported provider API. No package upgrade or fallback model was used.
+
+The actual model wrote `sdk_check.py`, invoked the specified Python interpreter,
+and interpreted the resulting stdout. The SDK resolved to
+`/tmp/behavior-validation.oNeVq8/dimos/manipulation/sdk.py`, confirming the child
+snapshot import rather than the older editable checkout. Both tool calls
+succeeded; the third model response correctly described the SDK signatures and
+reported that no motion method was called. This reproduces the supplied script;
+it demonstrates real-model code execution and feedback, not autonomous task
+planning or physical agent success.
+
+The pilot finished idle in 10.04 seconds with exactly two tool invocations and
+three model responses. A native provider wrapper enforced at most three HTTP
+requests, no retries, 1,024 output tokens per request, standard service tier,
+no hosted tools, a 120,000-byte payload limit, and a 60-second deadline. A
+credential-free offline fetch-stub preflight verified the output/model limits
+and rejection of a fourth request before any network call. Tool hooks permitted
+only the supplied SDK introspection write and its bounded Python command.
+
+The public model/pricing source is
+<https://developers.openai.com/api/docs/models>: input $0.10 / million tokens,
+output $0.50 / million tokens, context 1.05M tokens. Even charging all three
+requests for the full context window plus their output cap gives a conservative
+$0.316536 ceiling. Pi's cost metadata estimated $0.0016794 for the actual pilot;
+that estimate is not a billing invoice and conservatively prices cached input at
+the full input rate.
+
+The safe trace, request-bound records, generated script, and offline preflight
+are preserved in the task workspace's `dimcode-pilot/` directory. The credential
+file was never read or copied by the agent. The user-managed gateway remains
+running; this pilot session is idle. Its existing Bash environment inheritance
+still provides no enforced credential or evaluator isolation. No simulator,
+sensor, robot motion, model installation, or dataset operation occurred.
