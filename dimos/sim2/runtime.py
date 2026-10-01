@@ -29,7 +29,7 @@ from scipy.spatial.transform import Rotation
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.sim2.control.interface import descriptor
-from dimos.sim2.environment import EmulatorEnvironment
+from dimos.sim2.environment import EmulatorEnvironment, create_environment
 from dimos.sim2.ipc.abi import (
     ABI_VERSION,
     ChannelDescriptor,
@@ -38,10 +38,9 @@ from dimos.sim2.ipc.abi import (
 )
 from dimos.sim2.ipc.channel import FrameMetadata, RobotChannel
 from dimos.sim2.robot import MotorRobot
-from dimos.sim2.scene import describe_scene
 from dimos.sim2.scene_types import EntityState, RegionState, SceneState, SceneUpdate
 from dimos.sim2.sensors.spec import Imu
-from dimos.sim2.spec import ControlInterface, RobotConfig, WorldConfig
+from dimos.sim2.spec import ControlInterface, RobosuiteTask, RobotConfig, WorldConfig
 
 STATE = mujoco.mjtState.mjSTATE_INTEGRATION
 
@@ -65,8 +64,8 @@ class SimulationRuntime:
     def __init__(self, config: WorldConfig, sim_id: str) -> None:
         self.config = config
         self.world_id = uuid4().hex
-        self.description = describe_scene(config.scene)
-        self.environment = EmulatorEnvironment(config, self.description)
+        self.environment = create_environment(config)
+        self.description = self.environment.description
         self.model = self.environment.sim.model._model
         self.data = self.environment.sim.data._data
         self.lock = threading.RLock()
@@ -152,8 +151,8 @@ class SimulationRuntime:
                     imu,
                 )
             self._apply_update(self.description.initial)
-            self._baseline = np.empty(nstate)
-            mujoco.mj_getState(self.model, self.data, self._baseline, STATE)
+            if isinstance(self.environment, EmulatorEnvironment):
+                self.environment.capture_initial_state()
             self.reset()
         except BaseException:
             self.close()
@@ -162,9 +161,12 @@ class SimulationRuntime:
     def reset(self, initial: SceneUpdate | None = None) -> SceneState:
         with self.lock:
             update = initial if initial is not None else SceneUpdate()
+            if isinstance(self.config.scene, RobosuiteTask) and (update.poses or update.joints):
+                raise ValueError(
+                    "configure the upstream task sampler instead of overriding its reset"
+                )
             self._validate_update(update)
             self.environment.reset()
-            mujoco.mj_setState(self.model, self.data, self._baseline, STATE)
             self._apply_update(update)
             return self._finish_change()
 
@@ -300,6 +302,11 @@ class SimulationRuntime:
                 },
                 regions=regions,
                 contacts=tuple(sorted(contacts)),
+                task_success=(
+                    bool(self.environment._check_success())
+                    if isinstance(self.config.scene, RobosuiteTask)
+                    else None
+                ),
             )
 
     def set_spawn(

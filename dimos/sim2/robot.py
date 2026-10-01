@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,8 +26,11 @@ from robosuite.controllers import composite_controller_factory
 from robosuite.robots import ROBOT_CLASS_MAPPING
 from robosuite.robots.fixed_base_robot import FixedBaseRobot
 from robosuite.robots.legged_robot import LeggedRobot
+from robosuite.utils.mjcf_utils import array_to_string
 
 from dimos.sim2.control.firmware import MotorFirmware
+from dimos.sim2.scene import quaternion
+from dimos.sim2.sensors.spec import Camera, Imu, Mount
 from dimos.sim2.spec import RobotConfig
 
 
@@ -83,6 +87,48 @@ class MotorRobot:
             if j.gripper is None
         }
         self.init_qpos = np.array([joints[name] for name in self.robot_model.joints])
+        model = self.robot_model
+        root = model.worldbody.find("body")
+        if root is None or model.root_body != model.correct_naming(self.definition.root_body):
+            raise ValueError("model root disagrees with the device definition")
+        if not self.definition.floating:
+            root.set("mocap", "true")
+        keyframes = model.root.find("keyframe")
+        if keyframes is not None:
+            model.root.remove(keyframes)
+        for sensor in self.definition.sensors:
+            attachment = sensor.camera if isinstance(sensor, Camera) else sensor.site
+            tag = "camera" if isinstance(sensor, Camera) else "site"
+            name = model.correct_naming(sensor.model_name)
+            if isinstance(attachment, Mount):
+                body = model.worldbody.find(
+                    f".//body[@name='{model.correct_naming(attachment.link)}']"
+                )
+                if body is None:
+                    raise ValueError(f"{sensor.name}: unknown mount {attachment.link!r}")
+                attrs = {
+                    "name": name,
+                    "pos": array_to_string(attachment.xyz),
+                    "quat": array_to_string(quaternion(attachment.rpy)),
+                }
+                if isinstance(sensor, Camera):
+                    fovy = sensor.fovy if sensor.fovy is not None else 60.0
+                    ET.SubElement(body, tag, **attrs, fovy=str(fovy))
+                else:
+                    ET.SubElement(body, tag, **attrs, size=".001", rgba="0 0 0 0")
+            elif model.worldbody.find(f".//{tag}[@name='{name}']") is None:
+                raise ValueError(f"{sensor.name}: unknown {tag} {attachment!r}")
+            if isinstance(sensor, Imu):
+                prefix = model.naming_prefix + f"sensor/{sensor.name}"
+                ET.SubElement(model.sensor, "gyro", name=prefix + "/gyro", site=name)
+                ET.SubElement(model.sensor, "accelerometer", name=prefix + "/accel", site=name)
+                ET.SubElement(
+                    model.sensor,
+                    "framequat",
+                    name=prefix + "/quat",
+                    objtype="site",
+                    objname=name,
+                )
 
     def setup_references(self) -> None:
         super().setup_references()  # type: ignore[misc]

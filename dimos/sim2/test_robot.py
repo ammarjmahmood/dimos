@@ -22,7 +22,7 @@ from dimos.robot.manipulators.xarm.sim2 import XARM7
 from dimos.robot.unitree.g1.sim2 import G1_GROOT
 from dimos.sim2.robot import motor_controller_config
 from dimos.sim2.runtime import SimulationRuntime
-from dimos.sim2.spec import RobotInstance, WorldConfig
+from dimos.sim2.spec import RobosuiteTask, RobotInstance, WorldConfig
 
 pytestmark = pytest.mark.mujoco
 
@@ -131,3 +131,45 @@ def test_upstream_grasp_helper_recognizes_both_xarm_finger_contacts(xarm_lift):
     env.sim.data.set_joint_qpos(env.cube.joints[0], np.r_[center, quat])
     env.sim.forward()
     assert env._check_grasp(hand, env.cube.contact_geoms)
+
+
+@pytest.fixture
+def lift_world():
+    world = SimulationRuntime(
+        WorldConfig(
+            RobosuiteTask(Lift, {"seed": 42}),
+            {"arm": RobotInstance(XARM7)},
+            timestep=0.002,
+        ),
+        uuid4().hex,
+    )
+    try:
+        yield world
+    finally:
+        world.close()
+
+
+def test_task_runtime_preserves_upstream_sampling_and_records_its_oracle(lift_world):
+    world = lift_world
+    model = world.model
+    states = [world.reset() for _ in range(3)]
+    assert len({s.entities["cube"].pose.position.to_tuple() for s in states}) == 3
+    assert all(s.task_success is False for s in states)
+    assert [s.generation for s in states] == [2, 3, 4]
+    assert world.model is model
+    assert world.model.camera("arm/wrist_camera").id >= 0
+    assert states[-1].robots["arm"].position.to_tuple() == pytest.approx((-0.4, 0, 0.8))
+    assert isinstance(world.environment, Lift)
+    assert world.environment.sim.model._model is world.model
+    assert world.environment.sim.data._data is world.data
+    world.step()
+    assert world.data.time == pytest.approx(0.002)
+    assert world.robots["arm"].channel.read_observation().metadata.episode_id == 4
+
+    # Oracle propagation only; this deliberately injected state is not a solved trial.
+    env = world.environment
+    pose = env.sim.data.get_joint_qpos(env.cube.joints[0]).copy()
+    pose[2] = env.table_offset[2] + 0.2
+    env.sim.data.set_joint_qpos(env.cube.joints[0], pose)
+    env.sim.forward()
+    assert world.scene_state().task_success is True

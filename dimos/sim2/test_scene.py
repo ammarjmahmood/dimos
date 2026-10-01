@@ -224,7 +224,7 @@ def sensor_model():
     environments = []
 
     def build(config):
-        env = EmulatorEnvironment(config, SceneDescription(id="sensors"))
+        env = EmulatorEnvironment(config)
         environments.append(env)
         return env.sim.model._model
 

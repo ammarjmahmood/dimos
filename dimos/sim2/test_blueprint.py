@@ -17,6 +17,7 @@ import pickle
 
 import numpy as np
 import pytest
+from robosuite.environments.manipulation.lift import Lift
 
 from dimos.control.coordinator import ControlCoordinator, ControlCoordinatorConfig
 from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
@@ -30,7 +31,7 @@ from dimos.sim2.scene import scene_path
 from dimos.sim2.sensors.camera.module import CameraModuleConfig
 from dimos.sim2.sensors.lidar.module import LidarModuleConfig
 from dimos.sim2.sensors.spec import Camera, Lidar, Mount
-from dimos.sim2.spec import RobotInstance
+from dimos.sim2.spec import RobosuiteTask, RobotInstance
 
 
 def test_multiple_robots_and_rgb_cameras_have_separate_typed_ports():
@@ -144,3 +145,19 @@ def test_invalid_lidar_cannot_be_reconstructed_as_an_imu(tmp_path):
 
     with pytest.raises(ValueError, match="callable"):
         SimulationModuleConfig(**kwargs)
+
+
+def test_upstream_task_survives_blueprint_worker_configuration():
+    devices = simulation(
+        scene=RobosuiteTask(Lift, {"seed": 42}),
+        robots={"arm": RobotInstance(XARM7)},
+        viewer=False,
+    )
+    parsed = BlueprintConfigParser(devices.blueprint).parse(environ={})
+    kwargs = pickle.loads(pickle.dumps(parsed.module_kwargs("simulationmodule")))
+    world = SimulationModuleConfig(**kwargs).world
+
+    assert isinstance(world.scene, RobosuiteTask)
+    assert world.scene.environment is Lift
+    assert world.scene.parameters == {"seed": 42}
+    assert world.robots["arm"].config == XARM7

@@ -6,6 +6,82 @@ This is a working alternative for comparison, not an accepted migration.
 The original worktree, user changes, running simulator and upstream source
 were not modified.
 
+## Task Reset And Eval Reliability (2026-10-01)
+
+This continuation remains an isolated comparison, not adoption for native V1.
+
+`8f6f9c249` fixes two concrete existing-eval failures:
+
+- `McpClientAdapter` enqueues one instruction through the existing acknowledged
+  `McpClient.add_message` RPC after subscribing to outputs. It no longer sends
+  one unacknowledged message immediately after creating a publisher. A fresh
+  process/subscriber diagnostic reproduced that discovery race without any
+  simulator or LLM. No Zenoh implementation, retry, or artificial delay changed.
+- The Viser panel releases end-effector controls through their owning scene,
+  so panel close followed by scene close no longer removes the same handle twice.
+
+Two consecutive real xArm/production-McpClient launches both answered `READY`
+to a no-tool diagnostic after the fix. This proves repeated agent startup, not
+manipulation success. Log: `/tmp/sim2-repeated-agent-fixed-20261001.log`.
+The earlier failed diagnostic is retained separately. The 60 eval tests and
+41 Viser GUI/visualizer tests pass.
+
+### Original Lift Through The Deployed Blueprint
+
+`RobosuiteTask(Lift, parameters)` is an explicit world source. One common device
+environment supplies robot/sensor loading and timing; the original Lift class
+owns its arena, placement sampler and success check. Authored MJCF instead owns
+its captured reset baseline. `SimulationRuntime` no longer overwrites task
+resets with an authored baseline. Conflicting authored task placements are
+rejected. There is no second robot definition, task registry, compiler or cache.
+
+`xarm-robosuite-lift` and the unchanged `xarm-perception-sim` reuse one manipulation
+stack composition. Lift uses the same XArm7Model and motor/camera interface.
+The imported robot's old 12 cm scene placement is normalized in its model
+adapter: robosuite had interpreted that as a base offset and mounted the arm at
+z=0.68 rather than z=0.8. Authored scenes retain their explicit robot placement.
+
+Actual CLI deployment, local router, native MuJoCo viewer disabled:
+
+- Startup through the existing `MujocoEnvironment`: 18.316 s.
+- Three RPC resets: 1.200, 0.877 and 0.999 ms. Different cube positions;
+  generations 2, 3 and 4; same model/snapshot descriptor, no worker reload.
+- Robot base remained `(-0.4, 0, 0.8)`, matching the planning model.
+- 640x480 wrist RGB recorded and inspected; cube/table visible. RGB standard
+  deviation 84.68. Capture: `/tmp/sim2-lift-camera-20261001.png`.
+- The original success oracle remained false. No agent solved Lift in this run.
+
+Log: `/tmp/sim2-lift-mounted-resets-20261001.log`. Recording:
+`recordings/20261001-151743-xarm-robosuite-lift-mcp-server-observe-skill/memory.db`.
+The first probes used incorrect global env names for current main and are not
+valid acceptance evidence. Current global env names are unprefixed, such as
+`ZENOH_MODE`, `ZENOH_CONNECT`, `MCP_PORT`; module overrides still use
+`SIMULATIONMODULE__VIEWER` etc. The corrected probe first caught the mount error;
+the log above is the post-fix run.
+
+Focused checks passed: 23 runtime/robot/scene/module tests, 19 blueprint/eval
+environment/draft grading tests, six registry tests. After the mount correction,
+11 robot/module/model-import tests passed. Selected mypy (eight production files)
+and Ruff passed. These overlapping counts are not a complete-repository test run.
+
+### Decisions Still Open
+
+1. The shared shutdown graph only knows RPC dependencies, not the coordinator's
+   SHM hardware dependency. Physics still stops before control in this composed
+   blueprint, producing brief closed-device errors. An explicit non-RPC lifetime
+   dependency was proposed to Pim; no shared API was changed without approval.
+2. Main's `--record` deliberately skips types without `lcm_encode`. `SceneState`
+   is a Pydantic object, so `sim_truth` is skipped despite SQLite itself being
+   able to store it. The draft `robosuite_lift` eval waiting for that stream is
+   therefore **not ready**. No end-to-end grade or suite pass is claimed.
+   Proposed: use the existing eval artifact contract to save a final privileged
+   task-result JSON before shutdown, rather than broaden the shared recorder.
+   The alternative is a proper standard DimOS truth message. Await Pim's choice.
+
+The two draft Lift eval files remain uncommitted pending that choice. No recorder
+patch, extra evaluator or result fallback was added. Python's resource-tracker
+destructor warning also remains visible. All owned probe processes were stopped.
+
 ## Current-Main Refresh (2026-10-01)
 
 The refreshed branch is `pim/test/robosuite-emulator-spike`, following main's

@@ -22,6 +22,7 @@ import math
 from pathlib import Path
 from typing import Any, Literal
 
+from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.objects import MujocoObject
 from robosuite.models.robots.robot_model import RobotModel
 
@@ -127,8 +128,16 @@ class ObjectInstance:
 
 
 @dataclass(frozen=True)
+class RobosuiteTask:
+    """An original upstream task owns its arena, object placement and success."""
+
+    environment: type[ManipulationEnv]
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class WorldConfig:
-    scene: Path
+    scene: Path | RobosuiteTask
     robots: dict[str, RobotInstance]
     timestep: float = 0.005
     snapshot_hz: float = 60.0
@@ -142,3 +151,8 @@ class WorldConfig:
         names = [obj.name for obj in self.objects]
         if len(set(names)) != len(names) or any(not name or name in self.robots for name in names):
             raise ValueError("object names must be unique, nonempty and distinct from robots")
+        if isinstance(self.scene, RobosuiteTask):
+            if self.objects or any(
+                r.xyz != (0.0, 0.0, 0.0) or r.rpy != (0.0, 0.0, 0.0) for r in self.robots.values()
+            ):
+                raise ValueError("upstream tasks own object insertion and robot placement")

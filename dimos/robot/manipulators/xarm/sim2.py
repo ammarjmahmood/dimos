@@ -112,6 +112,10 @@ class XArm7Model(ManipulatorModel):
         super().__init__(LfsPath("xarm7/xarm7.xml"), idn)
 
     def _prepare_xml(self) -> None:
+        root = self.root.find("./worldbody/body")
+        assert root is not None
+        # The source's 12 cm pedestal placement is not the robot's base offset.
+        root.set("pos", "0 0 0")
         link = self.root.find(".//body[@name='link7']")
         assert link is not None
         hand = link.find("body[@name='xarm_gripper_base_link']")

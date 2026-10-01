@@ -31,6 +31,7 @@ from dimos.sim2.sensors.spec import Camera, Imu, Lidar
 from dimos.sim2.spec import (
     ControlInterface,
     ObjectInstance,
+    RobosuiteTask,
     RobotInstance,
     WorldConfig,
 )
@@ -46,7 +47,7 @@ class Simulation:
 
 def simulation(
     *,
-    scene: Path,
+    scene: Path | RobosuiteTask,
     robots: dict[str, RobotInstance],
     sim_id: str = "sim",
     viewer: bool = True,

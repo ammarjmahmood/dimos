@@ -127,6 +127,7 @@ class SceneState(SceneRecord):
     joints: dict[str, float]
     regions: dict[str, RegionState]
     contacts: tuple[tuple[str, str], ...]
+    task_success: bool | None = None
 
 
 class SceneControlSpec(Spec, Protocol):
