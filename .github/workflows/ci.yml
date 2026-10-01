@@ -384,7 +384,7 @@ jobs:
           sudo apt-get update
           # lcm.pc carries `Requires: glib-2.0`, so pkg-config cannot resolve
           # lcm at all without glib's own .pc file
-          sudo apt-get install -y liblcm-dev libglib2.0-dev nlohmann-json3-dev
+          sudo apt-get install -y liblcm-dev libglib2.0-dev nlohmann-json3-dev portaudio19-dev libturbojpeg
           base=https://github.com/eclipse-zenoh
           curl -fsSL -o /tmp/zenoh-c.zip \
             "$base/zenoh-c/releases/download/$ZENOH_VERSION/zenoh-c-$ZENOH_VERSION-x86_64-unknown-linux-gnu-standalone.zip"
