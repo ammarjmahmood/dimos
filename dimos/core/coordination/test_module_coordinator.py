@@ -37,6 +37,7 @@ from dimos.core.coordination.module_coordinator import (
     _check_requirements,
     _deploy_all_modules,
     _materialize_transports,
+    _resolve_lifetime_edges,
     _verify_no_conflicts_with_existing,
     _verify_no_name_conflicts,
     stream_name_types,
@@ -356,16 +357,22 @@ def test_deploy_does_not_deepcopy_pinned_kwargs(mocker) -> None:
 
 
 @pytest.mark.parametrize(
-    "refs,expected",
+    "refs,lifetimes,expected",
     [
-        ({}, ["controller", "planner", "world"]),
+        ({}, set(), ["controller", "planner", "world"]),
         (
             {("planner", "control"): "controller", ("controller", "sim"): "world"},
+            set(),
+            ["planner", "controller", "world"],
+        ),
+        (
+            {("planner", "control"): "controller"},
+            {("controller", "world")},
             ["planner", "controller", "world"],
         ),
     ],
 )
-def test_shutdown_waits_for_consumers_before_removing_providers(mocker, refs, expected):
+def test_shutdown_waits_for_consumers_before_removing_providers(mocker, refs, lifetimes, expected):
     coordinator = ModuleCoordinator(g=GlobalConfig(viewer="none"))
     manager = coordinator._managers["python"]
     proxies = {
@@ -381,6 +388,7 @@ def test_shutdown_waits_for_consumers_before_removing_providers(mocker, refs, ex
     for name in proxies:
         coordinator.deploy(ModuleA, instance_name=name)
     coordinator._resolved_module_refs = refs
+    coordinator._lifetime_edges = lifetimes
 
     coordinator.stop()
     coordinator.stop()
@@ -393,6 +401,39 @@ def test_shutdown_waits_for_consumers_before_removing_providers(mocker, refs, ex
     for proxy in proxies.values():
         proxy.stop.assert_not_called()
     assert coordinator.n_modules == 0
+
+
+@pytest.mark.parametrize(
+    "edges,error",
+    [
+        ([(ModuleB, "absent")], "no active module 'absent'"),
+        ([("absent", ModuleA)], "no active module 'absent'"),
+        ([(ModuleA, ModuleA)], "Cyclic lifetime dependencies"),
+        ([(ModuleA, ModuleB), (ModuleB, ModuleA)], "Cyclic lifetime dependencies"),
+    ],
+)
+def test_invalid_lifetime_dependencies_fail_before_worker_start(mocker, edges, error):
+    blueprint = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).lifetime_dependencies(edges)
+    start = mocker.patch.object(WorkerManagerPython, "start")
+
+    with pytest.raises(ValueError, match=error):
+        ModuleCoordinator.build(blueprint)
+
+    start.assert_not_called()
+
+
+def test_disabled_lifetime_consumer_is_ignored_but_disabled_provider_is_rejected():
+    blueprint = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).lifetime_dependencies(
+        [(ModuleB, ModuleA)]
+    )
+    assert _resolve_lifetime_edges(blueprint.disabled_modules(ModuleB)) == set()
+    with pytest.raises(ValueError, match="no active module 'modulea'"):
+        _resolve_lifetime_edges(blueprint.disabled_modules(ModuleA))
+
+
+def test_lifetime_dependency_can_target_an_existing_module():
+    blueprint = ModuleB.blueprint().lifetime_dependencies([(ModuleB, "world")])
+    assert _resolve_lifetime_edges(blueprint, existing_names={"world"}) == {("moduleb", "world")}
 
 
 def test_shutdown_cycle_is_reported_without_leaving_workers_running(mocker):
@@ -695,6 +736,36 @@ def test_module_ref_remap_ambiguous() -> None:
         assert mod2.calc.compute2(2.0, 3.0) == 5.0
     finally:
         coordinator.stop()
+
+
+def test_lifetime_provider_cannot_unload_until_restarted_consumer_stops(dynamic_coordinator):
+    dynamic_coordinator.load_blueprint(ModuleA.blueprint())
+    dynamic_coordinator.load_blueprint(
+        ModuleB.blueprint().lifetime_dependencies([(ModuleB, ModuleA)])
+    )
+
+    with pytest.raises(ValueError, match="stop its lifetime consumers first: moduleb"):
+        dynamic_coordinator.unload_module(ModuleA)
+    with pytest.raises(ValueError, match="stop its lifetime consumers first: moduleb"):
+        dynamic_coordinator.restart_module(ModuleA, reload_source=False)
+
+    old_consumer = dynamic_coordinator.get_instance(ModuleB)
+    restarted = dynamic_coordinator.restart_module(ModuleB, reload_source=False)
+    assert restarted is not old_consumer
+    with pytest.raises(ValueError, match="stop its lifetime consumers first: moduleb"):
+        dynamic_coordinator.unload_module(ModuleA)
+    dynamic_coordinator.unload_module(ModuleB)
+    dynamic_coordinator.unload_module(ModuleA)
+    assert dynamic_coordinator.n_modules == 0
+
+
+def test_lifetime_dependency_cannot_reverse_an_rpc_dependency(dynamic_coordinator):
+    with pytest.raises(ValueError, match="Lifetime dependencies conflict with module references"):
+        dynamic_coordinator.load_blueprint(
+            autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).lifetime_dependencies(
+                [(ModuleA, ModuleB)]
+            )
+        )
 
 
 def test_load_blueprint_basic(dynamic_coordinator) -> None:

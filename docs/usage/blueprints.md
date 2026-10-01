@@ -481,6 +481,25 @@ class ModuleC(Module):
         return self.device.get_time()
 ```
 
+## Resource lifetime dependencies
+
+RPC providers already stop after their consumers. For resources used without
+RPC references, such as a simulator's shared-memory motor channel, declare the
+same relationship explicitly:
+
+```python
+stack = autoconnect(devices, controller).lifetime_dependencies(
+    [(ControlCoordinator, SimulationModule)],  # consumer, provider
+)
+```
+
+This orders shutdown, not startup, and does not create an RPC connection.
+Use instance names instead of classes when a class has multiple instances.
+Composition and namespacing preserve these relationships. Missing providers
+and cyclic dependencies are rejected; disabling a consumer removes its edges.
+An explicitly declared provider cannot be individually unloaded or restarted
+until its consumers stop. Restarting a consumer preserves its dependencies.
+
 ## Defining skills
 
 Skills are methods on a `Module` decorated with `@skill`. The agent automatically discovers all skills from launched modules at startup.

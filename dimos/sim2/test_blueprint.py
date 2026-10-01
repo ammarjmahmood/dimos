@@ -42,6 +42,10 @@ def test_multiple_robots_and_rgb_cameras_have_separate_typed_ports():
         viewer=False,
     )
     blueprint = devices.blueprint
+    assert blueprint.lifetime_edges == (
+        ("left_connection", "simulationmodule"),
+        ("right_connection", "simulationmodule"),
+    )
     parsed = BlueprintConfigParser(blueprint).parse(environ={})
     left = next(atom for atom in blueprint.active_blueprints if atom.name == "left_front")
     assert {stream.name for stream in left.streams} == {"color_image", "camera_info", "tf"}

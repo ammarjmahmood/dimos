@@ -87,6 +87,30 @@ class ModuleB(Module):
         return self.module_a.get_name()
 
 
+def test_lifetime_dependencies_survive_composition_namespace_and_pickle():
+    robot = autoconnect(ModuleA.blueprint(), ModuleB.blueprint()).lifetime_dependencies(
+        [(ModuleB, ModuleA), (ModuleA, "shared_world")]
+    )
+    fleet = autoconnect(robot.namespace("left"), robot.namespace("right"))
+    restored = pickle.loads(pickle.dumps(fleet))
+
+    assert restored.lifetime_edges == (
+        ("left/moduleb", "left/modulea"),
+        ("left/modulea", "shared_world"),
+        ("right/moduleb", "right/modulea"),
+        ("right/modulea", "shared_world"),
+    )
+    assert autoconnect(robot, robot).lifetime_edges == robot.lifetime_edges
+
+
+def test_lifetime_dependency_requires_instance_name_for_ambiguous_class():
+    blueprint = autoconnect(
+        ModuleA.blueprint(instance_name="left"), ModuleA.blueprint(instance_name="right")
+    )
+    with pytest.raises(ValueError, match="multiple instances"):
+        blueprint.lifetime_dependencies([(ModuleA, "world")])
+
+
 def test_get_connection_set() -> None:
     assert BlueprintAtom.create(CatModule, kwargs={"k": "v"}) == BlueprintAtom(
         module=CatModule,
