@@ -322,3 +322,119 @@ snapshot. Point the owned gateway's Python imports and simulator worker at the
 new snapshot, then verify `inspect.getfile(RadioPolicy)` and the exact source
 revision before an agent call. Current remote gateway imports still point to the
 older successful SDK snapshot; the new policy adapter has only local CPU tests.
+
+## Placement variation preparation (CPU only, 2026-10-01)
+
+The installed official source is BEHAVIOR-1K revision
+`b1979916ec1549b10a4e65e630bc6504a9af1b00`, OmniGibson 3.9.2. The radio data
+already provides 300 training instances (0–299) and 20 locally available public
+test instances (301–320). The evaluator defines 20 additional hidden test
+instances (321–340). These are different cached initial states. Repeating one
+instance restores that state; changing the seed alone does not resample radio
+placement. Optional online object sampling is a distinct initialization mode;
+`randomize_presampled_pose` selects among robot poses, not radio positions. Our
+current integration uses offline training-instance loading and the first robot
+pose. Source references:
+
+- [BehaviorTask initialization and reset](https://github.com/StanfordVL/BEHAVIOR-1K/blob/b1979916ec1549b10a4e65e630bc6504a9af1b00/OmniGibson/omnigibson/tasks/behavior_task.py)
+- [Official evaluator cached-state loading](https://github.com/StanfordVL/BEHAVIOR-1K/blob/b1979916ec1549b10a4e65e630bc6504a9af1b00/OmniGibson/omnigibson/eval/evaluator.py)
+- [Evaluation split constants](https://github.com/StanfordVL/BEHAVIOR-1K/blob/b1979916ec1549b10a4e65e630bc6504a9af1b00/OmniGibson/omnigibson/eval/utils/eval_utils.py)
+
+Keep official cached instances and custom near-field variations in separate
+results. Before inspecting geometry, select held-out training IDs by sorting
+IDs 1–299 by SHA256 of UTF-8 `radio-variation-v1:<id>` and taking the first three:
+**162, 171, 30**. Development instance 0 is excluded. Never replace a case after
+observing its IK, perception or task result. Do not tune a policy on these
+held-out geometries. Developer geometry access in this study is not an enforced
+runtime isolation boundary.
+
+### Actual CPU results
+
+All four official cached samples initially have ToggledOn=false. A nominal
+stationary left-arm-plus-torso screen retained each official R1Pro base, used
+an explicitly oracle-derived candidate gripper pose, and kept base/opposite
+arm/gripper joints fixed:
+
+| Training instance | Horizontal base-to-radio distance | Precontact IK screen |
+| --- | --- | --- |
+| 0 (development) | 1.833 m | Joint-limit rejection |
+| 162 | 2.049 m | Joint-limit rejection |
+| 171 | 1.665 m | No convergence within iteration budget |
+| 30 | 1.461 m | Differential-IK QP had no solution |
+
+These are failed candidate screens, not proofs that every arm configuration is
+unreachable. No official-instance navigation, physical contact or BDDL success
+was tested. Official task starts must not be advertised as stationary-arm-ready
+based on the custom-base success.
+
+Three custom cases were declared before planning: radio root shifted -8 cm in
+world X with -10 degrees world yaw; +8 cm X with +10 degrees yaw; and +8 cm Y
+with unchanged yaw. Table and the same assisted near-field robot base stay
+fixed. Only the initial radio pose varies; physical properties and the BDDL
+goal do not. All three passed actual RadioManipulationModule SDK planning,
+TOPPRA materialization, cached-command anchoring and discrete configuration/
+edge collision validation for lift, cross, precontact and 12 mm press. Only
+the intended finger/radio contact pairs are allowed during press, plus the
+existing conservative static radio/table support pair; other checked collisions
+remain active. Each case retained the same 11 selected arm/torso joints.
+
+The entire conservative radio footprint stayed within table-box XY bounds;
+the tightest margin across cases was 26 mm. The conservative radio box extends
+about 9.3 mm below the table-box top, also true of the saved original. These box
+checks **do not establish physical support, mesh clearance, stable settling,
+sensor visibility or BDDL initial predicates**. CPU targets were transformed
+from the known development target using object truth; they are only feasibility
+diagnostics and must never be passed to the sensor policy. Full house obstacles
+were not reconstructed. Keep all three cases, including any later live failure.
+
+### Prepared common comparison interface
+
+`radio_baselines.PressBaseline` executes either a locked development intent or
+a perception-generated intent through the same `RadioPolicy` facade, checked
+SDK planner and action-ID feedback. Its pollable runner halts on failure,
+cancellation or uncertain stop; motion timeouts remain supervisor-owned.
+Completed SDK stages do not imply task success. The independent owner checks
+BDDL, contacts, displacement and termination.
+
+`perception_intent` requires a detector callback supplied only an actual
+left-wrist observation. It grounds that callback's pixel against the exact
+observation ID, verifies base-frame provenance, and subtracts a known robot
+finger-to-gripper offset using the sensor-estimated orientation. The callback
+must also estimate the inward direction from sensors. **No detector or contact
+normal estimator is implemented by this helper.** There is no fallback to a
+marker, object transform, variant ID or evaluator pose. This prepares the
+shared execution contract; it does not make the perception baseline complete.
+
+For the eventual comparison, freeze the development-coordinate intent before
+held-out runs; instantiate a deterministic sensor estimator for the perception
+script; let Dimcode write sensor-grounded Python through the same facade. Use
+identical initialization assistance, observations, action limits and timeouts.
+Do not substitute a case-specific oracle target for either sensor condition.
+Placement adaptation alone demonstrates value over fixed coordinates, not an
+inherent agent advantage over a competent perception script.
+
+### Next bounded stages and remaining blockers
+
+1. The user approved one $1/60-second Luna vision-grounding stage while asleep,
+   with at most six requests/tools and a coordinated <=180-second simulator slot.
+   No new model call has been made yet. First verify opt-in marker hiding
+   on a fresh live snapshot and usable wrist RGB/depth, with independent initial
+   predicates and unchanged contact semantics. No policy press in that stage.
+2. Resolve sensor-only button selection, approach-normal estimation and checked
+   robot fingertip calibration using those actual observations. If imagery is
+   inadequate, report that result rather than supplying hidden coordinates.
+3. With separate GPU/run approval, initialize each custom pose only before the
+   episode, settle with ordinary physics, reject/report invalid support or
+   initially satisfied goal, then run the predeclared comparisons. Preserve
+   every case and classify initialization failure separately from policy or
+   motion failure. Do not freeze radio or change friction/mass. Keep the existing
+   official goal; do not symbolically toggle it.
+4. Original official-base evaluation remains a separate mobile-manipulation
+   condition requiring a navigation/reachability plan. It must not be combined
+   with near-field results as official benchmark performance.
+
+Local development evidence is retained outside the repository in
+`radio-transfer/radio-variation-input.json`, `radio_variation_cpu.py` and
+`radio-variation-cpu.json`; the accepted host CPU run was isolated in
+`/tmp/radio-variation-cpu.iH0rmz`. No simulator/GPU worker, physical controller,
+paid request or new dataset download was started for this preparation.
