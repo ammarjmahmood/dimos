@@ -70,6 +70,9 @@ def radio_blueprint(
                 spawn_position=spawn_position,
                 spawn_yaw=spawn_yaw,
                 development_task_spawn=spawn_position is not None,
+                # Development control needs steady feedback, rather than first-use
+                # JIT compilation blocking the single simulator thread.
+                extra_env={"TORCH_COMPILE_DISABLE": "1"},
             ),
             BehaviorProbe.blueprint(),
             BehaviorR1ProBridge.blueprint(command_joints=MODEL_JOINTS),
@@ -118,6 +121,23 @@ def radio_blueprint(
         )
         .global_config(transport="zenoh", n_workers=4)
     )
+
+
+def wait_for_measured_pose(
+    arm: Arm, position: Sequence[float], timeout: float, tolerance: float = 0.005
+) -> list[float]:
+    """Require fresh encoder-derived FK after the trajectory clock completes."""
+    deadline = time.monotonic() + timeout
+    while True:
+        state = arm.state()
+        pose = state.end_effector_pose
+        if state.joints is not None and pose is not None:
+            measured = list(pose.position.to_tuple())
+            if math.dist(measured, position) <= tolerance:
+                return measured
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Trajectory returned but fresh measured target pose was not reached")
+        time.sleep(0.02)
 
 
 def press_toggle(
@@ -172,6 +192,7 @@ def press_toggle(
             arm.move_pose(
                 precontact, orientation=orientation, timeout=remaining(), speed_scale=0.15
             )
+        measured_precontact = wait_for_measured_pose(arm, precontact, remaining())
         arm.move_linear(
             *(approach_distance * v for v in direction),
             auxiliary_groups=auxiliary_groups,
@@ -179,6 +200,7 @@ def press_toggle(
             timeout=remaining(),
             speed_scale=0.1,
         )
+        measured_contact = wait_for_measured_pose(arm, contact_position, remaining())
         first_step = simulation_step()
         while simulation_step() - first_step < hold_steps:
             time.sleep(min(0.02, remaining()))
@@ -189,7 +211,15 @@ def press_toggle(
             timeout=remaining(),
             speed_scale=0.1,
         )
-        return {"development_only": True, "motion_completed": True, "hold_steps": hold_steps}
+        measured_return = wait_for_measured_pose(arm, precontact, remaining())
+        return {
+            "development_only": True,
+            "motion_completed": True,
+            "hold_steps": hold_steps,
+            "measured_precontact": measured_precontact,
+            "measured_contact": measured_contact,
+            "measured_return": measured_return,
+        }
     except Exception as error:
         # Timeout of the calling Python process never proves remote motion stopped.
         try:
@@ -266,6 +296,7 @@ def main() -> None:
         "development_only": True,
         "task": task.model_dump(),
         "stage": args.stage,
+        "torch_compilation": "disabled in development radio composition",
     }
     try:
         if not args.connect:

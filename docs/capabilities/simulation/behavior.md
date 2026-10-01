@@ -300,6 +300,17 @@ contact; its evaluator stayed false. Agent adaptation remains untested. Scene ob
 registered automatically in the planner world; the simulator still enforces
 physical scene contact.
 
+The radio development composition disables PyTorch compilation before importing
+the simulator, using its supported `TORCH_COMPILE_DISABLE=1` environment option.
+First-use compilation can block the simulator's single stepping/feedback thread.
+In the torso-assisted smoke, the trajectory clock completed while feedback was
+stale; the subsequent press could not plan, and shutdown then logged a C++
+compilation error. Replaying the same compiler command on CPU succeeded in
+about one second, so a compiler defect has not been established. Pose-level
+steps now require fresh measured FK at the target before continuing. The latest
+physical attempt still reported BDDL false and zero consecutive toggle-contact
+steps. These development results do not establish fair benchmark performance.
+
 A temporary official Dimcode `0.1.0-next.7` installation completed a localhost
 mock-provider tool loop: write a Python policy file, execute it with the selected
 Python interpreter, import `dimos.manipulation.sdk.Arm`, and return API signatures
