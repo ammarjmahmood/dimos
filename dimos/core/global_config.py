@@ -119,6 +119,12 @@ class GlobalConfig(BaseSettings):
     # "auto" keeps shadows and turns them off if the sim falls behind realtime.
     mujoco_shadows: Literal["auto", "on", "off"] = "auto"
     scene_package: str | None = None
+    # Where a sim2 robot's base goes, as "x, y, z, yaw" in metres and radians,
+    # world frame. Set it to put an arm somewhere the scene did not author a
+    # support for, such as a kitchen counter. Unset, the blueprint uses the
+    # scene's named spawn. A wrong z leaves the arm floating or sunk into the
+    # surface, and the planner follows the same number.
+    scene_spawn: str | None = None
     robot_model: str | None = None
     robot_id: str | None = None
     robot_width: float = 0.3
@@ -216,6 +222,19 @@ class GlobalConfig(BaseSettings):
         if self.mujoco_camera_position is None:
             return (-0.906, 0.008, 1.101, 4.931, 89.749, -46.378)
         return tuple(_get_all_numbers(self.mujoco_camera_position))
+
+    @property
+    def scene_spawn_pose(self) -> tuple[float, float, float, float] | None:
+        """Parse `scene_spawn` into (x, y, z, yaw): metres and radians, or None if unset."""
+        if self.scene_spawn is None or not self.scene_spawn.strip():
+            return None
+        numbers = _get_all_numbers(self.scene_spawn)
+        if len(numbers) != 4:
+            raise ValueError(
+                f"scene_spawn needs four numbers 'x, y, z, yaw', got {self.scene_spawn!r}"
+            )
+        x, y, z, yaw = numbers
+        return (x, y, z, yaw)
 
     @property
     def processed_robot_ips(self) -> tuple[str, ...]:

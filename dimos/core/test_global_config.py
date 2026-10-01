@@ -34,6 +34,23 @@ def test_processed_robot_ips_strips_whitespace_and_ignores_empty_entries() -> No
     assert config.processed_robot_ips == ("192.0.2.10", "192.0.2.11")
 
 
+@pytest.mark.parametrize("scene_spawn", [None, "", "   "])
+def test_scene_spawn_pose_is_none_when_unset(scene_spawn: str | None) -> None:
+    assert GlobalConfig(scene_spawn=scene_spawn).scene_spawn_pose is None
+
+
+def test_scene_spawn_pose_parses_x_y_z_yaw() -> None:
+    config = GlobalConfig(scene_spawn="3.60, -0.58, 0.92, 0.76")
+
+    assert config.scene_spawn_pose == pytest.approx((3.60, -0.58, 0.92, 0.76))
+
+
+@pytest.mark.parametrize("scene_spawn", ["1, 2, 3", "1, 2, 3, 4, 5", "counter"])
+def test_scene_spawn_pose_rejects_anything_but_four_numbers(scene_spawn: str) -> None:
+    with pytest.raises(ValueError, match="x, y, z, yaw"):
+        GlobalConfig(scene_spawn=scene_spawn).scene_spawn_pose  # noqa: B018
+
+
 class TestGlobalConfigSecurityDefaults:
     """Network services must bind to localhost by default (not 0.0.0.0)."""
 

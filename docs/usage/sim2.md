@@ -116,6 +116,24 @@ poses. Scene metadata uses this single convention.
 Old `office` is not an alias for one of these scenes: its
 legacy collision wrapper still needs a separate visual/entity conversion.
 
+To stand the xArm somewhere a scene did not author a `workbench` support, pass
+`--scene-spawn "x, y, z, yaw"` (metres and radians, world frame). It replaces
+the named spawn with that absolute base pose, and the planner is built from
+the same pose, so it can be set only at launch; the `set_spawn` RPC moves the
+simulated base but not the planner. `z` is the surface height the base rests
+on. For example, the front-left corner of the right counter in
+`robocasa-kitchen-1` (counter top at 0.92 m) puts the apple, salt shaker and
+mug 0.22 to 0.48 m from the base. The cabinet shelf above that counter starts
+0.47 m over the counter top and the planner knows nothing about it, so a
+straight-down hover more than about 0.08 m over an object under the shelf
+ends with the forearm or wrist resting on the shelf:
+
+```bash
+MUJOCO_GL=egl dimos --simulation mujoco --transport zenoh \
+  --scene-package robocasa-kitchen-1 --scene-spawn "3.62, -0.54, 0.92, 0.10" \
+  run xarm7-planner-coordinator --simulationmodule.viewer=false
+```
+
 ```python
 from dimos.sim2.scene import list_scenes
 

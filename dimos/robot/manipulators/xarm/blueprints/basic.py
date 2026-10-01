@@ -60,11 +60,19 @@ if global_config.simulation:
     from dimos.robot.manipulators.xarm.sim2 import XARM7
     from dimos.sim2.blueprint import simulation
     from dimos.sim2.scene import scene_path, scene_robot
+    from dimos.sim2.spec import RobotInstance
 
     if global_config.simulation != "mujoco":
         raise ValueError("xarm7-planner-coordinator supports --simulation mujoco")
     _scene = scene_path(global_config.scene_package, "workbench.xml")
-    _arm = scene_robot(_scene, XARM7, "workbench", default=(0.0, 0.0, 0.12))
+    _spawn = global_config.scene_spawn_pose
+    if _spawn is None:
+        _arm = scene_robot(_scene, XARM7, "workbench", default=(0.0, 0.0, 0.12))
+    else:
+        # --scene-spawn gives the base pose directly; the planner below reads
+        # the same pose, so arm and planner agree wherever the base goes.
+        _x, _y, _z, _yaw = _spawn
+        _arm = RobotInstance(XARM7, xyz=(_x, _y, _z), rpy=(0.0, 0.0, _yaw))
     _xarm7_model = make_xarm7_sim_robot_config().model_copy(
         update={
             "base_pose": PoseStamped(
