@@ -430,7 +430,10 @@ environment only launches `dimos --simulation mujoco --record run <blueprint>
 <modules>` headless; `MUJOCOSIMMODULE__HEADLESS=false` in the shell opens the viewer on
 Linux. Manipulation graders need ground-truth object poses:
 `tracked_bodies` names free bodies in the MJCF, and the simulator publishes
-`world -> <body>` on `tf` next to its camera frames. `first_body_transform` and
+`world -> <body>` on `tf` next to its camera frames. Because the recording holds
+those true poses, a MuJoCo environment never hands it to the agent (Pi and dimcode
+are not told it exists); the agent finds the objects through the camera, and only
+`grade` opens the recording. `first_body_transform` and
 `last_body_transform` read them back from the recording:
 
 ```python session=evals ansi=false no-result

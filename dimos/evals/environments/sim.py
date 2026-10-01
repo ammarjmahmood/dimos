@@ -84,6 +84,10 @@ class Sim(Environment):
         """Wait for simulator observations and return extra artifacts, if needed."""
         return {}
 
+    def grader_only(self) -> frozenset[str]:
+        """Names of artifacts the agent is never told about; the grader still opens them."""
+        return frozenset()
+
     @abstractmethod
     def latest_pose(self, recording: Store) -> PoseStamped:
         """Return achieved pose for settling; raise LookupError before the first sample."""
@@ -158,6 +162,7 @@ class Sim(Environment):
             streams=(),
             artifacts=artifacts,
             raw_endpoint=self._raw_endpoint if self.config.raw_bridge else None,
+            grader_only=self.grader_only(),
         )
 
     def _wait_recording(self, deadline: float, pid: int | None) -> Path:

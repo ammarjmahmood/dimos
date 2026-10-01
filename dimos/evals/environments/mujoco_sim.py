@@ -49,7 +49,11 @@ class MujocoEnvironmentConfig(SimConfig):
 
 
 class MujocoEnvironment(Sim):
-    """Run agent evaluations in a MuJoCo scene, with ground-truth object poses recorded on tf."""
+    """Run agent evaluations in a MuJoCo scene, with ground-truth object poses recorded on tf.
+
+    The agent is never handed the recording: it holds the true world poses of the tracked
+    bodies, which the agent is meant to find through the camera.
+    """
 
     config: MujocoEnvironmentConfig
 
@@ -71,6 +75,9 @@ class MujocoEnvironment(Sim):
     def prepare_recording(self, recording: Store, path: Path, deadline: float) -> dict[str, Path]:
         self.wait_ready(recording, deadline=deadline)
         return {}
+
+    def grader_only(self) -> frozenset[str]:
+        return frozenset({"recording"})
 
     def wait_ready(self, recording: Store, *, deadline: float) -> None:
         """Wait for fresh samples on every ready stream and a pose for every tracked body."""
