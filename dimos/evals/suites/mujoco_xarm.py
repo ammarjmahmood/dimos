@@ -12,16 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): two picks,
-planner skills and the wrist camera only, graded on the bodies' recorded poses.
+"""xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): pick up the cylinder,
+then put the red ball on top of it, graded on the bodies' recorded poses. Each task comes in
+two variants. ``raw`` gives the agent the planner skills and a wrist-camera image only.
+``perception`` keeps the scene-registration and pick-and-place modules in the launch, so the
+agent can also scan the view for objects, pick one by id and place it at a position.
 
-    dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi
+    dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi --tags raw
+    dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi --tags perception
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 import math
+from typing import Literal
 
 from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
@@ -45,11 +50,22 @@ SCENE = (
     "roll=3.1416, pitch=0. roll=pitch=yaw=0 points the gripper up."
 )
 
+PERCEPTION_SCENE = (
+    f"{SCENE} You also have perception skills: scan_objects(prompts=[...]) looks for the named "
+    "objects in the current wrist-camera view and returns an object_id for each one it finds, "
+    "pick_object(object_id) grasps that object, and place_at(x, y, z) lowers the held object "
+    "to that world-frame position and releases it. Neither reports where an object is; work "
+    "that out from the camera and the table layout above."
+)
 
-def environment() -> MujocoEnvironment:
+Variant = Literal["raw", "perception"]
+
+
+def environment(variant: Variant) -> MujocoEnvironment:
+    """The table scene. ``raw`` launches it without the perception modules."""
     return MujocoEnvironment(
         blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
-        disable=PERCEPTION_MODULES,
+        disable=() if variant == "perception" else PERCEPTION_MODULES,
         tracked_bodies=TRACKED,
     )
 
@@ -89,22 +105,30 @@ def stacked_on(
     return grade
 
 
-SUITE: Suite = [
-    EvalCase(
-        id="xarm_pick_cylinder",
-        inputs=f"Pick up the cylinder from the table and hold it in the air. {SCENE}",
-        environment=environment(),
-        grade=lifted("cup", by_m=0.05),
-        timeout_s=600.0,
-        tags=frozenset({"mujoco", "manipulation", "pick"}),
-    ),
-    EvalCase(
-        id="xarm_ball_on_cylinder",
-        inputs=f"Pick up the red ball and place it on top of the cylinder. {SCENE}",
-        environment=environment(),
-        grade=stacked_on("apple", "cup", rise_m=(0.08, 0.12), band_m=0.07),
-        timeout_s=900.0,
-        threshold=0.5,
-        tags=frozenset({"mujoco", "manipulation", "pick", "place"}),
-    ),
-]
+def cases(variant: Variant) -> list[EvalCase]:
+    """Both tasks for one variant. The ``raw`` ids are bare; ``perception`` ids carry a suffix."""
+    suffix = "" if variant == "raw" else f"_{variant}"
+    scene = SCENE if variant == "raw" else PERCEPTION_SCENE
+    tags = frozenset({"mujoco", "manipulation", "pick", variant})
+    return [
+        EvalCase(
+            id=f"xarm_pick_cylinder{suffix}",
+            inputs=f"Pick up the cylinder from the table and hold it in the air. {scene}",
+            environment=environment(variant),
+            grade=lifted("cup", by_m=0.05),
+            timeout_s=600.0,
+            tags=tags,
+        ),
+        EvalCase(
+            id=f"xarm_ball_on_cylinder{suffix}",
+            inputs=f"Pick up the red ball and place it on top of the cylinder. {scene}",
+            environment=environment(variant),
+            grade=stacked_on("apple", "cup", rise_m=(0.08, 0.12), band_m=0.07),
+            timeout_s=900.0,
+            threshold=0.5,
+            tags=tags | {"place"},
+        ),
+    ]
+
+
+SUITE: Suite = [*cases("raw"), *cases("perception")]

@@ -468,8 +468,16 @@ still settle on `odom`. The recording keeps color, camera info, joint state,
 `tf` and `odom`; depth frames are float32, which the JPEG recorder rejects. `module_env` passes extra
 `MODULE__FIELD` overrides to the launched dimos, which beat blueprint-pinned
 values, so a case can retune a module without a new blueprint.
-`dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
-modules disabled: pick up the cylinder, then put the red ball on top of it.
+`dimos.evals.suites.mujoco_xarm` is the xArm7 table scene: pick up the cylinder, then put
+the red ball on top of it. Each task has two variants, selected by tag. `raw` disables the
+perception modules, so the agent has the planner skills and a wrist-camera image only;
+`perception` keeps them, adding `scan_objects`, `pick_object` and `place_at`. Both grade
+the same recorded poses, so the pair measures what the perception stack adds:
+
+```bash skip
+dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi --tags raw
+dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi --tags perception
+```
 
 ## Running
 
