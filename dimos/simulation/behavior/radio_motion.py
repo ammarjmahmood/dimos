@@ -238,30 +238,106 @@ class RadioCoordinator(BehaviorCoordinator):
 class RadioManipulationModule(ManipulationModule):
     """Split development Cartesian planning from execution for external checks."""
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._development_scene: dict[str, Any] | None = None
+        self._development_scene_world: WorldSpec | None = None
+
     @rpc
-    def configure_development_collision_scene(self, objects: Sequence[Mapping[str, Any]]) -> None:
+    def get_development_collision_scene(self) -> dict[str, Any] | None:
+        """Owner-only development metadata; never a policy observation."""
+        with self._lock:
+            if (
+                self._world_monitor is None
+                or self._world_monitor.world is not self._development_scene_world
+            ):
+                return None
+            return copy.deepcopy(self._development_scene)
+
+    @rpc
+    def configure_development_collision_scene(
+        self,
+        objects: Sequence[Mapping[str, Any]],
+        source_definition: Mapping[str, Any] | None = None,
+        scene_reference: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Register once; repeated owners must supply identical declared geometry.
+
+        The first owner retains the collision boxes and measured scene reference.
+        A subsequent factory reuses those boxes after checking live scene drift;
+        it must not move boxes implicitly or adopt conflicting geometry.
+        """
         from dimos.manipulation.planning.spec.enums import ObstacleType
         from dimos.manipulation.planning.spec.models import Obstacle
         from dimos.manipulation.planning.world.roboplan_world import RoboPlanWorld
 
-        if self._world_monitor is None or not isinstance(self._world_monitor.world, RoboPlanWorld):
-            raise RuntimeError("Radio runtime planning world unavailable")
-        if {obj["name"] for obj in objects} != {"radio", "table"}:
+        if len(objects) != 2 or {obj["name"] for obj in objects} != {"radio", "table"}:
             raise ValueError("Only the development radio/support geometry is supported")
         for obj in objects:
-            added = self._world_monitor.add_obstacle(
-                Obstacle(
-                    name=obj["name"],
-                    obstacle_type=ObstacleType.BOX,
-                    pose=PoseStamped(
-                        frame_id="world", position=obj["position"], orientation=obj["orientation"]
-                    ),
-                    dimensions=tuple(obj["extent"]),
-                )
-            )
-            if added != obj["name"]:
-                raise RuntimeError("Development collision geometry was not registered")
-        self._world_monitor.world._require_scene().setCollisions("radio", "table", False)
+            for key, size in (("position", 3), ("orientation", 4), ("extent", 3)):
+                values = obj[key]
+                if len(values) != size or not all(math.isfinite(v) for v in values):
+                    raise ValueError("Development geometry requires finite coordinates")
+            if any(v <= 0 for v in obj["extent"]) or not any(obj["orientation"]):
+                raise ValueError("Development geometry requires positive dimensions/rotation")
+        record: dict[str, Any] = copy.deepcopy(
+            {
+                "objects": sorted(objects, key=lambda obj: obj["name"]),
+                "source_definition": source_definition,
+                "scene_reference": scene_reference,
+            }
+        )
+        with self._lock:
+            if self._world_monitor is None or not isinstance(
+                self._world_monitor.world, RoboPlanWorld
+            ):
+                raise RuntimeError("Radio runtime planning world unavailable")
+            world = self._world_monitor.world
+            if world is self._development_scene_world and self._development_scene is not None:
+                if record != self._development_scene:
+                    raise ValueError("Conflicting development collision geometry or ownership")
+                actual_boxes = {obstacle.name: obstacle for obstacle in world.get_obstacles()}
+                for obj in record["objects"]:
+                    actual = actual_boxes.get(obj["name"])
+                    if (
+                        actual is None
+                        or actual.obstacle_type is not ObstacleType.BOX
+                        or tuple(actual.dimensions) != tuple(obj["extent"])
+                        or actual.pose.frame_id != "world"
+                        or actual.pose.position.to_tuple() != tuple(obj["position"])
+                        or actual.pose.orientation.to_tuple() != tuple(obj["orientation"])
+                    ):
+                        raise ValueError("Registered development collision geometry was changed")
+                return
+            existing_names = {obstacle.name for obstacle in world.get_obstacles()}
+            if existing_names & {"radio", "table"}:
+                raise ValueError("Development obstacle names already belong to another owner")
+            added_names: list[str] = []
+            try:
+                for obj in record["objects"]:
+                    added = self._world_monitor.add_obstacle(
+                        Obstacle(
+                            name=obj["name"],
+                            obstacle_type=ObstacleType.BOX,
+                            pose=PoseStamped(
+                                frame_id="world",
+                                position=obj["position"],
+                                orientation=obj["orientation"],
+                            ),
+                            dimensions=tuple(obj["extent"]),
+                        )
+                    )
+                    if added != obj["name"]:
+                        raise RuntimeError("Development collision geometry was not registered")
+                    added_names.append(added)
+                world._require_scene().setCollisions("radio", "table", False)
+            except BaseException:
+                # Roll back only geometry admitted by this registration attempt.
+                for name in reversed(added_names):
+                    self._world_monitor.remove_obstacle(name)
+                raise
+            self._development_scene_world = world
+            self._development_scene = record
 
     @rpc
     def set_development_contact_pairs(self, side: str, enabled: bool) -> None:
@@ -529,40 +605,52 @@ def make_development_motion(
     world, _, _ = create_planning_stack(model)
     if not isinstance(world, RoboPlanWorld):
         raise TypeError("Development radio guard requires RoboPlan")
+    runtime = app.get_module("ManipulationModule")
     reference_truth = truth()
-    reference = {key: reference_truth["objects"][key] for key in keys}
-    calibration = np.array(geometry["physical_to_sdk_fk_translation"])
-    if calibration.shape != (3,) or not np.isfinite(calibration).all():
-        raise ValueError("Use an explicit finite geometry calibration")
-    runtime_objects = []
-    for obj in geometry["objects"]:
-        actual = reference[obj["key"]]
-        assert_scene_unchanged({obj["key"]: obj["reference"]}, reference)
-        scale = actual.get("scale")
-        if scale is None or any(not math.isfinite(v) or not 0 < v <= 1.001 for v in scale):
-            raise RuntimeError("Nonconservative asset scale requires CPU geometry revalidation")
-        rotation = Rotation.from_quat(actual["orientation"])
-        center = np.array(actual["position"]) + rotation.apply(obj["local_center"]) + calibration
-        runtime_objects.append(
-            {
-                "name": obj["name"],
-                "position": center.tolist(),
-                "orientation": actual["orientation"],
-                "extent": obj["extent"],
-            }
-        )
+    current_reference = {key: reference_truth["objects"][key] for key in keys}
+    registered = runtime.get_development_collision_scene()
+    if registered is not None:
+        if registered["source_definition"] != geometry or registered["scene_reference"] is None:
+            raise ValueError("Conflicting development collision geometry or ownership")
+        reference = registered["scene_reference"]
+        assert_scene_unchanged(reference, current_reference)
+        runtime_objects = registered["objects"]
+    else:
+        reference = copy.deepcopy(current_reference)
+        calibration = np.array(geometry["physical_to_sdk_fk_translation"])
+        if calibration.shape != (3,) or not np.isfinite(calibration).all():
+            raise ValueError("Use an explicit finite geometry calibration")
+        runtime_objects = []
+        for obj in geometry["objects"]:
+            actual = reference[obj["key"]]
+            assert_scene_unchanged({obj["key"]: obj["reference"]}, reference)
+            scale = actual.get("scale")
+            if scale is None or any(not math.isfinite(v) or not 0 < v <= 1.001 for v in scale):
+                raise RuntimeError("Nonconservative asset scale requires CPU geometry revalidation")
+            rotation = Rotation.from_quat(actual["orientation"])
+            center = (
+                np.array(actual["position"]) + rotation.apply(obj["local_center"]) + calibration
+            )
+            runtime_objects.append(
+                {
+                    "name": obj["name"],
+                    "position": center.tolist(),
+                    "orientation": actual["orientation"],
+                    "extent": obj["extent"],
+                }
+            )
+    runtime.configure_development_collision_scene(runtime_objects, geometry, reference)
+    for obj in runtime_objects:
         world.add_obstacle(
             Obstacle(
                 name=obj["name"],
                 obstacle_type=ObstacleType.BOX,
                 pose=PoseStamped(
-                    frame_id="world", position=center, orientation=actual["orientation"]
+                    frame_id="world", position=obj["position"], orientation=obj["orientation"]
                 ),
                 dimensions=tuple(obj["extent"]),
             )
         )
-    runtime = app.get_module("ManipulationModule")
-    runtime.configure_development_collision_scene(runtime_objects)
     probe = app.get_module("BehaviorProbe")
 
     def full_state() -> JointState:

@@ -472,3 +472,40 @@ launcher failures are retained. The full CPU test fixes and exercises that
 missing boundary before another GPU request. Paid request count and spend
 remain zero as of this preparation. The same single bounded grounding stage
 is still authorized and unspent; further paid stages require separate authority.
+
+### Real planning-world handoff preflight
+
+A subsequent live preparation reached the advertised RPC service and completed
+all three assisted inspection moves, then stopped before inference: inspection
+and policy initialization each constructed the checked-motion factory, so the
+second factory tried to register the same named radio/table boxes again. The
+real RoboPlan world correctly rejects duplicate names. This is a development
+startup finding, not a GitHub review comment or CI automation failure.
+
+The development SDK now retains explicit ownership of the first scene's boxes,
+declaration, and measured reference. An identical registration is idempotent;
+changed geometry, declaration, reference, externally mutated boxes, or preexisting
+unowned names are rejected. Failed partial registration rolls back only its own
+new boxes. The second factory checks live object drift against the original
+reference (the existing 2 mm/0.01 rad limits) and reuses the original boxes in both
+its private checking world and the SDK world. It does not silently move boxes.
+
+The stronger CPU preflight passed two complete coordinator lifecycles with the
+actual R1 bridge, coordinator, SDK planning world, first inspection factory,
+and unmodified RadioPolicyModule initializer (second factory). Cached external
+truth and cameras were explicitly synthetic; no motion was dispatched. It tested
+0.1 mm cached settling without changing registered boxes, rejected changed box
+extent and excessive cached object displacement, rejected second supervisor
+initialization, and reattached/disconnected borrowed clients without stopping the
+owner. The offline official Dimcode gateway completed all five tools and six
+fixture responses in about 1.36 seconds, with an actual image payload and SDK
+feedback. Both owner lifecycles shut down all workers. Eight real CPU world
+regressions, 48 lightweight motion/policy/baseline tests, mypy and focused
+pre-commit checks passed. The accepted assets and existing Python/Node runtimes
+were reused; no simulator, GPU work or real model request was started.
+
+The launch guard now requires this real-world handoff report in addition to the
+native import and worker startup checks. All prior live failures are preserved.
+The single bounded paid grounding stage remains unspent; another GPU slot must
+be coordinated before retrying it. This preflight proves development plumbing,
+not physical contact, autonomous perception or fair task performance.
