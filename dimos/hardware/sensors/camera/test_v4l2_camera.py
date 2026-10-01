@@ -170,6 +170,7 @@ def test_frames_carry_the_driver_capture_time(module: V4L2CameraModule) -> None:
     module._pump(_StampedCapture(reads=[True, True, False, False, False]))
 
     first, second = (call[0][0].ts for call in _published(module).call_args_list)
-    # Each stamp re-reads wall minus monotonic, two clock calls a few microseconds apart.
-    assert second - first == pytest.approx((captured_ms[1] - captured_ms[0]) / 1e3, abs=1e-5)
+    # Each stamp re-reads wall minus monotonic: two clock calls a loaded machine can preempt
+    # between, ~0.1 ms on CI, against a 33 ms frame period.
+    assert second - first == pytest.approx((captured_ms[1] - captured_ms[0]) / 1e3, abs=1e-3)
     assert second == pytest.approx(time.time(), abs=1.0)
