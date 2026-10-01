@@ -311,7 +311,7 @@ class BehaviorRuntime(BehaviorConnection):
         truth = self._engine.ground_truth()
         with self._lock:
             tags = {"episode": self._state.episode.id, "step": self._state.episode.step}
-            self._truth = {**tags, **truth}
+            self._truth = {**tags, "observed_at_monotonic": time.monotonic(), **truth}
         if self._started.is_set():
             for name, message in self._engine.messages(time.time()).items():
                 getattr(self, name).publish(message)

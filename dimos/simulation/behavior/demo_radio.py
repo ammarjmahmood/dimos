@@ -28,7 +28,6 @@ from dimos.control.coordinator import TaskConfig
 from dimos.control.tasks.trajectory_task.trajectory_task import joint_trajectory_task
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.transport import ZenohTransport
-from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.planners.roboplan_config import RoboPlanPlannerConfig
 from dimos.manipulation.sdk import Arm
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -38,8 +37,13 @@ from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic
 from dimos.robot.galaxea.r1pro.joints import UPPER_BODY_JOINTS, coordinator_name
 from dimos.simulation.behavior.connection import BehaviorConnection
 from dimos.simulation.behavior.probe import BehaviorProbe
-from dimos.simulation.behavior.r1pro_bridge import BehaviorCoordinator, BehaviorR1ProBridge
+from dimos.simulation.behavior.r1pro_bridge import BehaviorR1ProBridge
 from dimos.simulation.behavior.r1pro_model import MODEL_JOINTS, simulation_model_config
+from dimos.simulation.behavior.radio_motion import (
+    RadioCoordinator,
+    RadioManipulationModule,
+    make_development_motion,
+)
 from dimos.simulation.behavior.types import ControlMode, TaskSelection
 
 
@@ -76,7 +80,7 @@ def radio_blueprint(
             ),
             BehaviorProbe.blueprint(),
             BehaviorR1ProBridge.blueprint(command_joints=MODEL_JOINTS),
-            BehaviorCoordinator.blueprint(
+            RadioCoordinator.blueprint(
                 instance_name="ControlCoordinator",
                 tick_rate=30,
                 hardware=[
@@ -96,16 +100,17 @@ def radio_blueprint(
                         priority=20,
                     ),
                 ],
-            ).remappings([(BehaviorCoordinator, "joint_command", "coordinator_joint_command")]),
-            ManipulationModule.blueprint(
+            ).remappings([(RadioCoordinator, "joint_command", "coordinator_joint_command")]),
+            RadioManipulationModule.blueprint(
+                instance_name="ManipulationModule",
                 model=model,
                 planner=RoboPlanPlannerConfig(),
                 planning_timeout=10.0,
                 trajectory_tasks={"joint_trajectory": upper},
             ).remappings(
                 [
-                    (ManipulationModule, "coordinator_joint_state", "planning_joint_state"),
-                    (ManipulationModule, "tf", "planning_tf"),
+                    (RadioManipulationModule, "coordinator_joint_state", "planning_joint_state"),
+                    (RadioManipulationModule, "tf", "planning_tf"),
                 ]
             ),
         )
@@ -165,6 +170,8 @@ def press_toggle(
     evidence: Callable[[str], None] | None = None,
     episode_finished: Callable[[], bool] | None = None,
     clearance_waypoints: Sequence[Mapping[str, Sequence[float]]] = (),
+    checked_motion: Callable[[Sequence[float], Sequence[float] | None, float, bool], None]
+    | None = None,
     approach_distance: float = 0.03,
     hold_steps: int = 8,
     timeout: float = 30.0,
@@ -201,6 +208,9 @@ def press_toggle(
             evidence(stage)
 
     def pose_move(position: Sequence[float], rotation: Sequence[float] | None) -> list[float]:
+        if checked_motion is not None:
+            checked_motion(position, rotation, remaining(), False)
+            return wait_for_measured_pose(arm, position, remaining(), orientation=rotation)
         arm.move_pose(
             position,
             orientation=rotation,
@@ -218,13 +228,16 @@ def press_toggle(
         record("before_precontact")
         measured_precontact = pose_move(precontact, orientation)
         record("after_precontact")
-        arm.move_linear(
-            *(approach_distance * v for v in direction),
-            auxiliary_groups=auxiliary_groups,
-            check_collision=True,
-            timeout=remaining(),
-            speed_scale=0.1,
-        )
+        if checked_motion is not None:
+            checked_motion(contact_position, orientation, remaining(), True)
+        else:
+            arm.move_linear(
+                *(approach_distance * v for v in direction),
+                auxiliary_groups=auxiliary_groups,
+                check_collision=True,
+                timeout=remaining(),
+                speed_scale=0.1,
+            )
         if episode_finished is not None and episode_finished():
             record("episode_finished_after_press")
             return {"development_only": True, "motion_completed": False, "episode_finished": True}
@@ -244,13 +257,16 @@ def press_toggle(
             record("holding")
             time.sleep(min(0.02, remaining()))
         record("before_retract")
-        arm.move_linear(
-            *(-approach_distance * v for v in direction),
-            auxiliary_groups=auxiliary_groups,
-            check_collision=True,
-            timeout=remaining(),
-            speed_scale=0.1,
-        )
+        if checked_motion is not None:
+            checked_motion(precontact, orientation, remaining(), True)
+        else:
+            arm.move_linear(
+                *(-approach_distance * v for v in direction),
+                auxiliary_groups=auxiliary_groups,
+                check_collision=True,
+                timeout=remaining(),
+                speed_scale=0.1,
+            )
         measured_return = wait_for_measured_pose(
             arm, precontact, remaining(), orientation=orientation
         )
@@ -404,6 +420,12 @@ def main() -> None:
                 raise ValueError("Target must label sensor-derived or oracle-assisted provenance")
             report["target"] = target
             report["gripper_closed"] = set_gripper_and_wait(arm, 0.0)
+            motion = make_development_motion(
+                app, sim, arm, target, report, ("torso",) if args.auxiliary_torso else ()
+            )
+            report["planning_collision_scope"] = (
+                "Exact generated and coordinator-anchored trajectory checked against oracle radio/table boxes and robot/self model. Other scene objects are not modeled. Discrete 0.01 configuration-space edge checks; no tracking/continuous-clearance guarantee."
+            )
             report["interaction"] = press_toggle(
                 arm,
                 target["position"],
@@ -413,6 +435,7 @@ def main() -> None:
                 auxiliary_groups=("torso",) if args.auxiliary_torso else (),
                 evidence=stage_evidence,
                 episode_finished=lambda: sim.get_status().state == "finished",
+                checked_motion=motion.move,
                 clearance_waypoints=target.get("clearance_waypoints", ()),
                 approach_distance=target.get("approach_distance", 0.03),
             )

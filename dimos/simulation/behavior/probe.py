@@ -74,6 +74,7 @@ class BehaviorProbe(Module):
             if "joint_state" in self._latest:
                 msg = self._latest["joint_state"]
                 result["joints"] = dict(zip(msg.name, msg.position, strict=True))
+                result["joint_state_timestamp"] = msg.ts
             result["sensors"] = {}
             for name, message in self._latest.items():
                 if isinstance(message, Image):

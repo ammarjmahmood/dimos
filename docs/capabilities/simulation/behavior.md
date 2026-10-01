@@ -377,3 +377,28 @@ Run mocked runtime tests without installing Isaac Sim from the repository root:
 ```bash
 PYTHONPATH="$PWD:$PWD/native/python/behavior" .venv/bin/pytest --confcutdir=native/python/behavior native/python/behavior/dimos_behavior/test_runtime.py
 ```
+
+The development radio press now requires an explicit `collision_scene` in its
+oracle-assisted target JSON. It installs matching radio/support boxes in the
+runtime planner and checks the actual materialized trajectory in a second
+planning world. The previous inside-body target is rejected. Intended contact
+permits only the selected finger/radio pairs; the static radio/support pair is
+permitted because their conservative boxes intersect at the support surface.
+These planning exclusions do not alter simulator physics.
+
+Every action retains the returned SDK plan ID. The coordinator's previous
+command can anchor the first waypoint, so the checker validates that effective
+trajectory too. Dispatch consumes a one-use authorization of the original and
+effective trajectory digests; a changed path, anchor, or expired authorization
+is rejected. Robot state and fresh, episode-tagged object pose snapshots are
+checked again before authorization. The radio/support snapshot is held fixed
+in the planning worlds, not physically frozen in the simulator. If the object
+moves, the next action rejects the old snapshot instead of silently retargeting.
+
+This is development validation with privileged geometry. It checks linearly
+interpolated command edges at a 0.01 configuration-space step against robot/self
+and radio/support boxes. Other scene objects, continuous collision clearance,
+tracking deviations, and object motion during execution remain outside that
+claim. Candidate boxes have a recorded 1 mm margin per face for asset scale
+rounding; this margin changes only the planning geometry. Per-stage physical
+pose/contact logs and independent BDDL results remain the actual trial evidence.

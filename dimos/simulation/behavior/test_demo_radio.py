@@ -15,7 +15,6 @@
 import numpy as np
 import pytest
 
-from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_spec import PlanningGroupState
 from dimos.manipulation.sdk import Arm
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -31,8 +30,9 @@ from dimos.simulation.behavior.demo_radio import (
     wait_for_measured_pose,
 )
 from dimos.simulation.behavior.probe import BehaviorProbe
-from dimos.simulation.behavior.r1pro_bridge import BehaviorCoordinator, BehaviorR1ProBridge
+from dimos.simulation.behavior.r1pro_bridge import BehaviorR1ProBridge
 from dimos.simulation.behavior.r1pro_model import MODEL_JOINTS
+from dimos.simulation.behavior.radio_motion import RadioCoordinator, RadioManipulationModule
 from dimos.simulation.behavior.types import TaskSelection
 
 
@@ -87,19 +87,19 @@ def test_missing_gripper_feedback_never_counts_as_closed(mocker):
 def test_radio_composition_binds_selected_gripper_without_base_trajectory():
     bp = radio_blueprint(TaskSelection(activity="turning_on_radio"), arm="right_arm")
     atoms = {a.module: a for a in bp.blueprints}
-    hardware = atoms[BehaviorCoordinator].kwargs["hardware"][0]
+    hardware = atoms[RadioCoordinator].kwargs["hardware"][0]
     assert hardware.joints == [f"r1pro/{n}" for n in MODEL_JOINTS]
-    task = atoms[BehaviorCoordinator].kwargs["tasks"][1]
+    task = atoms[RadioCoordinator].kwargs["tasks"][1]
     assert task.name == "r1pro_gripper"
     assert task.joint_names == ["r1pro/right_gripper_finger_joint1"]
-    model = atoms[ManipulationModule].kwargs["model"]
-    assert atoms[ManipulationModule].kwargs["planner"].backend == "roboplan"
+    model = atoms[RadioManipulationModule].kwargs["model"]
+    assert atoms[RadioManipulationModule].kwargs["planner"].backend == "roboplan"
     assert [g.name for g in model.planning_groups] == ["right_arm", "torso"]
     assert model.gripper_hardware_id == "r1pro"
     assert atoms[BehaviorR1ProBridge].kwargs["command_joints"] == MODEL_JOINTS
     assert not any(
         "base_" in n
-        for n in atoms[ManipulationModule].kwargs["trajectory_tasks"]["joint_trajectory"]
+        for n in atoms[RadioManipulationModule].kwargs["trajectory_tasks"]["joint_trajectory"]
     )
     assert atoms[BehaviorConnection].kwargs["development_task_spawn"] is False
     assert atoms[BehaviorConnection].kwargs["extra_env"] == {"TORCH_COMPILE_DISABLE": "1"}
