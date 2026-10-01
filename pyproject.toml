@@ -138,6 +138,7 @@ dependencies = [
     "textual-serve>=1.1.1,<2",
     "terminaltexteffects==0.12.2",
     "typer>=0.19.2,<1",
+    "rich",
     "keyring>=25,<26",
     "ipython",
     "plotext==5.3.2",
@@ -302,10 +303,6 @@ manipulation = [
 
 openarm-mini-teleop = [
     "ftservo-python-sdk",
-    "rich",
-    # The demo viser blueprints load the DAE OpenArm meshes; without this
-    # the mesh conversion fails and viser startup crashes.
-    "pycollada",
 ]
 
 cpu = [

@@ -1752,6 +1752,7 @@ dependencies = [
     { name = "qpsolvers", extra = ["proxqp"] },
     { name = "reactivex" },
     { name = "rerun-sdk" },
+    { name = "rich" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sortedcontainers" },
@@ -1835,7 +1836,6 @@ all = [
     { name = "pyyaml" },
     { name = "reportlab" },
     { name = "rerun-sdk" },
-    { name = "rich" },
     { name = "roboplan" },
     { name = "sentencepiece" },
     { name = "sounddevice" },
@@ -1995,8 +1995,6 @@ misc = [
 ]
 openarm-mini-teleop = [
     { name = "ftservo-python-sdk" },
-    { name = "pycollada" },
-    { name = "rich" },
 ]
 perception = [
     { name = "chromadb" },
@@ -2431,7 +2429,6 @@ requires-dist = [
     { name = "protobuf", specifier = ">=6.33.5,<7" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pyarrow", marker = "extra == 'learning'" },
-    { name = "pycollada", marker = "extra == 'openarm-mini-teleop'" },
     { name = "pycollada", marker = "extra == 'planning'" },
     { name = "pydantic" },
     { name = "pydantic-settings", specifier = ">=2.11.0,<3" },
@@ -2449,7 +2446,7 @@ requires-dist = [
     { name = "reportlab", marker = "extra == 'apriltag'", specifier = ">=4.5.0" },
     { name = "rerun-sdk", specifier = "==0.32.0" },
     { name = "rerun-sdk", marker = "extra == 'visualization'", specifier = "==0.32.0" },
-    { name = "rich", marker = "extra == 'openarm-mini-teleop'" },
+    { name = "rich" },
     { name = "roboplan", marker = "extra == 'planning'", specifier = ">=0.6.0,<0.7.0" },
     { name = "scipy", specifier = ">=1.15.1" },
     { name = "sentencepiece", marker = "extra == 'perception'", specifier = ">=0.2.0" },

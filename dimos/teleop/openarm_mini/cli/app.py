@@ -22,7 +22,7 @@ import typer
 
 from dimos.teleop.openarm_mini.cli import calibrate, joint_tui, setup_motor_id
 
-app = typer.Typer(help="Configure and inspect OpenArm Mini leader hardware", no_args_is_help=True)
+app = typer.Typer(help="Configure and inspect Feetech leader arm hardware", no_args_is_help=True)
 app.command("calibrate")(calibrate.main)
 app.command("joint-tui")(joint_tui.main)
 app.command("setup-motor-id")(setup_motor_id.main)

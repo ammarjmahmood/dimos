@@ -22,7 +22,7 @@ controller and run the one-shot setup helper. Do not leave multiple motors on
 the bus when changing IDs, especially if they may share the same current ID.
 
 ```bash
-dimos hardware openarm-mini setup-motor-id \
+dimos hardware feetech-leader setup-motor-id \
   --port <feetech-port> \
   --baudrate <feetech-baudrate> \
   --new-id 3
@@ -31,7 +31,7 @@ dimos hardware openarm-mini setup-motor-id \
 If the current ID is known, skip scanning:
 
 ```bash
-dimos hardware openarm-mini setup-motor-id \
+dimos hardware feetech-leader setup-motor-id \
   --port <feetech-port> \
   --baudrate <feetech-baudrate> \
   --old-id 1 \
@@ -67,7 +67,7 @@ read or stored in v1 because the OpenArm follower gripper is not yet exposed as 
 formal coordinator-controllable API.
 
 ```bash
-dimos hardware openarm-mini calibrate \
+dimos hardware feetech-leader calibrate \
   --side both \
   --port-left <left-feetech-port> \
   --port-right <right-feetech-port> \
@@ -87,7 +87,7 @@ Default flip sets match the known OpenArm Mini leader orientation. Override them
 when needed:
 
 ```bash
-dimos hardware openarm-mini calibrate \
+dimos hardware feetech-leader calibrate \
   --side left \
   --port-left <left-feetech-port> \
   --port-right <right-feetech-port> \
@@ -108,7 +108,7 @@ v1.
 To inspect calibrated leader readings without starting robot control:
 
 ```bash
-dimos hardware openarm-mini calibrate \
+dimos hardware feetech-leader calibrate \
   --side left \
   --port-left <left-feetech-port> \
   --port-right <right-feetech-port> \
@@ -120,7 +120,7 @@ For a Rich terminal UI that continuously displays raw ticks, calibrated radians,
 sender-side clamped follower radians, motor ids, and flip values:
 
 ```bash
-dimos hardware openarm-mini joint-tui \
+dimos hardware feetech-leader joint-tui \
   --side right \
   --port <feetech-port>
 ```

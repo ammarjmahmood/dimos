@@ -21,7 +21,7 @@ from pathlib import Path
 import sys
 import threading
 import time
-from typing import Annotated, Literal
+from typing import Annotated
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -63,7 +63,6 @@ class OpenArmMiniTeleopModuleConfig(ModuleConfig):
     calibration utility.
     """
 
-    backend: Literal["openarm_mini"] = "openarm_mini"
     tick_period_s: float = Field(default=0.02, gt=0.0)
     port_left: str = OPENARM_MINI_UNCONFIGURED_PORT
     port_right: str = OPENARM_MINI_UNCONFIGURED_PORT

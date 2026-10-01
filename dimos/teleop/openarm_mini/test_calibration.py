@@ -75,7 +75,7 @@ def test_save_and_load_side_specific_calibration(tmp_path: Path) -> None:
 
 
 def test_missing_calibration_error_mentions_calibration_utility(tmp_path: Path) -> None:
-    with pytest.raises(OpenArmMiniCalibrationError, match="hardware openarm-mini calibrate"):
+    with pytest.raises(OpenArmMiniCalibrationError, match="hardware feetech-leader calibrate"):
         load_calibration(tmp_path / "missing", "left")
 
 

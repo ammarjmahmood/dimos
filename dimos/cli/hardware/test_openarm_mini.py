@@ -19,8 +19,8 @@ from dimos.cli import hardware_cli
 runner = CliRunner()
 
 
-def test_hardware_namespace_mounts_openarm_mini_commands() -> None:
-    result = runner.invoke(hardware_cli.app, ["openarm-mini", "--help"])
+def test_hardware_namespace_mounts_feetech_leader_commands() -> None:
+    result = runner.invoke(hardware_cli.app, ["feetech-leader", "--help"])
 
     assert result.exit_code == 0, result.output
     assert "calibrate" in result.output
