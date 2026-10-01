@@ -14,6 +14,9 @@
 
 from dataclasses import replace
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -92,3 +95,47 @@ def test_incompatible_dependency_abi_is_rejected(tmp_path):
     manifest.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="Incompatible message package ABI"):
         Dependency.load(dependency.root)
+
+
+def test_python_source_reuses_dependency_class_for_assignment_and_decode(tmp_path):
+    dependency, interfaces = packages(tmp_path)
+    output = tmp_path / "custom"
+    generate(
+        [interfaces],
+        output,
+        ["custom_msgs/msg/Reading"],
+        "custom_messages",
+        dependencies=(dependency,),
+        shared=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import pickle
+from base_messages.std_msgs.msg import Header
+from custom_messages.custom_msgs.msg import Reading
+header = Header(frame_id='camera')
+header.stamp.sec = 123
+reading = Reading(header=header, value=20.5)
+assert type(reading.header) is Header
+reading.header = header
+for little in (True, False):
+    restored = Reading.decode(reading.encode(little))
+    assert type(restored.header) is Header
+    assert restored.header == header
+    assert restored.value == 20.5
+assert type(pickle.loads(pickle.dumps(reading)).header) is Header
+assert 'MSG: std_msgs/Header' in Reading.schema
+""",
+        ],
+        check=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                [str(dependency.root / "python"), str(output / "python")]
+            ),
+        },
+    )

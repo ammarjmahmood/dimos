@@ -3,8 +3,9 @@
 This reference applies to both built-in and external messages in the CDR
 proposal. Definitions are `.msg` files, with identities such as
 `dimos_msgs/msg/DeviceReading` or `story_msgs/msg/DeviceReading`. Generation
-produces Python pybind11 values, C++ declarations/codecs and Rust values/codecs;
-language builds compile those outputs. There is no import-time compilation and
+produces ordinary Python source classes with CDR codecs, C++ headers and Rust
+source. Native consumers compile C++/Rust with their applications; Python message
+installation needs no message compiler. There is no import-time compilation and
 no ROS installation requirement. CDR/schema compatibility does not mean that
 this package builds a ROS node.
 
