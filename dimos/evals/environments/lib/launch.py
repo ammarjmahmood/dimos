@@ -92,13 +92,6 @@ def _window_region(display: str, screen: str, wait_s: float = 90.0) -> list[str]
     return ["-video_size", screen, "-i", display]
 
 
-def _free_display() -> str:
-    n = 90
-    while Path(f"/tmp/.X{n}-lock").exists() or Path(f"/tmp/.X11-unix/X{n}").exists():
-        n += 1
-    return f":{n}"
-
-
 def _park_pointer(display: str, x: int, y: int) -> None:
     """Move the pointer off the viewer so no hover tooltip lands in the recording."""
     import ctypes
@@ -123,17 +116,23 @@ def _park_pointer(display: str, x: int, y: int) -> None:
 @contextmanager
 def screen_capture(path: Path, url: str, size: str = "1920x1080", fps: int = 15) -> Iterator[None]:
     """The viewer connected to ``url`` on a virtual display, captured to ``path`` as H.264."""
-    display = _free_display()
     null = subprocess.DEVNULL
     w, h = (int(v) for v in size.split("x"))
     screen = f"{w + 512}x{h + 256}"  # room for the window, which is not placed at 0,0 without a WM
+    # Xvfb picks a free display itself and reports it on the fd: containers sharing the host's
+    # X socket directory would otherwise race for the same number.
+    rd, wr = os.pipe()
     xvfb = subprocess.Popen(
-        ["Xvfb", display, "-screen", "0", f"{screen}x24", "-nolisten", "tcp"],
-        stdin=null, stdout=null, stderr=null,
+        ["Xvfb", "-displayfd", str(wr), "-screen", "0", f"{screen}x24", "-nolisten", "tcp"],
+        stdin=null, stdout=null, stderr=null, pass_fds=(wr,),
     )  # fmt: skip
-    deadline = time.monotonic() + 10.0
-    while not Path(f"/tmp/.X11-unix/X{display[1:]}").exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
+    os.close(wr)
+    with os.fdopen(rd) as reader:
+        number = reader.readline().strip()
+    if not number:
+        xvfb.kill()
+        raise RuntimeError("Xvfb did not report a display")
+    display = f":{number}"
     env = {**os.environ, "DISPLAY": display}
     beside = Path(sys.executable).with_name("dimos-viewer")
     viewer = subprocess.Popen(
