@@ -21,6 +21,11 @@ import subprocess
 import sys
 import tempfile
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 from dimos.message_codegen.distribution import write_distribution
 from dimos.message_codegen.generate import generate
 
@@ -30,11 +35,15 @@ def main() -> None:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "packages/dimos-generated/pyproject.toml").read_text())[
+        "project"
+    ]
+    version = project["version"]
     target = root / "packages/dimos-generated/src"
     with tempfile.TemporaryDirectory(prefix="dimos-source-") as temporary:
         output = Path(temporary)
-        names = generate([], output, shared=True)
-        write_distribution(output, "dimos_generated", names)
+        names = generate([], output, shared=True, version=version)
+        write_distribution(output, "dimos_generated", names, version=version)
         source = output / "python"
         packages = [source / "dimos_generated", source / "dimos_generated_schemas"]
         # Formatting is a maintainer codegen prerequisite, never an install/import step.
@@ -73,7 +82,9 @@ def main() -> None:
         library = rust_root / "lib.rs"
         library.write_text(license_text + library.read_text())
         subprocess.run(
-            ["rustfmt", "--edition", "2024", str(library)], check=True, capture_output=True
+            ["rustup", "run", "1.92.0", "rustfmt", "--edition", "2024", str(library)],
+            check=True,
+            capture_output=True,
         )
         expected = {
             str(path.relative_to(source)): path.read_bytes()

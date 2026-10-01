@@ -11,7 +11,7 @@ their C++/Rust toolchains. No ROS installation is required. These are explicit t
 prerequisites; message builds do not install OS packages. From the checkout root:
 
 ```sh skip
-uv sync --group tests --frozen
+uv sync --group tests --group message-codegen --frozen
 ```
 
 `uv sync` installs the built-in message package as editable Python source from
@@ -72,6 +72,14 @@ In the runtime-cutover layer, use the same
 `Module`/`In[DeviceReading]`/`Out[DeviceReading]` API as other generated messages.
 Do not use `dimos build` at the repository root for this workflow: that command
 builds an **external message project**, not all built-in messages.
+
+The main CI **Built-in message alignment** check fails `ci-complete` if definitions,
+package versions, generator/templates, or any checked-in output drift. Python,
+C++, Rust and schema sources are all committed; the check independently regenerates
+in a temporary directory and includes new/untracked and deleted files. Prepare
+Rust 1.92.0 with `rustup toolchain install 1.92.0 --component rustfmt` once.
+[The alignment guide](/docs/development/message-alignment.md) gives the small
+locked check environment and repair commands; CI does not make bot commits.
 
 ## Package artifacts and CI distribution
 

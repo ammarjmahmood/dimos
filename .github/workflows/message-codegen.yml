@@ -24,6 +24,9 @@ on:
       - .github/docker/message-codegen-reference.Dockerfile
       - Cargo.toml
       - Cargo.lock
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/ci.yml
   workflow_dispatch:
 
 permissions:
@@ -36,6 +39,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.92.0'
+          components: rustfmt
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
