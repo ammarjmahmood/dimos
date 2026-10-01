@@ -551,6 +551,9 @@ fn load_model(cfg: &Config) -> Result<Depth2Depth, String> {
 }
 
 /// Decode a JPEG as RGB at 1/`scale` of its size; None for anything that is not one.
+/// Larger than any camera here; a header claiming more is corrupt, and would allocate before failing to decode.
+const MAX_DECODED_PIXELS: usize = 64 << 20;
+
 fn decode_rgb(image: &CompressedImage, scale: usize) -> Option<(Vec<u8>, usize, usize)> {
     let format = image.format.to_ascii_lowercase();
     if !(format.contains("jpeg") || format.contains("jpg") || format.is_empty()) {
@@ -566,6 +569,9 @@ fn decode_rgb(image: &CompressedImage, scale: usize) -> Option<(Vec<u8>, usize, 
     let header = decompressor.read_header(&image.data).ok()?;
     decompressor.set_scaling_factor(scaling).ok()?;
     let (width, height) = (scaling.scale(header.width), scaling.scale(header.height));
+    if width.saturating_mul(height) > MAX_DECODED_PIXELS {
+        return None;
+    }
     let mut pixels = vec![0u8; width * height * 3];
     decompressor
         .decompress(
