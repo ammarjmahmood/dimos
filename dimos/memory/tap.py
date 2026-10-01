@@ -33,6 +33,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
+
 from dimos.constants import RECORDINGS_DIR
 from dimos.core.global_config import global_config
 from dimos.memory.store.sqlite import SqliteStore
@@ -66,6 +68,17 @@ def check_topics(topics: str, names: Iterable[str]) -> None:
     names = sorted(names)
     if not matching(topics, names):
         raise ValueError(f"--record-topics {topics!r} matched none of: {', '.join(names)}")
+
+
+def recordable(stream_type: type) -> bool:
+    """Whether a stream of this type can be written to the store and read back later.
+
+    Dimos message types have their own codec; pydantic records (such as sim2's
+    ``SceneState``) are pickled. Anything else is skipped.
+    """
+    return hasattr(stream_type, "lcm_encode") or (
+        isinstance(stream_type, type) and issubclass(stream_type, BaseModel)
+    )
 
 
 class TransportRecorder:
@@ -105,7 +118,7 @@ class TransportRecorder:
         """Subscribe *transport* and record into stream *name*; returns the unsubscribe."""
         if not matching(self._topics, [name]):
             return None
-        if not hasattr(stream_type, "lcm_encode"):
+        if not recordable(stream_type):
             logger.info("--record: %s (%s) is not a dimos message type, skipped", name, stream_type)
             return None
         stream: Stream[Any] = self.store.stream(name, stream_type)

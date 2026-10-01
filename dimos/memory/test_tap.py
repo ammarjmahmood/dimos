@@ -16,6 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
 import pytest
 from pytest_mock import MockerFixture
 
@@ -70,6 +71,30 @@ def test_taps_matching_dimos_streams(tmp_path: Path) -> None:
     store.start()
     assert store.list_streams() == ["odom"]
     assert [o.ts for o in store.stream("odom", PoseStamped)] == [1.0, 2.0]
+    store.stop()
+
+
+class _Truth(BaseModel):
+    ts: float
+    z: float
+
+
+def test_taps_pydantic_record_streams(tmp_path: Path) -> None:
+    """sim2's ``sim_truth`` is a pydantic record, not a dimos message; it is recorded too."""
+    path = tmp_path / "memory.db"
+    store = SqliteStore(path=str(path))
+    store.start()
+    rec = TransportRecorder(store, topics="*")
+    truth = _Transport()
+    assert rec.tap("sim_truth", _Truth, truth) is not None
+    truth.publish(_Truth(ts=1.0, z=0.19))
+    truth.publish(_Truth(ts=2.0, z=0.25))
+    rec.close()
+    store.stop()
+
+    store = SqliteStore(path=str(path), must_exist=True)
+    store.start()
+    assert [(o.ts, o.data.z) for o in store.stream("sim_truth")] == [(1.0, 0.19), (2.0, 0.25)]
     store.stop()
 
 
