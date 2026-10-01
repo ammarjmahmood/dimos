@@ -1,0 +1,70 @@
+{
+  "format": "dimos.scene.v1",
+  "id": "xarm_table",
+  "entities": {
+    "apple": {
+      "body": "apple",
+      "label": "red ball",
+      "kind": "ball",
+      "movable": true
+    },
+    "orange": {
+      "body": "orange",
+      "label": "orange ball",
+      "kind": "ball",
+      "movable": true
+    },
+    "cup": {
+      "body": "cup",
+      "label": "cylinder",
+      "kind": "cup",
+      "movable": true
+    }
+  },
+  "regions": {
+    "table/top": {
+      "body": "world",
+      "kind": "support",
+      "pose": {
+        "position": [
+          0.45,
+          0.0,
+          0.13
+        ],
+        "orientation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "size": [
+        0.3,
+        0.4,
+        0.0
+      ]
+    }
+  },
+  "spawns": {
+    "workbench": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "orientation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  },
+  "provenance": {
+    "source": "authored",
+    "based_on": [
+      "data/xarm7/scene.xml",
+      "data/xarm_grasp_sim/scene.xml"
+    ]
+  }
+}
