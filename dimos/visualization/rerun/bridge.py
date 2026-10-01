@@ -92,7 +92,7 @@ RerunData: TypeAlias = "Archetype | RerunMulti"
 if TYPE_CHECKING:
     BlueprintFactory: TypeAlias = Callable[[], "Blueprint"]
     # A renderer for an entity, or None to hide it.
-    VisualOverride: TypeAlias = Callable[..., "Archetype | None"] | None
+    VisualOverride: TypeAlias = Callable[..., "RerunData | None"] | None
 else:
     # Pydantic evaluates Config's annotations at runtime, so keep rerun types
     # out of them - importing rerun here would defeat the lazy import below.
