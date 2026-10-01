@@ -19,9 +19,6 @@ from __future__ import annotations
 from dimos.control.coordinator import ControlCoordinator, TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.robot.manipulators.common.blueprints import coordinator, planner, trajectory_task
 from dimos.robot.manipulators.common.sim import mujoco_if_sim
 from dimos.robot.manipulators.xarm.config import (
@@ -56,35 +53,14 @@ dual_xarm6_planner_coordinator = autoconnect(
 
 _xarm7_devices = []
 if global_config.simulation:
-    from dimos.robot.manipulators.xarm.config import make_xarm7_sim_robot_config
-    from dimos.robot.manipulators.xarm.sim2 import XARM7
-    from dimos.sim2.blueprint import simulation
-    from dimos.sim2.scene import scene_path, scene_robot
-    from dimos.sim2.spec import RobotInstance
+    from dimos.robot.manipulators.xarm.sim2 import xarm7_simulation
 
     if global_config.simulation != "mujoco":
         raise ValueError("xarm7-planner-coordinator supports --simulation mujoco")
-    _scene = scene_path(global_config.scene_package, "workbench.xml")
-    _spawn = global_config.scene_spawn_pose
-    if _spawn is None:
-        _arm = scene_robot(_scene, XARM7, "workbench", default=(0.0, 0.0, 0.12))
-    else:
-        # --scene-spawn gives the base pose directly; the planner below reads
-        # the same pose, so arm and planner agree wherever the base goes.
-        _x, _y, _z, _yaw = _spawn
-        _arm = RobotInstance(XARM7, xyz=(_x, _y, _z), rpy=(0.0, 0.0, _yaw))
-    _xarm7_model = make_xarm7_sim_robot_config().model_copy(
-        update={
-            "base_pose": PoseStamped(
-                position=Vector3(*_arm.xyz),
-                orientation=Quaternion.from_euler(Vector3(*_arm.rpy)),
-                frame_id="world",
-            ),
-        }
-    )
-    _simulation = simulation(scene=_scene, robots={"arm": _arm}, sim_id="xarm7")
-    _xarm7_hw = _simulation.hardware["arm"]
-    _xarm7_devices = [_simulation.blueprint]
+    _xarm7_sim = xarm7_simulation(global_config.scene_package, global_config.scene_spawn_pose)
+    _xarm7_hw = _xarm7_sim.hardware
+    _xarm7_model = _xarm7_sim.model
+    _xarm7_devices = [_xarm7_sim.devices]
 else:
     _xarm7_hw = xarm7_hardware("arm", gripper=True, mock_without_address=True)
     _xarm7_model = make_xarm7_model_config(add_gripper=True, gripper_hardware_id="arm")

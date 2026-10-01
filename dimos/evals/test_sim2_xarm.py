@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The sim2 xArm suite is the MuJoCo raw variant on sim2, graded from ``sim_truth``."""
+"""The sim2 xArm suite is the MuJoCo suite on sim2, graded from ``sim_truth``."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from typing import cast
 
 from dimos.evals.environments.sim2 import Sim2Environment
 from dimos.evals.suites import mujoco_xarm
-from dimos.evals.suites.sim2_xarm import BLUEPRINT, SUITE, TRUTH_POSITIONS, XARM_TABLE
+from dimos.evals.suites.sim2_xarm import BLUEPRINTS, SUITE, TRUTH_POSITIONS, XARM_TABLE
 from dimos.evals.types import EvalCase
 from dimos.memory.store.memory import MemoryStore
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -35,18 +35,20 @@ def _closure(case: EvalCase) -> dict[str, object]:
     return dict(zip(fn.__code__.co_freevars, cells, strict=True))
 
 
-def test_two_raw_cases_with_the_mujoco_prompts() -> None:
-    mujoco = {case.id: case for case in mujoco_xarm.SUITE if "raw" in case.tags}
+def test_both_variants_with_the_mujoco_prompts() -> None:
+    mujoco = {case.id: case for case in mujoco_xarm.SUITE}
     assert [case.id for case in SUITE] == list(mujoco)
     for case in SUITE:
-        assert case.tags >= {"sim2", "manipulation", "pick", "raw"}
-        assert "mujoco" not in case.tags
+        variant = "perception" if case.id.endswith("_perception") else "raw"
+        assert case.tags == (mujoco[case.id].tags - {"mujoco"}) | {"sim2"}
+        assert variant in case.tags
         assert case.inputs == mujoco[case.id].inputs
         assert (case.timeout_s, case.threshold) == (
             mujoco[case.id].timeout_s,
             mujoco[case.id].threshold,
         )
     assert "place" in SUITE[1].tags and "place" not in SUITE[0].tags
+    assert "place" in SUITE[3].tags and "place" not in SUITE[2].tags
 
 
 def test_cases_launch_the_table_scene_with_truth() -> None:
@@ -54,7 +56,9 @@ def test_cases_launch_the_table_scene_with_truth() -> None:
     for case in SUITE:
         env = case.environment
         assert isinstance(env, Sim2Environment)
-        assert env.config.blueprint == BLUEPRINT
+        variant = "perception" if "perception" in case.tags else "raw"
+        assert env.config.blueprint == BLUEPRINTS[variant]
+        assert ("xarm-perception-sim2" in env.config.blueprint) == (variant == "perception")
         assert Path(env.config.scene) == XARM_TABLE
         assert env.config.truth_entities == mujoco_xarm.TRACKED
         assert "sim_truth" in env.config.recorded_topics

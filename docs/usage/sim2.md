@@ -46,6 +46,24 @@ MuJoCo viewer. Disable it with the module override
 absolute XML path, or a directory containing `scene.xml` uses the same loader.
 Defaults without `--scene-package` remain the small logistics/workbench scenes.
 
+`xarm-perception-sim2` is `xarm-perception-sim` on sim2 devices: the xArm7
+planner and its manipulation skills, scene registration (Moondream detection,
+EdgeTAM segmentation, `detect_on_request`), heuristic grasp generation,
+pick-and-place and the Rerun bridge, on top of the same simulated arm and
+wrist RGB-D camera as `xarm7-planner-coordinator`. The camera stamps its
+images with the `arm/wrist_camera_optical` frame and publishes `world` to that
+frame on `tf`, which is the lookup scene registration needs for its
+`target_frame="world"`, so no remapping is involved. The planner's viser view
+is at http://localhost:8095. With `mcp-server` and `observe-skill` added the
+agent sees the 14 raw tools plus `scan_objects`, `pick_object`, `place_at`,
+`detect` and `select`:
+
+```bash
+MUJOCO_GL=egl dimos --simulation mujoco --transport zenoh \
+  --scene-package dimos/evals/scenes/xarm_table \
+  run xarm-perception-sim2 mcp-server observe-skill --simulationmodule.viewer=false
+```
+
 The first download of existing robot meshes and GR00T policies is separate
 from measured startup. Install the existing simulation and robot dependencies.
 The simulation extra requires MuJoCo 3.10 or newer for batched raycasting.

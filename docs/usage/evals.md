@@ -514,12 +514,15 @@ lift_cup = EvalCase(
 )
 ```
 
-`dimos.evals.suites.sim2_xarm` is the `mujoco_xarm` raw variant on sim2: the same two prompts
-and scene text, the world-only `xarm_table` scene, and the `lifted` / `stacked_on` graders with
-their `positions` argument pointed at `sim_truth` instead of `tf`:
+`dimos.evals.suites.sim2_xarm` is `mujoco_xarm` on sim2: the same two prompts and scene
+text, the world-only `xarm_table` scene, and the `lifted` / `stacked_on` graders with their
+`positions` argument pointed at `sim_truth` instead of `tf`. Its `raw` cases launch the
+planner stack with the manipulation skills; its `perception` cases launch
+`xarm-perception-sim2`:
 
 ```bash skip
-dimos evals run dimos.evals.suites.sim2_xarm --agent dimos.evals.agents.pi
+dimos evals run dimos.evals.suites.sim2_xarm --agent dimos.evals.agents.pi --tags raw
+dimos evals run dimos.evals.suites.sim2_xarm --agent dimos.evals.agents.pi --tags perception
 ```
 
 ## Running
