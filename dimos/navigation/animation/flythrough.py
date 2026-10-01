@@ -31,11 +31,11 @@ from numpy.typing import NDArray
 import typer
 
 from dimos.mapping.relocalization.lidar.module import LidarConfig
-from dimos.mapping.relocalization.lidar.replay import TIMELINE, replay
+from dimos.mapping.relocalization.lidar.replay import POINT_RADIUS, TIMELINE, replay
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.memory.tf import StreamTF
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2, register_colormap_annotation
-from dimos.navigation.animation.waypoints import camera_curve
+from dimos.navigation.animation.waypoints import WAYPOINTS_FILE, camera_curve
 from dimos.robot.unitree.go2 import nav_3d_config
 from dimos.utils.data import resolve_named_path
 
@@ -123,6 +123,24 @@ def _init_recording(name: str, out: Path) -> None:
     register_colormap_annotation("turbo")
 
 
+def log_near_premap(
+    premap: PointCloud2, center: NDArray[np.float64], near_m: float, fix_ts: float, reveal_ts: float
+) -> None:
+    """Only the premap within ``near_m`` of ``center`` until ``reveal_ts``, then all of it.
+
+    Relogged at the fix's own stamp, the later row wins over the full premap the replay logged.
+    """
+    import rerun as rr
+
+    points = premap.points_f32()
+    near = points[np.linalg.norm(points[:, :2] - center[:2], axis=1) < near_m]
+    rr.set_time(TIMELINE, timestamp=fix_ts)
+    near_cloud = PointCloud2.from_numpy(near, timestamp=fix_ts)
+    rr.log("world/loaded_map", near_cloud.to_rerun(mode="points", ui_radius=POINT_RADIUS))
+    rr.set_time(TIMELINE, timestamp=reveal_ts)
+    rr.log("world/loaded_map", premap.to_rerun(mode="points", ui_radius=POINT_RADIUS))
+
+
 def log_camera(
     tf: StreamTF,
     sensor_frame: str,
@@ -150,14 +168,14 @@ def log_camera(
 
 def main(
     recording: str = typer.Argument(
-        "raycast_door", help="Recording .db: bare name (cwd or data/) or path"
+        "mid360_raycast_door", help="Recording .db: bare name (cwd or data/, LFS) or path"
     ),
     premap: str = typer.Option(
         "recording_go2_mid360_2026-05-29_4-45pm-PST_corrected",
         "--premap",
         help="Premap .pc2.lcm: bare name or path",
     ),
-    waypoints_file: Path = typer.Option(Path("waypoints.json"), "--waypoints"),
+    waypoints_file: Path = typer.Option(WAYPOINTS_FILE, "--waypoints"),
     lidar: str = typer.Option("lidar", "--lidar", help="Lidar stream in the recording"),
     world_frame: str = typer.Option("odom", "--world-frame"),
     from_time: float = typer.Option(0.0, "--from-time", help="Seconds of recording to skip"),
@@ -170,6 +188,9 @@ def main(
     slow_s: float = typer.Option(30.0, "--slow-s", help="Seconds the slow start lasts"),
     ease: float = typer.Option(1.5, "--ease", help="Slow-start speed grows as t**ease"),
     scan: bool = typer.Option(False, "--scan/--no-scan", help="Overlay each raw lidar scan"),
+    near_m: float = typer.Option(
+        20.0, "--near-m", help="Premap shown only this close to the lidar until --slow-s; 0 off"
+    ),
     out: Path = typer.Option(..., "--out", help=".rrd to write"),
 ) -> None:
     db_path = resolve_named_path(recording, ".db")
@@ -200,6 +221,17 @@ def main(
         first = next(iter(store.stream(lidar, PointCloud2).order_by("ts")))
         tf = StreamTF.from_store(store)
         assert tf is not None
+        reveal_ts = first.ts + from_time + slow_s
+        if near_m > 0 and result.fix_ts < reveal_ts:
+            at_fix = tf.get(world_frame, first.data.frame_id, time_point=result.fix_ts)
+            assert at_fix is not None
+            log_near_premap(
+                premap_cloud.transform(result.fix),
+                np.array(at_fix.translation.to_tuple()),
+                near_m,
+                result.fix_ts,
+                reveal_ts,
+            )
         log_camera(
             tf,
             first.data.frame_id,

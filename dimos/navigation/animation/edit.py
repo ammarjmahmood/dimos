@@ -25,10 +25,15 @@ from pathlib import Path
 
 import typer
 
-from dimos.navigation.animation.waypoints import load_waypoints, pending_path, save_waypoints
+from dimos.navigation.animation.waypoints import (
+    WAYPOINTS_FILE,
+    load_waypoints,
+    pending_path,
+    save_waypoints,
+)
 
 app = typer.Typer(no_args_is_help=True)
-FILE = typer.Option(Path("waypoints.json"), "--file", "-f")
+FILE = typer.Option(WAYPOINTS_FILE, "--file", "-f")
 
 
 def _check(points: list[list[float]], index: int, allow_end: bool = False) -> None:

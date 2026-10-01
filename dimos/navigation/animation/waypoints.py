@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
+WAYPOINTS_FILE = Path(__file__).parent / "waypoints.json"
 WAYPOINT_COLOR = (255, 0, 255)
 CAMERA_COLOR = (0, 200, 255)
 # Camera height at the first and last waypoint, m; clicked heights are ignored.
@@ -127,7 +128,7 @@ def render_waypoints(msg: PointCloud2) -> list[tuple[str, Archetype]]:
 class WaypointPickerConfig(ModuleConfig):
     map_file: str = "recording_go2_mid360_2026-05-29_4-45pm-PST_corrected"  # premap stem or path
     map_voxel_size: float = 0.05  # downsample the premap for the viewer; 0 keeps it as is
-    waypoints_file: str = "waypoints.json"
+    waypoints_file: str = str(WAYPOINTS_FILE)
     reload_s: float = 1.0  # how often the file is checked for outside edits
 
 

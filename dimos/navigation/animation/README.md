@@ -3,7 +3,7 @@
 A camera flythrough over a relocalization replay. Pick waypoints on a premap, then render
 a Rerun recording seen from a camera gliding along them, always facing the lidar.
 
-Run everything from the repo root. Waypoints live in `waypoints.json`.
+Run everything from the repo root. Waypoints live in `waypoints.json` next to this README.
 
 ## Picker
 
@@ -34,7 +34,7 @@ uv run python -m dimos.navigation.animation.flythrough --out flythrough.rrd
 uv run rerun flythrough.rrd
 ```
 
-Replays `data/raycast_door.db` through the relocalizer against the corrected SF premap and
+Replays `mid360_raycast_door` (LFS, a Go2 Mid-360 walk through the SF office door) through the relocalizer against the corrected SF premap and
 flies the camera over it; Rerun shows the camera view. The camera climbs from 0.6 m
 to 15 m (`HEIGHT` in `waypoints.py`) and ignores clicked heights.
 
