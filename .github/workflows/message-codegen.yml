@@ -41,7 +41,7 @@ jobs:
           uv pip install --python .venv/bin/python rosbags==0.11.0 numpy ruff==0.14.3 pytest pytest-asyncio pytest-env lcm-dimos-fork setuptools wheel mcap==1.4.0 rerun-sdk==0.32.0 pillow mypy==1.19.0
           .venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('rclpy') is None"
       - name: Reject checked-in generated source drift
-        run: .venv/bin/python scripts/generate_builtin_messages.py --check
+        run: .venv/bin/python -m scripts.generate_builtin_messages --check
       - name: Install built-in source without message compilers
         run: bash scripts/test_builtin_message_source.sh
       - name: Build the pinned standalone CDR library
