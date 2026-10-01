@@ -40,7 +40,10 @@ dual_openyam_quest_collection = autoconnect(
         frame_id="right_wrist_camera_link",
     ),
     collection_recorder(profile=DUAL_OPENYAM_COLLECTION),
-    EpisodeMonitorModule.blueprint(instance_name="episodes"),
+    EpisodeMonitorModule.blueprint(
+        instance_name="episodes",
+        required_action_joints=DUAL_OPENYAM_COLLECTION.actions["action"].names,
+    ),
 ).remappings(
     [
         ("left_wrist", "color_image", "left_wrist_image"),
