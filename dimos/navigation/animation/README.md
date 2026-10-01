@@ -46,3 +46,6 @@ raise `--slow-s`.
 Other recording: pass it as the first argument, plus `--lidar <stream>` and `--premap <map>`.
 
 `--scan` overlays each raw lidar scan; the map carves out moving people, the scan keeps them.
+
+`--near-m` (10 m) shows the premap only that close to where the lidar was at the fix
+until the slow start ends, then all of it; `0` shows everything from the start.
