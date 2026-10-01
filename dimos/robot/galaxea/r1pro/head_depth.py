@@ -34,9 +34,13 @@ def r1pro_head_depth(
     *,
     min_height_m: float | None = None,
     max_height_m: float | None = None,
+    **cloud: object,
 ) -> Blueprint:
-    """Head depth anchored on Point-LIO's scans; height bounds (base_link) gate only the cloud."""
-    options: dict[str, object] = {}
+    """Head depth anchored on Point-LIO's scans and its floor (base_link z = 0); height bounds gate only the cloud.
+
+    Other keywords are Depth2DepthCloud config (e.g. decimation, max_points).
+    """
+    options: dict[str, object] = dict(cloud)
     if min_height_m is not None or max_height_m is not None:
         options["height_frame"] = BASE_FRAME
     if min_height_m is not None:
@@ -49,6 +53,7 @@ def r1pro_head_depth(
         max_range_m=MAX_RANGE_M,
         tf_tolerance_s=TF_TOLERANCE_S,
         frame_id=HEAD_CAMERA_FRAME,
+        floor_frame=BASE_FRAME,
         **options,
     ).remappings(
         [

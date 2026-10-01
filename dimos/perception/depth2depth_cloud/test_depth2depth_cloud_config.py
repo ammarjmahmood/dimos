@@ -48,7 +48,7 @@ def test_the_python_bounds_are_the_rust_bounds():
     assert ranges
     for low, high, name in ranges:
         bounds = {type(m).__name__: m for m in Depth2DepthCloudConfig.model_fields[name].metadata}
-        if not bounds:  # the model size, checked by its own validator below
+        if not bounds:  # the model size, checked by its own validator in module.py
             continue
         assert (bounds["Ge"].ge, bounds["Le"].le) == (float(low), float(high)), name
 

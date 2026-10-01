@@ -15,33 +15,51 @@
 //! `depth2depth_cloud`: a camera-frame point cloud from one colour camera, Depth
 //! Anything calibrated per pixel to the recent lidar scans (see the depth2depth crate).
 //!
-//! Images arrive faster than the model runs, so the handler only keeps the newest
-//! frame and a worker thread processes whichever is newest when it is free. Lidar
-//! scans are kept for `lidar_history_s` in the world frame, so the anchor set
-//! includes floor the lidar saw a moment ago and the camera sees now.
+//! Images arrive faster than the model runs, so a worker thread runs it on the newest frame
+//! whose transform is known (see `next_frame`) while a second thread calibrates the previous
+//! frame on the CPU. Frames and lidar scans both wait up to `max_tf_lag_s` for odometry, which
+//! can publish a pose well after its scan. Scans are kept for `lidar_history_s` in the world
+//! frame, so the anchors include floor the lidar saw a moment ago and the camera sees now.
 
-use std::collections::VecDeque;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use depth2depth::{
-    Calibration, CalibrationConfig, CloudOptions, Config as ModelConfig, Depth2Depth,
+    Anchor, Calibration, CalibrationConfig, CloudOptions, Config as ModelConfig, Depth2Depth,
 };
 use dimos_module::pointcloud::extract_xyz;
 use dimos_module::{native_config, warn_throttled, Input, Module, Output, Tf};
 use lcm_msgs::sensor_msgs::{CameraInfo, CompressedImage, PointCloud2, PointField};
 use lcm_msgs::std_msgs::{Header, Time};
-use nalgebra::{Isometry3, Point3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use tracing::info;
 
 use crate::undistort::{Lens, UndistortMap};
 
 const TIMING_REPORT_EVERY: Duration = Duration::from_secs(5);
-const TF_WAIT: Duration = Duration::from_millis(50);
-/// A frame can arrive before odometry has covered its stamp (Point-LIO publishes a scan's pose after the scan);
-/// the worker is on its own thread, so it can wait this long for it.
-const FRAME_TF_WAIT: Duration = Duration::from_millis(400);
+/// How often the worker looks again for a frame whose transform has arrived.
+const TF_POLL: Duration = Duration::from_millis(20);
+/// Frames that become known together are run this far apart (in stamp time)...
+const FRAME_SPACING_S: f64 = 0.05;
+/// ...while that keeps within this of the newest known frame.
+const MAX_BACKLOG_S: f64 = 0.3;
+/// Scans up to this far after a frame still anchor it...
+const SCAN_LEAD_S: f64 = 0.5;
+/// ...and history is kept this far past `lidar_history_s`, since frames run behind the newest scan.
+const HISTORY_MARGIN_S: f64 = 1.0;
+/// Lidar points within this of the floor frame's z = 0 are floor returns.
+const FLOOR_BAND_M: f64 = 0.1;
+/// Fewer floor returns than this and there is no floor prior for the frame.
+const FLOOR_MIN_POINTS: usize = 50;
+/// Pixels probed for the floor prior, one per block of this many.
+const FLOOR_GRID_STEP: usize = 8;
+/// A probed pixel no higher than this above the floor gets a floor anchor...
+const FLOOR_TOLERANCE_M: f64 = 0.05;
+/// ...and so does its neighbour on the probe grid, while the model's depth keeps the floor's shape: the log of
+/// (floor depth / predicted depth) changes less than this a step. An obstacle's face breaks it.
+const FLOOR_SMOOTHNESS: f64 = 0.04;
 
 #[native_config]
 #[derive(Clone)]
@@ -77,6 +95,9 @@ pub struct Config {
     /// Largest gap between a stamp and the transform used for it.
     #[validate(range(min = 0.0, max = 5.0))]
     tf_tolerance_s: f64,
+    /// Frames and scans wait this long for their transform before they are dropped.
+    #[validate(range(min = 0.0, max = 30.0))]
+    max_tf_lag_s: f64,
     /// Calibration, see `depth2depth::CalibrationConfig`.
     #[validate(range(min = 1.0, max = 1000.0))]
     sigma_px: f64,
@@ -110,6 +131,12 @@ pub struct Config {
     height_frame: String,
     min_height_m: f64,
     max_height_m: f64,
+    /// Floor prior: a frame whose z = 0 is the floor (a robot's base); empty turns it off. Pixels the
+    /// calibration puts at or under the lidar's floor are anchored on it, where the lidar saw floor
+    /// within `floor_reach_m` (or the camera stands over it).
+    floor_frame: String,
+    #[validate(range(min = 0.0, max = 100.0))]
+    floor_reach_m: f64,
 }
 
 #[derive(Module)]
@@ -140,9 +167,29 @@ pub struct Depth2DepthCloud {
 /// What the handlers hand the worker.
 #[derive(Default)]
 struct Shared {
-    image: Mutex<Option<CompressedImage>>,
+    frames: Mutex<VecDeque<CompressedImage>>,
     camera_info: Mutex<Option<CameraInfo>>,
+    /// Scans waiting for their transform to the world frame.
+    pending: Mutex<VecDeque<PointCloud2>>,
     history: Mutex<VecDeque<Scan>>,
+}
+
+/// A frame through the model, on its way to the calibration.
+struct Predicted {
+    header: Header,
+    frame_id: String,
+    poses: Poses,
+    pred: Vec<f32>,
+    map: Arc<UndistortMap>,
+    /// Decode, undistort and model time.
+    stages: [Duration; 3],
+}
+
+/// A frame's transforms from the camera.
+struct Poses {
+    world_from_camera: Isometry3<f64>,
+    height_from_camera: Option<Isometry3<f64>>,
+    floor_from_camera: Option<Isometry3<f64>>,
 }
 
 /// One lidar scan, already in the world frame.
@@ -162,11 +209,24 @@ impl Depth2DepthCloud {
             runtime: tokio::runtime::Handle::current(),
             config: self.config.clone(),
         };
-        std::thread::spawn(move || worker.run(woken));
+        let worker = Arc::new(worker);
+        let (predicted, to_calibrate) = sync_channel(0);
+        let calibrator = worker.clone();
+        std::thread::spawn(move || calibrator.calibrate(to_calibrate));
+        std::thread::spawn(move || worker.run(woken, predicted));
     }
 
     async fn on_image(&mut self, msg: CompressedImage) {
-        *self.shared.image.lock().unwrap() = Some(msg);
+        let oldest = seconds(&msg.header.stamp) - self.config.max_tf_lag_s;
+        let mut frames = self.shared.frames.lock().unwrap();
+        frames.push_back(msg);
+        while frames
+            .front()
+            .is_some_and(|f| seconds(&f.header.stamp) < oldest)
+        {
+            frames.pop_front();
+        }
+        drop(frames);
         if let Some(wake) = &self.wake {
             let _ = wake.try_send(());
         }
@@ -181,40 +241,14 @@ impl Depth2DepthCloud {
         if msg.header.frame_id == self.output_frame() {
             return;
         }
-        let stamp = seconds(&msg.header.stamp);
-        let Some(world_from_lidar) = self
-            .tf
-            .lookup(&self.config.world_frame, &msg.header.frame_id)
-            .at(stamp)
-            .tolerance(self.config.tf_tolerance_s)
-            .within(TF_WAIT)
-            .await
-        else {
-            warn_throttled!(Duration::from_secs(5), frame = %msg.header.frame_id, "No transform for a lidar scan, dropped it.");
-            return;
-        };
-        let points = match extract_xyz(&msg) {
-            Ok(points) => points,
-            Err(error) => {
-                warn_throttled!(Duration::from_secs(5), %error, "Unreadable lidar scan, dropped it.");
-                return;
-            }
-        };
-        let pose = isometry(&world_from_lidar);
-        let points = points
-            .into_iter()
-            .filter(|p| p.iter().all(|v| v.is_finite()))
-            .map(|[x, y, z]| {
-                let p = pose * Point3::new(x as f64, y as f64, z as f64);
-                [p.x as f32, p.y as f32, p.z as f32]
-            })
-            .collect();
-        let mut history = self.shared.history.lock().unwrap();
-        history.push_back(Scan { stamp, points });
-        // Keep a little past the window, since images may be stamped slightly behind the newest scan.
-        let oldest = stamp - self.config.lidar_history_s - 1.0;
-        while history.front().is_some_and(|scan| scan.stamp < oldest) {
-            history.pop_front();
+        let oldest = seconds(&msg.header.stamp) - self.config.max_tf_lag_s;
+        let mut pending = self.shared.pending.lock().unwrap();
+        pending.push_back(msg);
+        while pending
+            .front()
+            .is_some_and(|scan| seconds(&scan.header.stamp) < oldest)
+        {
+            pending.pop_front();
         }
     }
 }
@@ -236,7 +270,8 @@ struct Worker {
 }
 
 impl Worker {
-    fn run(self, woken: Receiver<()>) {
+    /// Pick, decode, undistort and run the model on frames, handing each to `calibrate`.
+    fn run(&self, woken: Receiver<()>, predicted: SyncSender<Predicted>) {
         let cfg = &self.config;
         let model = match load_model(cfg) {
             Ok(model) => model,
@@ -245,28 +280,24 @@ impl Worker {
                 return;
             }
         };
-        let mut calibration = Calibration::new(CalibrationConfig {
-            sigma_px: cfg.sigma_px as f32,
-            sigma_log_depth: cfg.sigma_log_depth as f32,
-            neighbours: cfg.neighbours as usize,
-            grid_step: cfg.grid_step as usize,
-            reach: cfg.reach as f32,
-            shape_ema: cfg.shape_ema as f32,
-            min_anchors: cfg.min_anchors as usize,
-        });
-        let mut undistort: Option<(CameraInfo, usize, UndistortMap)> = None;
-        let mut timing = Timing::default();
-        while woken.recv().is_ok() {
-            let Some(image) = self.shared.image.lock().unwrap().take() else {
+        let mut undistort: Option<(CameraInfo, usize, Arc<UndistortMap>)> = None;
+        let mut last_stamp = f64::NEG_INFINITY;
+        loop {
+            if let Err(RecvTimeoutError::Disconnected) = woken.recv_timeout(TF_POLL) {
+                return;
+            }
+            self.resolve_scans();
+            if self.shared.frames.lock().unwrap().is_empty() {
                 continue;
-            };
+            }
             let Some(info) = self.shared.camera_info.lock().unwrap().clone() else {
-                warn_throttled!(
-                    Duration::from_secs(5),
-                    "No CameraInfo yet, skipped a frame."
-                );
+                warn_throttled!(Duration::from_secs(5), "No CameraInfo yet, waiting.");
                 continue;
             };
+            let Some((image, frame_id, poses)) = self.next_frame(&info, last_stamp) else {
+                continue;
+            };
+            last_stamp = seconds(&image.header.stamp);
             let started = Instant::now();
             let Some((rgb, width, height)) = decode_rgb(&image, cfg.decode_scale as usize) else {
                 warn_throttled!(Duration::from_secs(5), format = %image.format, "Could not decode a frame, skipped it.");
@@ -294,29 +325,11 @@ impl Worker {
                     cfg.undistorted_height as usize,
                     cfg.undistorted_focal_px,
                 );
-                undistort = Some((info.clone(), width, map));
+                undistort = Some((info.clone(), width, Arc::new(map)));
             }
-            let (_, _, map) = undistort.as_ref().unwrap();
+            let map = undistort.as_ref().unwrap().2.clone();
             let pinhole_rgb = map.apply(&rgb, width, height);
             let undistorted = Instant::now();
-
-            let frame_id =
-                resolve_frame_id(&cfg.frame_id, &info.header.frame_id, &image.header.frame_id)
-                    .to_string();
-            let stamp = seconds(&image.header.stamp);
-            let lookup = self
-                .tf
-                .lookup(&cfg.world_frame, &frame_id)
-                .at(stamp)
-                .tolerance(cfg.tf_tolerance_s);
-            let Some(world_from_camera) = self.runtime.block_on(lookup.within(FRAME_TF_WAIT))
-            else {
-                warn_throttled!(Duration::from_secs(5), frame = %frame_id, "No transform for a frame, skipped it.");
-                continue;
-            };
-            let anchors = self.anchors(&isometry(&world_from_camera).inverse(), stamp);
-            let anchored = Instant::now();
-
             let pred = match model.predict(&pinhole_rgb, map.height, map.width) {
                 Ok(pred) => pred,
                 Err(error) => {
@@ -324,57 +337,312 @@ impl Worker {
                     continue;
                 }
             };
-            let predicted = Instant::now();
-            let visible =
+            let frame = Predicted {
+                header: image.header,
+                frame_id,
+                poses,
+                pred,
+                map,
+                stages: [
+                    decoded - started,
+                    undistorted - decoded,
+                    undistorted.elapsed(),
+                ],
+            };
+            if predicted.send(frame).is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Calibrate each predicted frame to the lidar and publish its cloud.
+    fn calibrate(&self, predicted: Receiver<Predicted>) {
+        let cfg = &self.config;
+        let mut calibration = Calibration::new(CalibrationConfig {
+            sigma_px: cfg.sigma_px as f32,
+            sigma_log_depth: cfg.sigma_log_depth as f32,
+            neighbours: cfg.neighbours as usize,
+            grid_step: cfg.grid_step as usize,
+            reach: cfg.reach as f32,
+            shape_ema: cfg.shape_ema as f32,
+            min_anchors: cfg.min_anchors as usize,
+        });
+        let options = CloudOptions {
+            min_range_m: cfg.min_range_m as f32,
+            max_range_m: cfg.max_range_m as f32,
+            decimation: cfg.decimation as usize,
+            max_points: (cfg.max_points > 0).then_some(cfg.max_points as usize),
+            ..CloudOptions::default()
+        };
+        let mut timing = Timing::default();
+        for frame in predicted {
+            let started = Instant::now();
+            let (map, poses) = (&frame.map, &frame.poses);
+            let anchors = self.anchors(
+                &poses.world_from_camera.inverse(),
+                seconds(&frame.header.stamp),
+            );
+            let anchored = Instant::now();
+            let mut visible =
                 depth2depth::cloud::visible_anchors(&anchors, &map.camera, map.height, map.width);
-            let mut calibrated = calibration.apply(&pred, map.height, map.width, &visible);
+            if let Some(floor_from_camera) = &poses.floor_from_camera {
+                let floor = self.floor_anchors(
+                    &calibration,
+                    &frame.pred,
+                    map,
+                    &anchors,
+                    &visible,
+                    floor_from_camera,
+                );
+                visible.extend(floor);
+            }
+            let mut calibrated = calibration.apply(&frame.pred, map.height, map.width, &visible);
             for (depth, support) in calibrated.depth.iter_mut().zip(&calibrated.support) {
                 if (*support as f64) < cfg.min_support {
                     *depth = 0.0;
                 }
             }
-            let options = CloudOptions {
-                min_range_m: cfg.min_range_m as f32,
-                max_range_m: cfg.max_range_m as f32,
-                decimation: cfg.decimation as usize,
-                max_points: (cfg.max_points > 0).then_some(cfg.max_points as usize),
-                ..CloudOptions::default()
-            };
             let mut points = calibrated.points(map.height, map.width, &map.camera, &options);
-            if !cfg.height_frame.is_empty() {
-                let Some(base_from_camera) = self
-                    .tf
-                    .lookup(&cfg.height_frame, &frame_id)
-                    .at(stamp)
-                    .tolerance(cfg.tf_tolerance_s)
-                    .get()
-                else {
-                    warn_throttled!(Duration::from_secs(5), frame = %cfg.height_frame, "No transform to the height frame, skipped a frame.");
-                    continue;
-                };
-                let pose = isometry(&base_from_camera);
+            if let Some(pose) = &poses.height_from_camera {
                 points.retain(|&[x, y, z]| {
                     let height = (pose * Point3::new(x as f64, y as f64, z as f64)).z;
                     (cfg.min_height_m..=cfg.max_height_m).contains(&height)
                 });
             }
             let calibrated_at = Instant::now();
-            let cloud = make_cloud(&points, &image.header, frame_id);
+            let cloud = make_cloud(&points, &frame.header, frame.frame_id);
             if let Err(error) = self.runtime.block_on(self.output.publish(&cloud)) {
                 warn_throttled!(Duration::from_secs(5), %error, "Could not publish a cloud.");
             }
+            let [decode, undistort, predict] = frame.stages;
             timing.record(
                 [
-                    decoded - started,
-                    undistorted - decoded,
-                    anchored - undistorted,
-                    predicted - anchored,
-                    calibrated_at - predicted,
+                    decode,
+                    undistort,
+                    anchored - started,
+                    predict,
+                    calibrated_at - anchored,
                 ],
                 visible.len(),
                 points.len(),
             );
         }
+    }
+
+    /// Move the scans whose transform has arrived into the history, in the world frame.
+    fn resolve_scans(&self) {
+        let cfg = &self.config;
+        let mut pending = self.shared.pending.lock().unwrap();
+        let mut history = self.shared.history.lock().unwrap();
+        pending.retain(|msg| {
+            let stamp = seconds(&msg.header.stamp);
+            let Some(world_from_lidar) = self
+                .tf
+                .lookup(&cfg.world_frame, &msg.header.frame_id)
+                .at(stamp)
+                .tolerance(cfg.tf_tolerance_s)
+                .get()
+            else {
+                return true;
+            };
+            let pose = isometry(&world_from_lidar);
+            match extract_xyz(msg) {
+                Ok(points) => history.push_back(Scan {
+                    stamp,
+                    points: points
+                        .into_iter()
+                        .filter(|p| p.iter().all(|v| v.is_finite()))
+                        .map(|[x, y, z]| {
+                            let p = pose * Point3::new(x as f64, y as f64, z as f64);
+                            [p.x as f32, p.y as f32, p.z as f32]
+                        })
+                        .collect(),
+                }),
+                Err(error) => {
+                    warn_throttled!(Duration::from_secs(5), %error, "Unreadable lidar scan, dropped it.")
+                }
+            }
+            false
+        });
+        let Some(newest) = history.iter().map(|scan| scan.stamp).reduce(f64::max) else {
+            return;
+        };
+        history.retain(|scan| scan.stamp >= newest - cfg.lidar_history_s - HISTORY_MARGIN_S);
+    }
+
+    /// The next frame to run: normally the newest whose transforms are known. When a late odometry message
+    /// makes several known at once, they are taken in order, `FRAME_SPACING_S` apart, as long as that keeps
+    /// within `MAX_BACKLOG_S` of the newest. The chosen frame and every older one leave the queue.
+    fn next_frame(
+        &self,
+        info: &CameraInfo,
+        last_stamp: f64,
+    ) -> Option<(CompressedImage, String, Poses)> {
+        let mut frames = self.shared.frames.lock().unwrap();
+        let resolve = |image: &CompressedImage| {
+            let frame_id = resolve_frame_id(
+                &self.config.frame_id,
+                &info.header.frame_id,
+                &image.header.frame_id,
+            );
+            let poses = self.poses(frame_id, seconds(&image.header.stamp))?;
+            Some((frame_id.to_string(), poses))
+        };
+        let (newest, resolved) = frames
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, image)| Some((i, resolve(image)?)))?;
+        let target = (last_stamp + FRAME_SPACING_S)
+            .max(seconds(&frames[newest].header.stamp) - MAX_BACKLOG_S);
+        let (index, (frame_id, poses)) = frames
+            .iter()
+            .enumerate()
+            .take(newest)
+            .filter(|(_, image)| seconds(&image.header.stamp) >= target)
+            .find_map(|(i, image)| Some((i, resolve(image)?)))
+            .unwrap_or((newest, resolved));
+        let image = frames.drain(..=index).next_back()?;
+        Some((image, frame_id, poses))
+    }
+
+    fn poses(&self, frame_id: &str, stamp: f64) -> Option<Poses> {
+        let pose = |target: &str| {
+            let transform = self
+                .tf
+                .lookup(target, frame_id)
+                .at(stamp)
+                .tolerance(self.config.tf_tolerance_s)
+                .get()?;
+            Some(isometry(&transform))
+        };
+        let optional = |target: &str| match target {
+            "" => Some(None),
+            target => pose(target).map(Some),
+        };
+        Some(Poses {
+            world_from_camera: pose(&self.config.world_frame)?,
+            height_from_camera: optional(&self.config.height_frame)?,
+            floor_from_camera: optional(&self.config.floor_frame)?,
+        })
+    }
+
+    /// Anchors on the floor for probed pixels the calibration would put at or under it, and the floor they connect to, where the lidar saw
+    /// floor within `floor_reach_m` or the camera stands over it. Depth Anything often reads the near floor
+    /// too far, and a lidar on the chassis never sees the floor right in front of the robot.
+    fn floor_anchors(
+        &self,
+        calibration: &Calibration,
+        pred: &[f32],
+        map: &UndistortMap,
+        lidar: &[[f32; 3]],
+        visible: &[Anchor],
+        floor_from_camera: &Isometry3<f64>,
+    ) -> Vec<Anchor> {
+        let reach = self.config.floor_reach_m;
+        if reach <= 0.0 {
+            return Vec::new();
+        }
+        let mut floor: Vec<[f64; 3]> = lidar
+            .iter()
+            .map(|&[x, y, z]| floor_from_camera * Point3::new(x as f64, y as f64, z as f64))
+            .filter(|p| p.z.abs() < FLOOR_BAND_M)
+            .map(|p| [p.x, p.y, p.z])
+            .collect();
+        if floor.len() < FLOOR_MIN_POINTS {
+            return Vec::new();
+        }
+        floor.sort_by(|a, b| a[2].total_cmp(&b[2]));
+        let level = floor[floor.len() / 2][2];
+        let camera = floor_from_camera.translation.vector;
+        let mut seen: HashMap<(i64, i64), Vec<[f64; 2]>> = HashMap::new();
+        for [x, y] in floor
+            .iter()
+            .map(|p| [p[0], p[1]])
+            .chain([[camera.x, camera.y]])
+        {
+            let cell = ((x / reach).floor() as i64, (y / reach).floor() as i64);
+            seen.entry(cell).or_default().push([x, y]);
+        }
+        let near_floor = |x: f64, y: f64| {
+            let (cx, cy) = ((x / reach).floor() as i64, (y / reach).floor() as i64);
+            (cx - 1..=cx + 1).any(|i| {
+                (cy - 1..=cy + 1).any(|j| {
+                    seen.get(&(i, j)).is_some_and(|points| {
+                        points
+                            .iter()
+                            .any(|p| (p[0] - x).powi(2) + (p[1] - y).powi(2) <= reach * reach)
+                    })
+                })
+            })
+        };
+        let pin = &map.camera;
+        let max_range = self.config.max_range_m;
+        let candidates: Vec<(usize, usize, f64, f64)> = (0..map.height)
+            .step_by(FLOOR_GRID_STEP)
+            .flat_map(|v| (0..map.width).step_by(FLOOR_GRID_STEP).map(move |u| (u, v)))
+            .filter_map(|(u, v)| {
+                let ray = Vector3::new(
+                    (u as f64 - pin.cx as f64) / pin.fx as f64,
+                    (v as f64 - pin.cy as f64) / pin.fy as f64,
+                    1.0,
+                );
+                let down = (floor_from_camera.rotation * ray).z;
+                let depth = (level - camera.z) / down;
+                if down >= 0.0 || !(0.0..=max_range).contains(&depth) {
+                    return None;
+                }
+                let hit = floor_from_camera * Point3::from(ray * depth);
+                near_floor(hit.x, hit.y).then_some((u, v, depth, down))
+            })
+            .collect();
+        let pixels: Vec<(usize, usize)> = candidates.iter().map(|&(u, v, _, _)| (u, v)).collect();
+        let probed = calibration.probe(pred, map.height, map.width, visible, &pixels);
+        // Seeds: pixels the calibration already puts on (or under) the floor.
+        let mut floor_like: Vec<bool> = candidates
+            .iter()
+            .zip(&probed)
+            .map(|(&(_, _, _, down), &probed)| {
+                camera.z + probed as f64 * down - level <= FLOOR_TOLERANCE_M
+            })
+            .collect();
+        // Grow them over the probe grid where the prediction keeps the floor's shape.
+        let shape: Vec<f64> = candidates
+            .iter()
+            .map(|&(u, v, depth, _)| (depth / pred[v * map.width + u].max(1e-3) as f64).ln())
+            .collect();
+        let index: HashMap<(usize, usize), usize> = pixels
+            .iter()
+            .enumerate()
+            .map(|(i, &(u, v))| ((u / FLOOR_GRID_STEP, v / FLOOR_GRID_STEP), i))
+            .collect();
+        let mut frontier: Vec<usize> = (0..candidates.len()).filter(|&i| floor_like[i]).collect();
+        while let Some(i) = frontier.pop() {
+            let (gu, gv) = (pixels[i].0 / FLOOR_GRID_STEP, pixels[i].1 / FLOOR_GRID_STEP);
+            for (nu, nv) in [
+                (gu + 1, gv),
+                (gu.wrapping_sub(1), gv),
+                (gu, gv + 1),
+                (gu, gv.wrapping_sub(1)),
+            ] {
+                if let Some(&n) = index.get(&(nu, nv)) {
+                    if !floor_like[n] && (shape[n] - shape[i]).abs() < FLOOR_SMOOTHNESS {
+                        floor_like[n] = true;
+                        frontier.push(n);
+                    }
+                }
+            }
+        }
+        candidates
+            .iter()
+            .zip(floor_like)
+            .filter(|&(_, floor_like)| floor_like)
+            .map(|(&(u, v, depth, _), _)| Anchor {
+                u: u as f32,
+                v: v as f32,
+                z: depth as f32,
+            })
+            .collect()
     }
 
     /// The history's points in the camera frame, within range and in front of it.
@@ -384,7 +652,8 @@ impl Worker {
         history
             .iter()
             .filter(|scan| {
-                scan.stamp >= stamp - self.config.lidar_history_s && scan.stamp <= stamp + 0.5
+                scan.stamp >= stamp - self.config.lidar_history_s
+                    && scan.stamp <= stamp + SCAN_LEAD_S
             })
             .flat_map(|scan| scan.points.iter())
             .map(|&[x, y, z]| {

@@ -78,7 +78,7 @@ pub struct Config {
     /// Sensor range error `range_error_coeff * d^range_error_exponent` (m); zero weights all updates equally.
     #[validate(range(min = 0.0))]
     pub range_error_coeff: f32,
-    /// Exponent on range in the error model; 2 is stereo/structured-light depth.
+    /// Exponent on range in the error model; 2 suits triangulating depth cameras, whose error grows as d².
     #[validate(range(min = 0.0, max = 8.0))]
     pub range_error_exponent: f32,
     /// Cloud frame_ids the range error applies to; empty applies it to every cloud.
@@ -107,6 +107,10 @@ pub struct Config {
     /// Max stamp gap between a cloud and the transform used to register it (s).
     #[validate(range(exclusive_min = 0.0))]
     pub tf_match_tolerance_s: f64,
+    /// Clouds older than this (s, by the wall clock) are skipped, so a map that fell behind catches up
+    /// instead of working through a stale queue; 0 keeps every cloud.
+    #[validate(range(min = 0.0))]
+    pub max_cloud_age_s: f64,
     /// Worker threads for parallel map work.
     #[validate(range(min = 1))]
     pub worker_threads: u32,

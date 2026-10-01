@@ -62,11 +62,13 @@ class Depth2DepthCloudConfig(NativeModuleConfig):
     lidar_history_s: float = Field(default=2.0, ge=0.0, le=30.0)
     max_anchor_range_m: float = Field(default=12.0, ge=0.1, le=200.0)
     tf_tolerance_s: float = Field(default=0.1, ge=0.0, le=5.0)
+    # Frames and scans wait this long for their transform: a loaded Point-LIO has published poses 11 s late.
+    max_tf_lag_s: float = Field(default=15.0, ge=0.0, le=30.0)
     # Calibration (depth2depth::CalibrationConfig): edge-aware spread near lidar, a smooth fit away from it.
     sigma_px: float = Field(default=40.0, ge=1.0, le=1000.0)
     sigma_log_depth: float = Field(default=0.15, ge=0.001, le=10.0)
     neighbours: int = Field(default=16, ge=1, le=256)
-    grid_step: int = Field(default=4, ge=1, le=64)
+    grid_step: int = Field(default=6, ge=1, le=64)
     reach: float = Field(default=1.0, ge=0.01, le=100.0)
     shape_ema: float = Field(default=0.1, ge=0.0, le=1.0)
     min_anchors: int = Field(default=100, ge=1, le=1000000)
@@ -82,6 +84,10 @@ class Depth2DepthCloudConfig(NativeModuleConfig):
     height_frame: str = ""
     min_height_m: float = -1000.0
     max_height_m: float = 1000.0
+    # Floor prior: in floor_frame (z = 0 the floor, e.g. base_link) pixels calibrated at or under the lidar's floor
+    # are anchored on it, where the lidar saw floor within floor_reach_m or the camera stands over it; "" is off.
+    floor_frame: str = ""
+    floor_reach_m: float = Field(default=1.5, ge=0.0, le=100.0)
 
     @field_validator("model_height", "model_width")
     @classmethod

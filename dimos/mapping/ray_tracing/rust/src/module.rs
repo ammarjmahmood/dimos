@@ -71,6 +71,11 @@ impl RayTracingVoxelMap {
         // Register with the transform nearest the cloud stamp, waiting briefly
         // for one still in flight rather than dropping the cloud.
         let stamp = time_secs(&msg.header.stamp);
+        let age = wall_now_s() - stamp;
+        if self.config.max_cloud_age_s > 0.0 && age > self.config.max_cloud_age_s {
+            warn_throttled!(Duration::from_secs(5), age_s = age, cloud_frame = %msg.header.frame_id, "Skipped a cloud older than max_cloud_age_s: the map is behind and catching up.");
+            return;
+        }
         let tolerance = self.config.tf_match_tolerance_s;
         let lookup = self
             .tf
@@ -239,6 +244,12 @@ impl RayTracingVoxelMap {
 /// How long to wait for a late transform before dropping a cloud.
 const TF_WAIT_TIMEOUT: Duration = Duration::from_millis(50);
 
+fn wall_now_s() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
 fn time_secs(t: &Time) -> f64 {
     t.sec as f64 + t.nsec as f64 * 1e-9
 }
@@ -331,6 +342,7 @@ mod tests {
             region_percentile: 95.0,
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
+            max_cloud_age_s: 0.0,
             worker_threads: 4,
         };
         let mut map = VoxelMap::default();

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
@@ -48,6 +50,14 @@ PLANNER_VIZ_HZ = 0.0
 HEAD_CLOUD_MIN_HEIGHT_M = -0.15
 HEAD_CLOUD_MAX_HEIGHT_M = 0.35
 
+# The ray tracer shares the Orin with everything else; head depth at one point per 8x8 pixels, at most 3000,
+# and every 20th lidar ray keep it near one Point-LIO's worth of work. Live, at 6x6 and every 10th, it fell
+# ~10 s behind; a cloud older than MAX_CLOUD_AGE_S is skipped so it can never work through a stale queue.
+HEAD_CLOUD_DECIMATION = 8
+HEAD_CLOUD_MAX_POINTS = 3000
+RAY_SUBSAMPLE = 20
+MAX_CLOUD_AGE_S = 1.0
+
 # Head depth error against held-out Mid-360 points grows linearly: 75th percentile ~4.5% of range.
 HEAD_RANGE_ERROR_COEFF = 0.045
 
@@ -59,17 +69,25 @@ def _render_path(msg: Any) -> Any:
 
 
 # Both clouds share the `lidar` port, so the viewer splits them by frame_id.
-_CLOUD_COLORS = {
-    LIDAR_FRAME: [80, 160, 255],
-    HEAD_CAMERA_FRAME: [255, 140, 40],
-}
 _CLOUD_COLOR_UNKNOWN = [170, 170, 170]
 
 
 def _render_cloud(msg: Any) -> Any:
+    import rerun as rr
+
     frame_id = getattr(msg, "frame_id", "") or "unknown"
-    color = _CLOUD_COLORS.get(frame_id, _CLOUD_COLOR_UNKNOWN)
-    return [(f"world/lidar/{frame_id}", msg.to_rerun(colors=color, rgb=False))]
+    path = f"world/lidar/{frame_id}"
+    xyz = msg.points_f32()
+    if frame_id in (HEAD_CAMERA_FRAME, LIDAR_FRAME) and len(xyz):
+        # Rainbow by the frame's own up axis (the optical frame's is -y), inverted so dark blue is never on black.
+        up = -xyz[:, 1] if frame_id == HEAD_CAMERA_FRAME else xyz[:, 2]
+        level = 1.0 - np.clip((up - up.min()) / max(float(np.ptp(up)), 1e-3), 0.0, 1.0)
+        colors = np.stack([255 * level, 255 * (1 - np.abs(2 * level - 1)), 255 * (1 - level)], axis=1)
+        points = rr.Points3D(xyz, colors=(0.35 * 255 + 0.65 * colors).astype(np.uint8), radii=0.02)
+    else:
+        points = msg.to_rerun(colors=_CLOUD_COLOR_UNKNOWN, rgb=False)
+    # A list skips the bridge's frame attach, so each cloud hangs off its own tf frame here.
+    return [(path, points), (path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))]
 
 
 _rerun_config = {
@@ -88,6 +106,12 @@ _rerun_config = {
         "world/head_left_info": None,
         "world/head_right_info": None,
         "world/lidar": _render_cloud,
+        # Raw sensor streams, heavy over a laptop's link and shown better by what is built from them.
+        "world/lidar_raw": None,
+        "world/imu": None,
+        "world/imu_torso": None,
+        "world/r1pro/imu": None,
+        "world/region_bounds": None,
         "world/planner_path": _render_path,
         "world/path": None,
         **planner_visual_override(PLANNER_VIZ_HZ),
@@ -104,11 +128,14 @@ r1pro_nav_lio = autoconnect(
     r1pro_head_depth(
         min_height_m=HEAD_CLOUD_MIN_HEIGHT_M,
         max_height_m=HEAD_CLOUD_MAX_HEIGHT_M,
+        decimation=HEAD_CLOUD_DECIMATION,
+        max_points=HEAD_CLOUD_MAX_POINTS,
     ).remappings([(Depth2DepthCloud, "depth_cloud", "lidar")]),
     RayTracingVoxelMap.blueprint(
         voxel_size=VOXEL_SIZE_M,
         max_range=10.0,
-        ray_subsample=10,
+        ray_subsample=RAY_SUBSAMPLE,
+        max_cloud_age_s=MAX_CLOUD_AGE_S,
         emit_every=1,
         global_emit_every=50,
         support_min=4,

@@ -43,24 +43,30 @@ from dimos.robot.galaxea.r1pro.lio import (
 
 
 def _atoms(blueprint):
-    return {atom.module: atom for atom in blueprint.active_blueprints}
+    """By instance name: the blueprint runs two ray-traced maps."""
+    return {atom.name: atom for atom in blueprint.active_blueprints}
+
+
+key = r1pro_nav_lio._instance_key
 
 
 def test_base_link_has_one_parent_and_it_is_pointlio() -> None:
     atoms = _atoms(r1pro_nav_lio)
     # The connection's wheel odometry, and its odom -> base_link edge, are off.
-    assert atoms[R1ProConnection].kwargs["publish_odom"] is False
+    assert atoms[key(R1ProConnection)].kwargs["publish_odom"] is False
     # Point-LIO publishes odom -> lidar_pointlio_link and the mount tf hangs base_link under it.
-    assert atoms[PointLioRust].kwargs == {"frame_id": ODOM_FRAME, "sensor_frame_id": LIDAR_FRAME}
-    assert atoms[Mid360].kwargs == {
+    assert atoms[key(PointLioRust)].kwargs == {
+        "frame_id": ODOM_FRAME,
+        "sensor_frame_id": LIDAR_FRAME,
+    }
+    assert atoms[key(Mid360)].kwargs == {
         "frame_id": LIDAR_FRAME,
         "lidar_ip": R1PRO_CHASSIS_LIDAR_IP,
         "host_ip": R1PRO_CHASSIS_LIDAR_HOST_IP,
     }
-    assert R1ProLioMountTf in atoms
+    assert key(R1ProLioMountTf) in atoms
     # And the planners read Point-LIO's pose under the name they always did.
     remaps = r1pro_nav_lio.remapping_map
-    key = r1pro_nav_lio._instance_key
     assert remaps[(key(R1ProLioOdomPose), "pose")] == "chassis_odom"
     assert remaps[(key(DanLocalPlanner), "odom")] == "chassis_odom"
     assert remaps[(key(DanHolonomicTC), "odom")] == "chassis_odom"
@@ -69,52 +75,45 @@ def test_base_link_has_one_parent_and_it_is_pointlio() -> None:
 def test_both_clouds_land_on_the_lidar_bus_and_the_head_is_cut_to_the_lidars_blind_band() -> None:
     atoms = _atoms(r1pro_nav_lio)
     remaps = r1pro_nav_lio.remapping_map
-    key = r1pro_nav_lio._instance_key
     assert remaps[(key(Mid360), "lidar")] == "lidar_raw"
     assert remaps[(key(PointLioRust), "lidar")] == "lidar"
     assert remaps[(key(Depth2DepthCloud), "depth_cloud")] == "lidar"
     # It anchors on the same bus, and skips its own clouds there by frame.
     assert remaps[(key(Depth2DepthCloud), "lidar")] == "lidar"
-    head = atoms[Depth2DepthCloud].kwargs
+    head = atoms[key(Depth2DepthCloud)].kwargs
     assert head["min_height_m"] == HEAD_CLOUD_MIN_HEIGHT_M
     assert head["max_height_m"] == HEAD_CLOUD_MAX_HEIGHT_M
     # The lidar sits 0.29 m up; the band stops just above it and no higher.
     assert 0.29 < HEAD_CLOUD_MAX_HEIGHT_M < 0.5
     assert HEAD_CLOUD_MIN_HEIGHT_M < 0.0
-    voxel_map = atoms[RayTracingVoxelMap].kwargs
-    assert voxel_map["world_frame"] == ODOM_FRAME
+    assert atoms[RayTracingVoxelMap.name].kwargs["world_frame"] == ODOM_FRAME
 
 
 def test_only_the_head_cloud_is_range_weighted() -> None:
-    voxel_map = _atoms(r1pro_nav_lio)[RayTracingVoxelMap].kwargs
+    voxel_map = _atoms(r1pro_nav_lio)[RayTracingVoxelMap.name].kwargs
     assert voxel_map["range_error_coeff"] > 0.0
     assert voxel_map["range_error_exponent"] == 1.0
     assert voxel_map["range_error_frame_ids"] == [HEAD_CAMERA_FRAME]
-    assert LIDAR_FRAME not in voxel_map["range_error_frame_ids"]
 
 
 def test_the_stack_is_map_planner_local_planner_controller() -> None:
     atoms = _atoms(r1pro_nav_lio)
-    for module in (
-        RayTracingVoxelMap,
-        MLSPlannerNative,
-        DanLocalPlanner,
-        DanHolonomicTC,
-        MovementManager,
+    for name in (
+        RayTracingVoxelMap.name,
+        key(MLSPlannerNative),
+        key(DanLocalPlanner),
+        key(DanHolonomicTC),
+        key(MovementManager),
     ):
-        assert module in atoms, module.__name__
+        assert name in atoms, name
     remaps = r1pro_nav_lio.remapping_map
-    key = r1pro_nav_lio._instance_key
     assert remaps[(key(MLSPlannerNative), "path")] == "planner_path"
-    assert atoms[MLSPlannerNative].kwargs["base_frame"] == "base_link"
+    assert atoms[key(MLSPlannerNative)].kwargs["base_frame"] == "base_link"
 
 
 def test_every_remapping_names_a_real_port_and_the_config_parses() -> None:
     atoms = _atoms(r1pro_nav_lio)
-    ports_by_key = {
-        r1pro_nav_lio._instance_key(module): {stream.name for stream in atom.streams}
-        for module, atom in atoms.items()
-    }
+    ports_by_key = {name: {stream.name for stream in atom.streams} for name, atom in atoms.items()}
     for module_key, port in r1pro_nav_lio.remapping_map:
         assert port in ports_by_key[module_key], f"{module_key} has no port {port}"
     BlueprintConfigParser(r1pro_nav_lio).parse(environ={})

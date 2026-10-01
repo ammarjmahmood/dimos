@@ -15,9 +15,7 @@
 """The R1's head depth blueprint: its frames and its wiring."""
 
 from dimos.perception.depth2depth_cloud.module import Depth2DepthCloud
-from dimos.robot.galaxea.r1pro.head_depth import (
-    r1pro_head_depth,
-)
+from dimos.robot.galaxea.r1pro.head_depth import r1pro_head_depth
 from dimos.robot.galaxea.r1pro.lio import BASE_FRAME
 
 

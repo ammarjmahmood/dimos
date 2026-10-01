@@ -104,7 +104,7 @@ _HEAD_STEREO_INFO: dict[str, str] = {
 }
 _LIDAR_TOPIC = "/hdas/lidar_chassis_left"
 # base_link -> lidar_chassis_left_link, the fixed joint origin in the vendor URDF.
-LIDAR_MOUNT_XYZ = (0.15711, 0.26215, 0.29465)
+LIDAR_MOUNT_XYZ = (0.15711, 0.21215, 0.29465)
 
 
 @dataclass
@@ -168,8 +168,8 @@ class ArticulatedTf:
         rename = {loaded.root_link: self.root_link}
         self._edges: list[tuple[str, str, int, int]] = []
         for joint in ElementTree.fromstring(loaded.xml).iter("joint"):
-            parent = joint.find("parent").get("link")  # type: ignore[union-attr]
-            child = joint.find("child").get("link")  # type: ignore[union-attr]
+            parent = joint.find("parent").attrib["link"]  # type: ignore[union-attr]
+            child = joint.find("child").attrib["link"]  # type: ignore[union-attr]
             self._edges.append(
                 (
                     rename.get(parent, parent),
