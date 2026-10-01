@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): two picks,
-planner skills and the wrist camera only. The pick is graded on what its probe saw in the
-simulator, the placement on the bodies' recorded poses.
+"""xArm7 at a table, planner skills and the wrist camera only. Two picks with a red ball
+(``apple``) and a cylinder (``cup``): the pick is graded on what its probe saw in the simulator,
+the placement on the bodies' recorded poses. One pour, in a scene with two cups: a ball tipped
+from a handled cup into a wider one, graded on its probe.
 
     dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi
 """
@@ -85,11 +86,56 @@ def pick_probe(probe: MujocoProbe) -> Pick:
     return pick
 
 
-def environment(probe: ProbeSetup | None = None) -> MujocoEnvironment:
+@dataclass
+class Pour:
+    """What the pour probe saw in the simulator."""
+
+    ball_in_target: bool = False
+    """The ball's centre is inside the yellow cup on the latest step."""
+    target_tilt_deg: float = 0.0
+    """How far the yellow cup's axis is from vertical on the latest step."""
+    source_peak_tilt_deg: float = 0.0
+    """The furthest the blue cup was tipped."""
+    ball_touched: list[str] = field(default_factory=list)
+    """Everything other than the two cups that the ball touched, in order."""
+
+
+def pour_probe(probe: MujocoProbe) -> Pour:
+    pour = Pour()
+
+    def track(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        target = data.body("target_cup")
+        axes = target.xmat.reshape(3, 3)
+        across, along, up = axes.T @ (data.body("ball").xpos - target.xpos)
+        # The yellow cup is 8.2 cm wide inside and 7 cm tall, measured from the centre of its base.
+        pour.ball_in_target = bool(math.hypot(across, along) < 0.041 and 0.0 < up < 0.07)
+        pour.target_tilt_deg = _tilt_deg(float(axes[2, 2]))
+        source_tilt = _tilt_deg(float(data.body("source_cup").xmat[8]))
+        pour.source_peak_tilt_deg = max(pour.source_peak_tilt_deg, source_tilt)
+
+    def touched(contact: Contact) -> None:
+        if contact.other not in ("source_cup", "target_cup", *pour.ball_touched):
+            pour.ball_touched.append(contact.other)
+
+    probe.on_tick(track)
+    probe.on_contact_begin("ball", touched)
+    return pour
+
+
+def _tilt_deg(up_z: float) -> float:
+    return math.degrees(math.acos(max(-1.0, min(1.0, up_z))))
+
+
+def environment(
+    probe: ProbeSetup | None = None,
+    *,
+    scene: str = "xarm-perception-sim",
+    tracked_bodies: tuple[str, ...] = TRACKED,
+) -> MujocoEnvironment:
     return MujocoEnvironment(
-        blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
+        blueprint=[scene, "mcp-server", "observe-skill"],
         disable=PERCEPTION_MODULES,
-        tracked_bodies=TRACKED,
+        tracked_bodies=tracked_bodies,
         probe=probe,
     )
 
@@ -106,6 +152,16 @@ def picked_up(*, by_m: float) -> Callable[[Outcome], float]:
         return min(max((pick.cup_z - pick.cup_start_z) / by_m, 0.0), 1.0)
 
     return grade
+
+
+def poured(outcome: Outcome) -> float:
+    """1.0 if the ball ended in the upright yellow cup having touched only the two cups, 0.5 if
+    it ended there after touching anything else (carried or dropped, not poured), else 0.0."""
+    with recording(outcome) as store:
+        pour = probe_ctx(store, Pour)
+    if not pour.ball_in_target or pour.target_tilt_deg > 15.0:
+        return 0.0
+    return 0.5 if pour.ball_touched else 1.0
 
 
 def stacked_on(
@@ -145,5 +201,13 @@ SUITE: Suite = [
         timeout_s=900.0,
         threshold=0.5,
         tags=frozenset({"mujoco", "manipulation", "pick", "place"}),
+    ),
+    EvalCase(
+        id="xarm_pour_ball",
+        inputs="Pour the ball into the empty cup.",
+        environment=environment(pour_probe, scene="xarm-pour-sim", tracked_bodies=()),
+        grade=poured,
+        timeout_s=900.0,
+        tags=frozenset({"mujoco", "manipulation", "pour"}),
     ),
 ]

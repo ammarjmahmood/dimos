@@ -521,7 +521,11 @@ still settle on `odom`. The recording keeps color, camera info, joint state,
 values, so a case can retune a module without a new blueprint.
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
 modules disabled: pick up the cylinder, graded by the probe above, then put the
-red ball on top of it, graded on recorded poses.
+red ball on top of it, graded on recorded poses. Its third case runs in the
+`xarm-pour-sim` scene (`data/xarm7/scene_pour.xml`): a ball tipped from a
+handled cup into a wider one. Its probe scores 1.0 when the ball ends in the
+upright target cup having touched nothing but the two cups, and 0.5 when it
+ends there after touching the gripper or the table.
 
 ## Running
 

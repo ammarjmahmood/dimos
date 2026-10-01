@@ -62,6 +62,7 @@ XARM_DUAL_MODEL_PATH = _XARM_REPO / "xarm_description" / "urdf" / "dual_xarm_dev
 XARM_PACKAGE_PATHS: dict[str, Path] = {"xarm_description": _XARM_REPO / "xarm_description"}
 XARM6_SIM_PATH = LfsPath("xarm6/scene.xml")
 XARM7_SIM_PATH = LfsPath("xarm7/scene.xml")
+XARM7_POUR_SIM_PATH = LfsPath("xarm7/scene_pour.xml")
 XARM7_SIM_HOME = [0.0, -0.247, 0.0, 0.909, 0.0, 1.15644, 0.0]
 # The sim scene stands the arm on a pedestal: xarm7.xml mounts link_base at
 # z=0.12. Place the planning model to match, or the planner solves poses 12cm

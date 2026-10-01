@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from dimos.control.coordinator import TaskConfig
-from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
@@ -25,6 +27,7 @@ from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
+    XARM7_POUR_SIM_PATH,
     XARM7_SIM_PATH,
     make_xarm7_sim_hardware,
     make_xarm7_sim_module_kwargs,
@@ -33,36 +36,42 @@ from dimos.robot.manipulators.xarm.config import (
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
-_xarm7_sim_model = make_xarm7_sim_robot_config()
-_xarm7_sim_hw = make_xarm7_sim_hardware(XARM7_SIM_PATH)
 
-xarm_perception_sim = autoconnect(
-    ManipulationModule.blueprint(
-        model=_xarm7_sim_model,
-        planning_timeout=10.0,
-        visualization={"backend": "viser"},
-    ),
-    ManipulationSkills.blueprint(),
-    PickAndPlaceModule.blueprint(planning_frame="world"),
-    HeuristicGraspModule.blueprint(),
-    MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(XARM7_SIM_PATH)),
-    ObjectSceneRegistrationModule.blueprint(
-        target_frame="world",
-        detector_backend="moondream",
-        segmentation_backend="edgetam",
-        detect_on_request=True,
-    ),
-    coordinator(
-        hardware=[_xarm7_sim_hw],
-        tasks=[
-            trajectory_task(_xarm7_sim_hw),
-            TaskConfig(
-                name="arm_gripper",
-                type="gripper",
-                joint_names=["arm/gripper"],
-                priority=20,
-            ),
-        ],
-    ),
-    RerunBridgeModule.blueprint(),
-)
+def _perception_sim(scene: Path) -> tuple[Blueprint, ...]:
+    """The xArm7 perception stack simulated in the MuJoCo scene at ``scene``."""
+    hardware = make_xarm7_sim_hardware(scene)
+    return (
+        ManipulationModule.blueprint(
+            model=make_xarm7_sim_robot_config(),
+            planning_timeout=10.0,
+            visualization={"backend": "viser"},
+        ),
+        ManipulationSkills.blueprint(),
+        PickAndPlaceModule.blueprint(planning_frame="world"),
+        HeuristicGraspModule.blueprint(),
+        MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(scene)),
+        ObjectSceneRegistrationModule.blueprint(
+            target_frame="world",
+            detector_backend="moondream",
+            segmentation_backend="edgetam",
+            detect_on_request=True,
+        ),
+        coordinator(
+            hardware=[hardware],
+            tasks=[
+                trajectory_task(hardware),
+                TaskConfig(
+                    name="arm_gripper",
+                    type="gripper",
+                    joint_names=["arm/gripper"],
+                    priority=20,
+                ),
+            ],
+        ),
+        RerunBridgeModule.blueprint(),
+    )
+
+
+xarm_perception_sim = autoconnect(*_perception_sim(XARM7_SIM_PATH))
+
+xarm_pour_sim = autoconnect(*_perception_sim(XARM7_POUR_SIM_PATH))
