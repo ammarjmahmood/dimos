@@ -243,6 +243,70 @@ and failure reporting without importing Isaac Sim. They do not establish camera
 calibration, physical grasp success, or task-fixture compatibility. Those claims
 require the live demos and their reports.
 
+### Development-only stationary radio interaction
+
+The experimental `demo_radio` composition connects the Python manipulation SDK
+to arm trajectories and one selected coupled gripper. It has no locomotion task.
+Run the measured motion check before trying contact:
+
+```bash
+python -m dimos.simulation.behavior.demo_radio --stage motion --report /tmp/radio-motion.json
+python -m dimos.simulation.behavior.demo_radio --stage serve --report /tmp/radio-ready.json
+```
+
+`serve` leaves the coordinator running so a separate Python policy can use
+`Dimos.connect()` and `Arm.from_app(app, group="left_arm")`. Dimcode's ordinary
+write/edit/bash tools can write that policy and execute it with the selected
+DimOS environment's Python; this path needs no MCP wrapper. An SDK error is
+feedback for the policy, not proof that the remote motion has stopped. Confirm
+cancellation before dispatching a recovery motion.
+
+The contact helper accepts a world-frame **gripper-link** target and approach
+direction, performs pose/linear SDK motion, holds for at least five simulator
+steps, then retracts. It never sets `ToggledOn` symbolically. Press mode requires
+a JSON target containing `position`, `approach`, optional XYZW `orientation`, and
+explicit `provenance`, for example `development oracle-assisted geometry`.
+
+```bash
+python -m dimos.simulation.behavior.demo_radio --stage press --target /tmp/radio-target.json --report /tmp/radio-press.json
+```
+
+These commands are development experiments, not validated task-performance
+claims. Finger contact geometry and reachability still need live verification.
+An optional `--spawn-position X Y Z --spawn-yaw RADIANS` changes only the starting
+robot pose after restoring the official task instance; the report marks this
+custom setup and retains the official goal. SDK motion completion and the BDDL
+evaluator result remain separate. Truth-derived targets must be reported as
+oracle-assisted. The development environment does not enforce a truth boundary.
+
+The fixed script establishes actuation and contact plumbing. A first useful
+agent comparison keeps the same task but changes a reachable target pose or
+returns a recoverable planning failure, then checks whether the policy adapts
+from sensor observations and SDK feedback. Repeating the fixed script proves
+code execution only.
+
+Current development validation loaded official `turning_on_radio` instance 0.
+RRT-Connect rejects Cartesian paths, so this composition selects RoboPlan.
+A native URDF parser treated omitted planar-base position bounds as zero and
+clamped the frozen base during Cartesian planning. Explicit parser-compatible
+bounds fix that contract; equivalent translated robot, target, and obstacle
+regressions pass with the base frozen and only the arm group selected.
+
+At the official robot spawn, the SDK measured gripper closing and opening, then
+executed a 10 mm Cartesian excursion and return: 9.806 mm displacement and
+0.194 mm return error. This verifies development plumbing, not radio task
+completion. The BDDL evaluator remained false. A custom near-field physical press attempt failed precontact IK before
+contact; its evaluator stayed false. Agent adaptation remains untested. Scene obstacles are not yet
+registered automatically in the planner world; the simulator still enforces
+physical scene contact.
+
+A temporary official Dimcode `0.1.0-next.7` installation completed a localhost
+mock-provider tool loop: write a Python policy file, execute it with the selected
+Python interpreter, import `dimos.manipulation.sdk.Arm`, and return API signatures
+as tool feedback. This verifies Dimcode's code execution path without MCP,
+provider credentials, external model calls, or simulator execution. It does not
+verify genuine model planning or autonomous task performance.
+
 ### Tested environment and results
 
 The integration was validated on an RTX 3090 with NVIDIA driver **590.48.01**,

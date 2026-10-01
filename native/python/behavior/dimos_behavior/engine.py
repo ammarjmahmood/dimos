@@ -37,6 +37,7 @@ from omnigibson.controllers import ControllerView
 import omnigibson.lazy as lazy
 from omnigibson.macros import gm
 from omnigibson.object_states.object_state_base import AbsoluteObjectState, BooleanStateMixin
+from omnigibson.object_states.toggle import ToggledOn
 from omnigibson.sensors.vision_sensor import VisionSensor
 from omnigibson.tasks.behavior_task import BehaviorTask
 from omnigibson.utils.asset_utils import get_task_instance_path
@@ -199,7 +200,9 @@ class OmniEngine:
 
     def _prepare_spawn(self) -> None:
         # Ground-truth contacts are setup checks only.
-        if self.task is None and self.config.spawn_position is not None:
+        if (
+            self.task is None or self.config.development_task_spawn
+        ) and self.config.spawn_position is not None:
             self.robot.set_position_orientation(
                 torch.tensor(self.config.spawn_position),
                 torch.tensor(Rotation.from_euler("z", self.config.spawn_yaw).as_quat()),
@@ -315,6 +318,9 @@ class OmniEngine:
             "unsupported_physical": ["OPEN", "CLOSE", "TOGGLE_ON", "TOGGLE_OFF"],
             "primitive_arm": self.robot.default_arm,
             "grasping_mode": self.robot.grasping_mode,
+            "development_task_spawn": self.config.development_task_spawn,
+            "spawn_position": self.config.spawn_position,
+            "spawn_yaw": self.config.spawn_yaw,
         }
 
     def list_tasks(self) -> list[TaskSelection]:
@@ -439,6 +445,15 @@ class OmniEngine:
                     and isinstance(state, BooleanStateMixin)
                 },
             }
+            if ToggledOn in obj.states:
+                toggle = obj.states[ToggledOn]
+                position, orientation = toggle.link.get_position_orientation()
+                objects[key]["toggle_region"] = {
+                    "position": plain(position),
+                    "orientation": plain(orientation),
+                    "marker_position": plain(toggle.visual_marker.get_position_orientation()[0]),
+                    "privileged": True,
+                }
         return {
             "objects": objects,
             "links": {
@@ -448,6 +463,7 @@ class OmniEngine:
                 }
                 for name, link in self.robot.links.items()
                 if name in ("base_link", "left_gripper_link", "right_gripper_link")
+                or "gripper_finger" in name
             },
             # The evaluator reports goals through step(); task.info rejects pre-step reads.
             "goal_status": self._goal_status,

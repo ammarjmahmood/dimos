@@ -53,6 +53,7 @@ class BehaviorConfig(IsolatedPythonModuleConfig):
     max_depth: float = Field(default=5, gt=0)
     spawn_position: tuple[float, float, float] | None = None
     spawn_yaw: float = 0.0
+    development_task_spawn: bool = False
     seed: int = 0
     max_episode_steps: int = Field(default=30000, ge=1)
     shutdown_timeout: float = 10.0

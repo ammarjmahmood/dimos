@@ -98,6 +98,24 @@ class BehaviorProbe(Module):
             return result
 
     @rpc
+    def observation(self) -> dict[str, Any]:
+        """Read actual camera/proprioception streams for a Python development policy.
+
+        These streams carry their own timestamps and frames. They are asynchronous,
+        not a synchronized observation, and contain no task-object truth or goals.
+        """
+        with self._lock:
+            required = {"color_image", "depth_image", "camera_info", "joint_state", "tf"}
+            missing = required - self._latest.keys()
+            if missing:
+                raise RuntimeError(f"Observation streams unavailable: {sorted(missing)}")
+            return {
+                name: value.copy() if isinstance(value, Image) else value
+                for name, value in self._latest.items()
+                if name in self.inputs
+            }
+
+    @rpc
     def drive(self, x: float = 0, y: float = 0, yaw: float = 0) -> None:
         self.cmd_vel.publish(Twist(linear=[x, y, 0], angular=[0, 0, yaw]))
 
