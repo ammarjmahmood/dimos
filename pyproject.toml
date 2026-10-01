@@ -557,7 +557,7 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-dimos-generated = { path = "packages/dimos-generated" }
+dimos-generated = { path = "packages/dimos-generated", editable = true }
 dimos-message-build = { path = "dimos/message_codegen" }
 # CUDA builds are not published for macOS or non-x86_64 Linux. Those platforms
 # fall back to PyPI.

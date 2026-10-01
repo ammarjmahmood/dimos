@@ -14,7 +14,9 @@ prerequisites; message builds do not install OS packages. From the checkout root
 uv sync --group tests --frozen
 ```
 
-`uv sync` consumes checked-in source from the local packages in
+`uv sync` installs the built-in message package as editable Python source from
+`packages/dimos-generated/src`; no message-native extension is built. It consumes
+the local packages in
 `[tool.uv.sources]`. **Plain `pip install .` at the dimOS root does not read those
 uv sources.** It needs matching `dimos-generated` and `dimos-message-build`
 distributions available to pip; it is not a substitute for this checkout setup.
@@ -36,21 +38,18 @@ source of truth; do not edit generated bindings. Standard message inputs are
 vendored separately and intentionally pinned; avoid editing a standard Header
 just to add an application-specific field.
 
-Generate source explicitly after editing `.msg`, then build/install the independent package:
+Generate source explicitly after editing `.msg`:
 
 ```sh skip
-python -m scripts.generate_builtin_messages
-python -m scripts.generate_builtin_messages --check
-uv build packages/dimos-generated --python .venv/bin/python \
-  --out-dir build/message-codegen/ux-wheelhouse
-uv pip install --python .venv/bin/python --reinstall --no-deps \
-  build/message-codegen/ux-wheelhouse/dimos_generated-*.whl
+uv run python -m scripts.generate_builtin_messages
+uv run python -m scripts.generate_builtin_messages --check
 ```
 
-Keep that output directory to one compatible built-in wheel, or pass the exact
-wheel filename. Generation emits source without native compilation. Wheel/source/editable
-installation uses that source and does not regenerate it or rebuild the robot
-runtime. Restart Python processes after changing generated classes. Import and check the new value:
+The checkout's editable dependency uses the regenerated source directly; no
+wheel rebuild or message compiler is needed for development. Restart Python
+processes after changing generated classes. Editing `.msg` alone does not change
+installed classes: the drift check rejects missing, stale or changed outputs
+until you explicitly regenerate and commit them. Import and check the new value:
 
 <!-- builtin-value-check -->
 ```python skip
@@ -69,15 +68,22 @@ Run the package and runtime regressions appropriate to your changed consumers:
   dimos/message_codegen/test_stubs.py
 ```
 
-Use the active interpreter directly after installing your rebuilt wheel; a
-subsequent `uv run` may resync the local-source dependency from its cache.
-The new built-in wheel must be installed before testing a runtime module that
-imports the new type. In the runtime-cutover layer, use the same
+In the runtime-cutover layer, use the same
 `Module`/`In[DeviceReading]`/`Out[DeviceReading]` API as other generated messages.
 Do not use `dimos build` at the repository root for this workflow: that command
 builds an **external message project**, not all built-in messages.
 
-## Native artifacts and CI distribution
+## Package artifacts and CI distribution
+
+CI builds the committed generated source as an ordinary compiler-free Python
+wheel/sdist; wheel users do not need an editable checkout:
+
+```sh skip
+uv build packages/dimos-generated --python .venv/bin/python \
+  --out-dir build/message-codegen/ux-wheelhouse
+```
+
+## Native artifacts
 
 Build CMake headers/schemas and the Rust crate with the package's configured
 version:
