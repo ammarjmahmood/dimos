@@ -24,6 +24,7 @@ from mcap.writer import Writer as McapWriter
 import numpy as np
 import pytest
 
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.dataprep.build import _open_recording, inspect_recording, run_dataprep
 from dimos.imitation.dataprep.core import (
     DataPrepConfig,
@@ -35,9 +36,9 @@ from dimos.imitation.dataprep.core import (
 from dimos.memory.codecs.jpeg import JpegCodec
 from dimos.memory.codecs.lcm import LcmCodec
 from dimos.memory.codecs.lz4 import Lz4Codec
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 
 
 def _register_channel(
@@ -63,7 +64,9 @@ def _write_message(writer: McapWriter, channel_id: int, ts: float, message: Any)
         channel_id=channel_id,
         log_time=timestamp_ns,
         publish_time=timestamp_ns,
-        data=message if isinstance(message, bytes) else message.lcm_encode(),
+        data=message.to_json().encode("utf-8")
+        if isinstance(message, EpisodeStatus)
+        else (message if isinstance(message, bytes) else message.lcm_encode()),
     )
 
 
@@ -79,7 +82,7 @@ def _write_collection(path: Path) -> None:
             "applied_joint_position_command": _register_channel(
                 writer, "applied_joint_position_command", JointState
             ),
-            "status": _register_channel(writer, "status", EpisodeStatus),
+            "status": _register_channel(writer, "status", String, "json"),
         }
         _write_message(
             writer,

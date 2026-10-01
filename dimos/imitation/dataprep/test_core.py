@@ -51,6 +51,7 @@ from dimos.imitation.dataprep.core import (
 )
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 
 
 @pytest.mark.parametrize(
@@ -119,17 +120,26 @@ class _FakeStore:
         return list(self._streams)
 
 
-@dataclass
-class _Status:
-    """Mimics EpisodeStatus fields the extractor reads via getattr."""
-
-    last_event: str
-    task_label: str | None = None
-
-
 def _status(events: list[tuple[float, str, str | None]]) -> list[_Obs]:
-    """events = [(ts, last_event, label), ...]"""
-    return [_Obs(ts=ts, data=_Status(last_event=ev, task_label=lbl)) for ts, ev, lbl in events]
+    return [
+        _Obs(
+            ts=ts,
+            data=String(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "ts": ts,
+                        "state": "idle",
+                        "episodes_saved": 0,
+                        "episodes_discarded": 0,
+                        "last_event": event,
+                        "task_label": label,
+                    }
+                )
+            ),
+        )
+        for ts, event, label in events
+    ]
 
 
 def _feature(stream: str, field: str | None = "position") -> FeatureSpec:
@@ -926,3 +936,10 @@ def test_run_dataprep_excludes_only_invalid_episode(mocker, tmp_path: Path) -> N
         ("bad", False),
         ("good", True),
     ]
+
+
+def test_episode_boundaries_use_document_time_instead_of_reception_time():
+    values = _status([(12.0, "start", "pick"), (13.0, "save", "pick")])
+    store = _FakeStore({"status": [_Obs(ts=99.0, data=v.data) for v in values]})
+    episodes = extract_episodes(store, EpisodeExtractor())
+    assert [(e.start_ts, e.end_ts, e.task_label) for e in episodes] == [(12.0, 13.0, "pick")]

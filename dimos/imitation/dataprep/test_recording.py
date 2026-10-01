@@ -20,22 +20,32 @@ from mcap.writer import Writer as McapWriter
 import numpy as np
 import pytest
 
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.build import inspect_recording, run_dataprep
 from dimos.imitation.dataprep.core import FeatureSpec, OutputConfig, SyncConfig
 from dimos.memory.store.sqlite import SqliteStore
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 
 
 @contextmanager
 def _raw_writer(path, types):
     if path.suffix == ".db":
         with SqliteStore(path=str(path)) as store:
-            streams = {name: store.stream(name, kind, codec="lcm") for name, kind in types.items()}
-            yield lambda name, message: streams[name].append(message, ts=message.ts)
+            streams = {
+                name: store.stream(name, kind, codec="json" if kind is String else "lcm")
+                for name, kind in types.items()
+            }
+
+            def append(name, message):
+                ts = message.ts
+                value = String(message.to_json()) if isinstance(message, EpisodeStatus) else message
+                streams[name].append(value, ts=ts)
+
+            yield append
     else:
         with path.open("wb") as file:
             writer = McapWriter(file)
@@ -43,7 +53,7 @@ def _raw_writer(path, types):
             channels = {
                 name: writer.register_channel(
                     topic=name,
-                    message_encoding="lcm",
+                    message_encoding="json" if kind is String else "lcm",
                     schema_id=0,
                     metadata={
                         "dimos.payload_type": f"{kind.__module__}.{kind.__qualname__}",
@@ -59,7 +69,9 @@ def _raw_writer(path, types):
                     channel_id=channels[name],
                     log_time=stamp,
                     publish_time=stamp,
-                    data=message.lcm_encode(),
+                    data=message.to_json().encode("utf-8")
+                    if isinstance(message, EpisodeStatus)
+                    else message.lcm_encode(),
                 )
 
             try:
@@ -102,7 +114,7 @@ def test_moved_recording_directory_prepares_saved_episodes(format, camera_count,
     schema = profile.to_schema()
     schema.payload = f"recording.{format}"
     (directory / "schema.json").write_text(schema.model_dump_json())
-    types = {**profile.input_types(), "status": EpisodeStatus}
+    types = {**profile.input_types(), "status": String}
     with _raw_writer(directory / schema.payload, types) as append:
         for start, event in [(10.0, "save"), (20.0, "discard"), (30.0, None)]:
             append(
@@ -192,7 +204,7 @@ def test_sparse_actions_inspect_and_convert_with_recording_history(format, tmp_p
         {
             "measured": JointState,
             "commands": JointState,
-            "status": EpisodeStatus,
+            "status": String,
         },
     ) as append:
         # Deliberately insert updates out of timestamp order.

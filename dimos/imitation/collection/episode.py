@@ -15,9 +15,8 @@
 from __future__ import annotations
 
 import json
-from typing import ClassVar, Literal, TypeAlias, cast
+from typing import Any, Literal, TypeAlias
 
-from dimos_lcm.std_msgs import String as LCMString
 from pydantic import BaseModel, FiniteFloat
 
 EpisodeEvent: TypeAlias = Literal["start", "save", "discard", "init"]
@@ -25,15 +24,7 @@ RecordingState: TypeAlias = Literal["idle", "recording"]
 
 
 class EpisodeStatus(BaseModel):
-    """Source-timestamped status update for an imitation-learning episode.
-
-    Versioned JSON uses the existing std_msgs.String LCM envelope. Native
-    recording keeps those bytes and extracts ``ts`` for the observation time.
-    Readers support schema version 1 only; legacy generated-message recordings
-    are intentionally unsupported.
-    """
-
-    msg_name: ClassVar[str] = "imitation_msgs.EpisodeStatus"
+    """Internal episode state and the version-1 JSON recording document."""
 
     ts: FiniteFloat
     state: RecordingState
@@ -42,17 +33,26 @@ class EpisodeStatus(BaseModel):
     last_event: EpisodeEvent = "init"
     task_label: str | None = None
 
-    def lcm_encode(self) -> bytes:
-        """Carry validated episode JSON in the existing String wire envelope."""
-        payload = {"schema_version": 1, **self.model_dump(mode="json")}
-        return cast("bytes", LCMString(data=json.dumps(payload, allow_nan=False)).lcm_encode())
+    def to_json(self) -> str:
+        """Serialize a recording document, independently of its transport."""
+        return json.dumps({"schema_version": 1, **self.model_dump(mode="json")}, allow_nan=False)
 
     @classmethod
-    def lcm_decode(cls, data: bytes) -> EpisodeStatus:
-        payload = json.loads(LCMString.lcm_decode(data).data)
+    def from_json(cls, data: str) -> EpisodeStatus:
+        """Validate a recorded event or a live String payload."""
+        payload = json.loads(data)
         if not isinstance(payload, dict) or "schema_version" not in payload:
             raise ValueError("EpisodeStatus JSON requires schema_version")
         version = payload.pop("schema_version")
         if type(version) is not int or version != 1:
             raise ValueError("Unsupported EpisodeStatus schema_version")
         return cls.model_validate(payload)
+
+    @classmethod
+    def json_schema(cls) -> dict[str, Any]:
+        """Describe the stored JSON document for MCAP readers."""
+        schema = cls.model_json_schema()
+        schema["$id"] = "imitation.episode-status.v1"
+        schema["properties"]["schema_version"] = {"type": "integer", "const": 1}
+        schema["required"].append("schema_version")
+        return schema

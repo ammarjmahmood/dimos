@@ -31,9 +31,9 @@ from dimos.imitation.collection.profile import CollectionFeature, CollectionProf
 from dimos.imitation.collection.recorder import CollectionRecorderConfig, collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.core import OutputConfig, SyncConfig
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.robot.get_all_blueprints import get_by_name
 
 
@@ -104,7 +104,7 @@ def test_factory_exposes_all_typed_inputs_before_autoconnect(count, tmp_path):
     assert {s.name: s.type for s in atom.streams if s.name != "tf"} == {
         **{f"camera_{i}": Image for i in range(count)},
         "measured": JointState,
-        "status": EpisodeStatus,
+        "status": String,
     }
     assert len([s for s in atom.streams if s.name == "measured"]) == 1
     # Autoconnect groups remapped ports by (name, message type).
@@ -161,7 +161,7 @@ def test_recorder_resolves_every_connected_stream(recorder, mocker):
         "camera_1": "jpeg",
         "measured": "lcm",
         "commanded": "lcm",
-        "status": "lcm",
+        "status": "json",
     }
 
 
