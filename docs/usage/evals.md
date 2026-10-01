@@ -479,6 +479,49 @@ dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi --t
 dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi --tags perception
 ```
 
+`Sim2Environment` runs the same kind of case on [sim2](/docs/usage/sim2.md). It launches
+`dimos --transport zenoh --simulation mujoco --scene-package <scene> [--scene-spawn "x, y, z, yaw"]
+--record run <blueprint> <modules>` with the native viewer off, and once MCP answers it calls
+`set_truth_enabled(True)` on the running `SimulationModule` through `Dimos.connect()`, so the
+process running the evals must itself be on the zenoh bus. Ground truth is then the `sim_truth`
+stream, one `SceneState` per 10 Hz tick with every scene entity's world pose, recorded alongside
+`color_image`, `camera_info`, `coordinator_joint_state` and `tf`. `truth_entities` names the
+entity ids (from the scene's `scene.json`) readiness waits for. The recording stays grader-only,
+and `first_entity_pose` / `last_entity_pose` read it back:
+
+```python session=evals ansi=false no-result
+from dimos.evals.environments.lib.sim_truth import first_entity_pose, last_entity_pose
+from dimos.evals.environments.sim2 import Sim2Environment
+
+
+def lifted_cup(o):
+    with recording(o) as store:
+        start = first_entity_pose(store, "cup").position.z
+        end = last_entity_pose(store, "cup").position.z
+    return min(max((end - start) / 0.05, 0.0), 1.0)
+
+
+lift_cup = EvalCase(
+    id="lift_cup",
+    inputs="Pick up the cylinder and hold it in the air above the table.",
+    environment=Sim2Environment(
+        blueprint=["xarm7-planner-coordinator", "mcp-server", "observe-skill", "manipulation-skills"],
+        scene="dimos/evals/scenes/xarm_table",
+        truth_entities=("apple", "cup"),
+    ),
+    grade=lifted_cup,
+    timeout_s=600.0,
+)
+```
+
+`dimos.evals.suites.sim2_xarm` is the `mujoco_xarm` raw variant on sim2: the same two prompts
+and scene text, the world-only `xarm_table` scene, and the `lifted` / `stacked_on` graders with
+their `positions` argument pointed at `sim_truth` instead of `tf`:
+
+```bash skip
+dimos evals run dimos.evals.suites.sim2_xarm --agent dimos.evals.agents.pi
+```
+
 ## Running
 
 - **CLI**: `dimos evals run <dotted.suite> --agent <agent-module> [--set model=gpt-4o] [--tags nav] [--limit 5]`
