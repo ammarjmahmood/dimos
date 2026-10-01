@@ -233,23 +233,36 @@ class SimulationModule(Module):
 
     @rpc
     def stop(self) -> None:
+        """Stop physics and the viewer, then remove the shared memory and model snapshot.
+
+        The removal runs even when a thread refuses to stop, so a failed stop
+        still leaves nothing in /dev/shm for the next launch.
+        """
         self._stop.set()
-        if self._truth_thread is not None:
-            self._truth_thread.join(timeout=5)
-            if self._truth_thread.is_alive():
-                raise RuntimeError("evaluation truth publisher did not stop")
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            if self._thread.is_alive():
-                raise RuntimeError("sim2 physics did not stop")
-        if self._viewer is not None:
-            self._viewer.terminate()
+        try:
+            if self._truth_thread is not None:
+                self._truth_thread.join(timeout=5)
+                if self._truth_thread.is_alive():
+                    raise RuntimeError("evaluation truth publisher did not stop")
+            if self._thread is not None:
+                self._thread.join(timeout=5)
+                if self._thread.is_alive():
+                    raise RuntimeError("sim2 physics did not stop")
+            if self._viewer is not None:
+                self._viewer.terminate()
+                try:
+                    self._viewer.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._viewer.kill()
+                    self._viewer.wait()
+                self._viewer = None
+        finally:
             try:
-                self._viewer.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._viewer.kill()
-                self._viewer.wait()
-            self._viewer = None
+                self._release_world()
+            finally:
+                super().stop()
+
+    def _release_world(self) -> None:
         with self._lifecycle_lock:
             if self._runtime is not None:
                 self._runtime.close()
@@ -257,4 +270,3 @@ class SimulationModule(Module):
             if self._directory is not None:
                 self._directory.cleanup()
                 self._directory = None
-        super().stop()

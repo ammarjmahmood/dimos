@@ -405,10 +405,13 @@ class SimulationRuntime:
             )
 
     def close(self) -> None:
+        """Remove every robot channel and the snapshot channel from shared memory.
+
+        Each channel is torn down on its own, so one failure never leaves
+        another segment behind.
+        """
         if self._closed:
             return
         self._closed = True
         for channel in [*(b.channel for b in self.robots.values()), self.snapshots]:
-            channel.set_lifecycle("closed")
-            channel.unlink()
-            channel.close()
+            channel.release()

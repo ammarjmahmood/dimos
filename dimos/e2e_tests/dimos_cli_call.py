@@ -95,13 +95,16 @@ class DimosCliCall:
             return
 
         try:
-            # Send SIGTERM to the entire process group so child processes
-            # (e.g. the mujoco viewer subprocess) are also terminated.
+            # Signal only the main process. `dimos run` handles SIGTERM by
+            # stopping its modules in order and then sweeping every process
+            # tagged with its run id (workers, viewer). Signalling the whole
+            # group instead kills the workers mid-stop, and the sim2 physics
+            # worker then leaves its shared-memory segments behind.
             try:
-                os.killpg(process.pid, signal.SIGTERM)
+                os.kill(process.pid, signal.SIGTERM)
             except ProcessLookupError:
-                # The group is already gone: the process exited on its own
-                # and an earlier poll()/wait() reaped it.
+                # Already gone: the process exited on its own and an earlier
+                # poll()/wait() reaped it.
                 return
 
             # Record the time when we sent the kill signal
@@ -117,6 +120,13 @@ class DimosCliCall:
                     f"Process took {shutdown_duration:.2f} seconds to shut down, "
                     f"which exceeds the 30-second limit"
                 )
+                # Anything the main process did not sweep. The group id cannot
+                # be reused while a member is alive, so this never hits a
+                # stranger; an empty group raises ProcessLookupError.
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             except subprocess.TimeoutExpired:
                 # If we reach here, the process didn't terminate in 30 seconds
                 os.killpg(process.pid, signal.SIGKILL)

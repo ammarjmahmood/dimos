@@ -296,6 +296,13 @@ feed-forward torque. The adapter latches joint and IMU data together per
 coordinator tick. Native xArm servos retain their original actuator model;
 the gripper retains the hardware API's 0-850 units. No second PD is applied.
 
+Each robot channel and the world snapshot is a shared-memory segment named
+`dms2_` plus a hash of `sim_id/robot_id`, created by the physics worker and
+removed when `SimulationModule` stops, even when that stop fails part way. A
+segment left behind by a crash is replaced on the next build, with one warning
+naming it. A segment whose creating process is still alive means a second
+simulation with the same `sim_id` is running, and the build refuses to start.
+
 ### Performance Boundaries
 
 The previous MuJoCo engine performs camera rendering and lidar raycasting

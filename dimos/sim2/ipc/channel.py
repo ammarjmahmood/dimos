@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing import resource_tracker
 from multiprocessing.shared_memory import SharedMemory
+import os
 import struct
 from typing import Any, Literal
 
@@ -32,6 +34,9 @@ from dimos.sim2.ipc.abi import (
     ChannelDescriptor,
     FrameLayout,
 )
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 _HEADER = struct.Struct("<8sIIIIQQQQQ")
 _FRAME_META = struct.Struct("<QQQQdQ")
@@ -41,6 +46,8 @@ _LIFECYCLE_OFFSET = 20
 _ACTION_SEQUENCE_OFFSET = 24
 _OBSERVATION_SEQUENCE_OFFSET = 32
 _EPISODE_OFFSET = 40
+_TRACKER_PID_OFFSET = 48
+_OWNER_PID_OFFSET = 56
 
 LifecycleState = Literal["starting", "ready", "faulted", "closed"]
 _LIFECYCLE_TO_INT: dict[LifecycleState, int] = {
@@ -95,7 +102,18 @@ class RobotChannel:
 
     @classmethod
     def create(cls, descriptor: ChannelDescriptor) -> RobotChannel:
-        shm = SharedMemory(name=descriptor.shm_name, create=True, size=descriptor.total_size)
+        """Create the shared-memory segment for `descriptor`; this process owns it.
+
+        A segment of the same name whose creating process has died is removed
+        and recreated, with one warning naming it. If that process is still
+        running, another simulation with the same sim_id is up and a
+        RuntimeError says so.
+        """
+        try:
+            shm = SharedMemory(name=descriptor.shm_name, create=True, size=descriptor.total_size)
+        except FileExistsError:
+            _unlink_stale(descriptor)
+            shm = SharedMemory(name=descriptor.shm_name, create=True, size=descriptor.total_size)
         channel = cls(descriptor, shm, owner=True)
         channel._buffer[: descriptor.total_size] = bytes(descriptor.total_size)
         _HEADER.pack_into(
@@ -110,7 +128,7 @@ class RobotChannel:
             0,
             0,
             _resource_tracker_pid(),
-            0,
+            os.getpid(),
         )
         return channel
 
@@ -122,13 +140,15 @@ class RobotChannel:
         if magic != CHANNEL_MAGIC or abi != ABI_VERSION:
             channel.close()
             raise ValueError(f"invalid sim2 channel header for robot '{descriptor.robot_id}'")
-        owner_tracker_pid = struct.unpack_from("<Q", channel._buffer, 48)[0]
+        owner_tracker_pid = struct.unpack_from("<Q", channel._buffer, _TRACKER_PID_OFFSET)[0]
         if owner_tracker_pid != _resource_tracker_pid():
-            try:
-                resource_tracker.unregister(channel._shm._name, "shared_memory")  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            _untrack(shm)
         return channel
+
+    @property
+    def owner_pid(self) -> int:
+        """Process id of the process that created this segment."""
+        return int(struct.unpack_from("<Q", self._buffer, _OWNER_PID_OFFSET)[0])
 
     @property
     def lifecycle(self) -> LifecycleState:
@@ -289,12 +309,32 @@ class RobotChannel:
         self._closed = True
 
     def unlink(self) -> None:
+        """Remove the segment's name so no new process can attach; owner only."""
         if not self._owner:
             raise RuntimeError("only the channel owner may unlink shared memory")
         try:
             self._shm.unlink()
         except FileNotFoundError:
             pass
+
+    def release(self) -> None:
+        """Owner teardown: mark the channel closed, unlink the segment, unmap it.
+
+        Every step runs even if an earlier one fails, so nothing stays behind in
+        /dev/shm for the next launch to trip over. Failures are logged.
+        """
+        steps: tuple[Callable[[], None], ...] = (
+            lambda: self.set_lifecycle("closed"),
+            self.unlink,
+            self.close,
+        )
+        for step in steps:
+            try:
+                step()
+            except Exception:
+                logger.exception(
+                    "sim2 channel teardown step failed", shm_name=self.descriptor.shm_name
+                )
 
     def __enter__(self) -> RobotChannel:
         return self
@@ -307,3 +347,61 @@ def _resource_tracker_pid() -> int:
     tracker = resource_tracker._resource_tracker  # type: ignore[attr-defined]
     tracker.ensure_running()
     return int(tracker._pid or 0)  # type: ignore[attr-defined]
+
+
+def _untrack(shm: SharedMemory) -> None:
+    """Stop this process's resource tracker from unlinking a segment it does not own."""
+    try:
+        resource_tracker.unregister(shm._name, "shared_memory")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _unlink_stale(descriptor: ChannelDescriptor) -> None:
+    """Remove a leftover segment named like `descriptor`, or refuse if its creator is alive."""
+    try:
+        shm = SharedMemory(name=descriptor.shm_name, create=False)
+    except FileNotFoundError:
+        return
+    try:
+        owner = _owner_pid(shm)
+        if owner and _pid_alive(owner):
+            raise RuntimeError(
+                f"sim2 shared memory '{descriptor.shm_name}' for "
+                f"'{descriptor.sim_id}/{descriptor.robot_id}' belongs to running process "
+                f"{owner}: a simulation with sim_id '{descriptor.sim_id}' is already up; "
+                "stop it or launch with a different sim_id"
+            )
+        logger.warning(
+            "replacing stale sim2 shared memory left by a dead process",
+            shm_name=descriptor.shm_name,
+            robot=f"{descriptor.sim_id}/{descriptor.robot_id}",
+            owner_pid=owner,
+        )
+        shm.unlink()
+    except BaseException:
+        _untrack(shm)
+        raise
+    finally:
+        shm.close()
+
+
+def _owner_pid(shm: SharedMemory) -> int:
+    """Creator pid recorded in a segment's header, or 0 if the header is not ours."""
+    buffer = shm.buf
+    if buffer is None or shm.size < CHANNEL_HEADER_SIZE:
+        return 0
+    magic, abi = struct.unpack_from("<8sI", buffer, 0)
+    if magic != CHANNEL_MAGIC or abi != ABI_VERSION:
+        return 0
+    return int(struct.unpack_from("<Q", buffer, _OWNER_PID_OFFSET)[0])
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
