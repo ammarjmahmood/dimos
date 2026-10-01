@@ -11,6 +11,7 @@ on:
       - native/rust/dimos-lcm-transport/**
       - scripts/*message*codegen*
       - scripts/test_message_packages.sh
+      - scripts/package_messages.sh
       - scripts/test_message_mcap.sh
       - dimos/protocol/cdr_mcap.py
       - dimos/protocol/test_cdr_mcap.py
@@ -64,11 +65,20 @@ jobs:
             dimos/message_codegen/test_ownership.py \
             dimos/message_codegen/test_ownership_native.py \
             dimos/message_codegen/test_project_install.py
+      - name: Package matching built-in CMake and Rust artifacts
+        run: bash scripts/package_messages.sh
+      - name: Consume relocated built-in native packages
+        env:
+          DIMOS_BUILTIN_PACKAGE: ${{ github.workspace }}/build/message-codegen/release
+          DIMOS_FASTCDR_PREFIX: ${{ github.workspace }}/build/message-codegen/install
+        run: .venv/bin/python -m pytest -o addopts="" --noconftest -q dimos/message_codegen/test_builtin_artifacts.py
       - name: Retain standalone message build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: message-authoring-packages
-          path: build/message-codegen/ux-wheelhouse/dimos*
+          path: |
+            build/message-codegen/ux-wheelhouse/dimos*
+            build/message-codegen/release/dist/*
       - name: Record generated CDR and verify both viewer decoders
         run: bash scripts/test_message_mcap.sh
       - name: Retain self-contained recording and viewer evidence

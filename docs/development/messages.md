@@ -10,6 +10,10 @@ These packages currently belong to the CDR proposal, not a released main-branch
 API. Use matching review wheels for `dimos`, `dimos-generated` and
 `dimos-message-build`; `PIP_FIND_LINKS` can point pip at that wheel directory.
 Do not assume these proposal versions are available on a public package index.
+The `message-authoring-packages` CI artifact also contains matching built-in
+CMake headers (`dimos-messages-cmake-0.1.0.tar.gz`) and a Rust crate
+(`dimos-generated-messages-0.1.0.crate`). These use the message package's version,
+independently of the DimOS runtime version; native consumers do not regenerate them.
 
 ## Define one message
 

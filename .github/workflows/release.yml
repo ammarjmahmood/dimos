@@ -168,9 +168,7 @@ jobs:
       - run: uv venv .venv --python 3.12
       - run: bash scripts/setup_message_codegen.sh
       - name: Package CMake headers, schemas, and native Rust sources
-        env:
-          MESSAGE_VERSION: ${{ needs.validate.outputs.version }}
-        run: bash scripts/package_messages.sh "$MESSAGE_VERSION"
+        run: bash scripts/package_messages.sh
       - uses: actions/upload-artifact@v7
         with:
           name: native-message-packages
