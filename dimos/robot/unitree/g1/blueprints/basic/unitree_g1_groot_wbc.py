@@ -18,7 +18,7 @@ One blueprint, ``--simulation`` flag picks the backend:
 
 Real hardware (default):
     G1WholeBodyConnection (DDS rt/lowstate <-> rt/lowcmd) + transport_lcm
-    whole-body adapter. 500 Hz tick. Safety profile: unarmed + dry-run on
+    whole-body adapter. 100 Hz tick. Safety profile: unarmed + dry-run on
     start; activate explicitly through ControlCoordinator RPC after
     verifying commands. The policy ramps from the current pose to its
     bent-knee default over 10 s before taking torque control. The 14 arm
@@ -30,6 +30,10 @@ Sim (``--simulation``):
     50 Hz tick (matches the rate the policy was trained at). No arming
     ramp and no dry-run. The same bounded arm-command path is available in
     simulation and on hardware.
+
+Both use the existing ray-traced voxel map, MLS global planner, body-aware
+local planner and trajectory follower. Only sensors, TF frames and the
+hardware connection differ; the G1 navigation body is shared.
 
 Usage:
     dimos run unitree-g1-groot-wbc                 # real hardware
@@ -45,7 +49,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from dimos.control.components import HardwareComponent, HardwareType
 from dimos.control.coordinator import TaskConfig
@@ -58,16 +62,16 @@ from dimos.core.transport import LCMTransport
 from dimos.hardware.whole_body.spec import WholeBodyConfig
 from dimos.manipulation.planning.kinematics.config import PinkKinematicsConfig
 from dimos.manipulation.planning.spec.config import RobotModelConfig
-from dimos.mapping.costmapper import CostMapper
-from dimos.mapping.pointclouds.occupancy import HeightCostConfig
+from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path as NavPath
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.MotorCommandArray import MotorCommandArray
-from dimos.navigation.go2.replanning_a_star.module import ReplanningAStarPlanner
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
+from dimos.navigation.local_planner.native import LocalPlannerNative
 from dimos.navigation.movement_manager.movement_manager import MovementManager
-from dimos.robot.unitree.g1.config import G1
+from dimos.navigation.trajectory_follower.fancy.native import TrajectoryFollowerNative
 from dimos.robot.unitree.g1.control_config import (
     G1_GROOT_KD,
     G1_GROOT_KP,
@@ -77,11 +81,11 @@ from dimos.robot.unitree.g1.control_config import (
 )
 from dimos.robot.unitree.g1.g1_rerun import (
     G1_RERUN_ROOT,
-    g1_costmap,
     g1_urdf_joint_state,
     g1_urdf_static_robot,
 )
 from dimos.robot.unitree.g1.manip_config import G1_TELEOP_ARM_MODEL
+from dimos.robot.unitree.g1.navigation import G1_GROOT_NAVIGATION
 from dimos.robot.unitree.g1.teleop_ik import G1PinkPoseTargetSolver
 from dimos.utils.data import LfsPath
 from dimos.visualization.rerun.scene_package import scene_package_static_entities
@@ -93,13 +97,7 @@ from dimos.visualization.vis_module import vis_module
 _GROOT_MODEL_DIR = LfsPath("groot")
 
 _cmd_vel_topic = "/cmd_vel" if global_config.simulation else "/g1/cmd_vel"
-_G1_NAV_VOXEL_RESOLUTION = 0.05
-# go2 nav_3d resolution; 0.05 saturates the raytracer on the Orin.
-_G1_REAL_NAV_VOXEL_RESOLUTION = 0.08
-_G1_NAV_OVERHEAD_SAFETY_MARGIN = 0.2
-_G1_NAV_MAX_STEP_HEIGHT = 0.10
-_G1_NAV_ROTATION_DIAMETER = 0.8
-_G1_NAV_SAFE_RADIUS_MARGIN = 0.6
+_G1_NAV_VOXEL_RESOLUTION = 0.08
 
 
 class _G1GrootCoordinator(TeleopControlCoordinator):
@@ -116,7 +114,6 @@ if global_config.simulation and global_config.simulation != "mujoco":
     raise ValueError("unitree-g1-groot-wbc only supports --simulation mujoco")
 
 if global_config.simulation == "mujoco":
-    from dimos.mapping.voxels.module import VoxelGridMapper
     from dimos.robot.unitree.g1.sim2 import G1_GROOT
     from dimos.sim2.blueprint import simulation
     from dimos.sim2.scene import scene_path, scene_robot
@@ -135,27 +132,13 @@ if global_config.simulation == "mujoco":
     _default_ramp_seconds = 0.0
     _decimation: int | None = 1
     _n_workers = 2  # sim: keep the default worker count
-    _mapper = VoxelGridMapper.blueprint(emit_every=1)
-    _nav_stack = autoconnect(
-        _mapper,
-        CostMapper.blueprint(
-            config=HeightCostConfig(
-                resolution=_G1_NAV_VOXEL_RESOLUTION,
-                can_pass_under=G1.height_clearance + _G1_NAV_OVERHEAD_SAFETY_MARGIN,
-                can_climb=_G1_NAV_MAX_STEP_HEIGHT,
-            ),
-        ),
-        ReplanningAStarPlanner.blueprint(
-            robot_width=G1.width_clearance,
-            robot_rotation_diameter=_G1_NAV_ROTATION_DIAMETER,
-        ),
-        MovementManager.blueprint(),
-    )
-    _nav_remappings = [(VoxelGridMapper, "lidar", "pointcloud")]
+    _nav_inputs = autoconnect()
+    _nav_base_frame = "g1/pelvis"
+    _lidar_topic = "pointcloud"
 else:
     from dimos.hardware.sensors.lidar.pointlio.module import PointLio
     from dimos.hardware.sensors.lidar.pointlio.pointlio_blueprints import mid360_for_pointlio
-    from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
+    from dimos.robot.unitree.g1.g1_tf_publisher import G1TfPublisher
     from dimos.robot.unitree.g1.wholebody_connection import G1WholeBodyConnection
 
     # Real-hw backend: DDS connection module + transport_lcm adapter.
@@ -179,34 +162,53 @@ else:
     _decimation = 2  # 100 Hz tick / 2 = 50 Hz policy (training + sim rate).
     # One process per heavy module; fewer workers starve the Rerun bridge.
     _n_workers = 11
-    # Same nav middle as unitree-g1-nav-simple, fed by Point-LIO from the
-    # MID-360, executed through the coordinator's twist_command.
-    _nav_stack = autoconnect(
+    _nav_inputs = autoconnect(
         mid360_for_pointlio(),
-        PointLio.blueprint(),
-        RayTracingVoxelMap.blueprint(
-            voxel_size=_G1_REAL_NAV_VOXEL_RESOLUTION,
-            emit_every=0,  # no local_map consumer here
-            global_emit_every=4,  # ~1 Hz global map; also paces the costmap
-            # Clearing matched to go2 nav_3d.
-            max_health=10,
-            graze_cos=0.85,
-        ),
-        CostMapper.blueprint(
-            config=HeightCostConfig(
-                resolution=_G1_REAL_NAV_VOXEL_RESOLUTION,
-                can_pass_under=G1.height_clearance + _G1_NAV_OVERHEAD_SAFETY_MARGIN,
-                can_climb=_G1_NAV_MAX_STEP_HEIGHT,
-            ),
-            initial_safe_radius_meters=G1.width_clearance + _G1_NAV_SAFE_RADIUS_MARGIN,
-        ),
-        ReplanningAStarPlanner.blueprint(
-            robot_width=G1.width_clearance,
-            robot_rotation_diameter=_G1_NAV_ROTATION_DIAMETER,
-        ),
-        MovementManager.blueprint(),
+        PointLio.blueprint(frame_id="world"),
+        G1TfPublisher.blueprint(),
     )
-    _nav_remappings = []
+    _nav_base_frame = "base_link"
+    _lidar_topic = "lidar"
+
+
+_nav_stack = autoconnect(
+    _nav_inputs,
+    RayTracingVoxelMap.blueprint(
+        world_frame="world",
+        voxel_size=_G1_NAV_VOXEL_RESOLUTION,
+        emit_every=1,
+        global_emit_every=50,
+    ).remappings([(RayTracingVoxelMap, "lidar", _lidar_topic)]),
+    MLSPlannerNative.blueprint(
+        world_frame="world",
+        base_frame=_nav_base_frame,
+        voxel_size=_G1_NAV_VOXEL_RESOLUTION,
+        robot_height=G1_GROOT_NAVIGATION.height,
+        start_z_offset_m=G1_GROOT_NAVIGATION.base_height,
+        surface_closing_radius=0.3,
+        wall_clearance_m=G1_GROOT_NAVIGATION.precision,
+        wall_buffer_m=G1_GROOT_NAVIGATION.width / 2.0,
+        wall_buffer_weight=20.0,
+        step_threshold_m=G1_GROOT_NAVIGATION.steppable,
+        step_penalty_weight=4.0,
+        viz_publish_hz=0.0,
+    ).remappings(
+        [
+            (MLSPlannerNative, "global_map", "global_map_unused"),
+            (MLSPlannerNative, "path", "planner_path"),
+        ]
+    ),
+    LocalPlannerNative.blueprint(
+        world_frame="world",
+        base_frame=_nav_base_frame,
+        embodiment=G1_GROOT_NAVIGATION,
+    ),
+    TrajectoryFollowerNative.blueprint(
+        base_frame=_nav_base_frame,
+        embodiment=G1_GROOT_NAVIGATION,
+    ),
+    MovementManager.blueprint(),
+)
 
 
 _arm_trajectory_task = joint_trajectory_task(
@@ -269,8 +271,6 @@ _G1_TELEOP_PINK = PinkKinematicsConfig(
     lm_damping=0.01,
     gain=0.25,
 )
-# Nominal standing pelvis height; matches G1GrootWBCTask's height_cmd.
-_G1_NOMINAL_PELVIS_Z = 0.74
 _g1_pelvis_mid360_cache: list[Any] = []
 
 
@@ -307,16 +307,6 @@ def _g1_real_odometry_root(odom: Any) -> Any:
     )
 
 
-def _g1_real_ground_z() -> float:
-    """Ground height in the LIO boot frame: -(mount z + nominal pelvis z)."""
-    return -(float(_g1_pelvis_to_mid360()[2, 3]) + _G1_NOMINAL_PELVIS_Z)
-
-
-def _g1_real_costmap(grid: Any) -> Any:
-    """Costmap rendered on the actual ground plane of the boot frame."""
-    return g1_costmap(grid, z_offset=_g1_real_ground_z() + 0.02)
-
-
 _static_rerun_entities: dict[str, Any] = {
     _G1_ROOT: g1_urdf_static_robot(root_path=_G1_ROOT),
 }
@@ -327,8 +317,7 @@ _rerun_config: dict[str, Any] = {
     "blueprint": _g1_groot_rerun_blueprint,
     "visual_override": {
         _G1_JOINTS_ENTITY: g1_urdf_joint_state(root_path=_G1_ROOT),
-        "world/global_costmap": g1_costmap,
-        "world/navigation_costmap": g1_costmap,
+        "world/planner_path": _g1_nav_path,
         "world/path": _g1_nav_path,
     },
     "max_hz": {
@@ -339,10 +328,9 @@ _rerun_config: dict[str, Any] = {
         "world/g1/motor_command": 10.0,
         "world/odometry": 15.0,
         "world/global_map": 1.0,
-        "world/global_costmap": 2.0,
-        "world/navigation_costmap": 2.0,
-        # The planner publishes an empty Path() immediately before the new
-        # planned path. Throttling this entity drops the real path.
+        "world/local_map": 5.0,
+        # Do not throttle away a path clearing message.
+        "world/planner_path": 0,
         "world/path": 0,
     },
     "static": _static_rerun_entities,
@@ -350,8 +338,6 @@ _rerun_config: dict[str, Any] = {
 
 if global_config.simulation != "mujoco":
     _rerun_config["visual_override"]["world/odometry"] = _g1_real_odometry_root
-    _rerun_config["visual_override"]["world/global_costmap"] = _g1_real_costmap
-    _rerun_config["visual_override"]["world/navigation_costmap"] = _g1_real_costmap
     # Raw scan is sensor-frame (LIO contract); the voxel map is the live view.
     _rerun_config["visual_override"]["world/lidar"] = None
     _rerun_config["visual_override"]["world/lidar_raw"] = None
@@ -428,6 +414,4 @@ _unitree_g1_groot_wbc_core = (
     .global_config(robot_model="unitree_g1", n_workers=_n_workers)
 )
 
-unitree_g1_groot_wbc = autoconnect(_unitree_g1_groot_wbc_core, _nav_stack, _viewer()).remappings(
-    cast("Any", _nav_remappings)
-)
+unitree_g1_groot_wbc = autoconnect(_unitree_g1_groot_wbc_core, _nav_stack, _viewer())

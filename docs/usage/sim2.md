@@ -46,6 +46,36 @@ MuJoCo viewer. Disable it with the module override
 absolute XML path, or a directory containing `scene.xml` uses the same loader.
 Defaults without `--scene-package` remain the small logistics/workbench scenes.
 
+### G1 Navigation
+
+The existing `unitree-g1-groot-wbc` blueprint now composes main's 3D navigation
+modules, independently of the simulator implementation:
+
+```text
+lidar + TF -> RayTracingVoxelMap -> MLSPlannerNative -> planner_path
+                        local_map + TF + planner_path -> LocalPlannerNative
+                        path + TF -> TrajectoryFollowerNative -> nav_cmd_vel
+                        MovementManager -> cmd_vel -> ControlCoordinator
+```
+
+MLS plans over multi-level surfaces. The local planner plans a ground robot's
+footprint in SE(2), not arbitrary flying motion. Rerun clicks still select a
+goal, and keyboard commands still take precedence through MovementManager.
+There is no CostMapper or 2D A* in this blueprint and no shared mapper/planner
+implementation change.
+
+`dimos/robot/unitree/g1/navigation.py` supplies the same G1 body to the local
+planner and follower. Initial conservative limits are 0.3 m/s and 0.5 rad/s;
+the nominal pelvis height is 0.74 m. This is initial tuning for tucked-arm
+walking, not a calibrated hardware gait or a carrying/reaching envelope.
+The native modules build their existing Rust binaries on first use when
+missing; that compilation is separate from steady-state startup.
+
+Simulation uses sensor-frame lidar and `world -> g1/pelvis` from sim2.
+Hardware uses Point-LIO in `world` plus the existing G1 mount/waist TF
+publisher to locate `base_link`. Hardware remains unarmed and dry-run on
+startup. The separate G1 teleop control core still excludes navigation.
+
 The first download of existing robot meshes and GR00T policies is separate
 from measured startup. Install the existing simulation and robot dependencies.
 The simulation extra requires MuJoCo 3.10 or newer for batched raycasting.

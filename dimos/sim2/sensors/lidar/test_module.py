@@ -42,7 +42,8 @@ def module():
 
 @pytest.mark.parametrize("pitch", [0.0, -0.35, 0.35])
 def test_g1_scan_excludes_ceiling_after_mount_rotation(pitch, module, mocker):
-    sensor = module.config.sensor
+    sensor = replace(module.config.sensor, output_frame="world")
+    module.config.sensor = sensor
     model = mujoco.MjModel.from_xml_string(f"""
         <mujoco>
           <compiler angle="radian"/>
@@ -80,7 +81,6 @@ def test_g1_scan_excludes_ceiling_after_mount_rotation(pitch, module, mocker):
 
 
 def test_sensor_frame_preserves_ray_origin_and_cloud_timestamp(module, mocker):
-    module.config.sensor = replace(module.config.sensor, output_frame="sensor")
     model = mujoco.MjModel.from_xml_string("""
         <mujoco><compiler angle="radian"/><worldbody>
           <geom type="plane" size="10 10 0.1"/>

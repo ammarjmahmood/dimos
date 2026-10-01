@@ -97,6 +97,7 @@ G1_GROOT = RobotConfig(
             "mid360_link",
             Fibonacci,
             rate_hz=10.0,
+            output_frame="sensor",
             maximum_world_elevation=0.0,
         ),
         Camera("camera", camera="front_camera"),

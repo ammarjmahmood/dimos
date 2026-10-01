@@ -24,9 +24,8 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.mapping.pointclouds.occupancy import (
     OCCUPANCY_ALGOS,
-    GeneralOccupancyConfig,
     HeightCostConfig,
-    SimpleOccupancyConfig,
+    OccupancyConfig,
 )
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -37,10 +36,7 @@ logger = setup_logger()
 
 class Config(ModuleConfig):
     algo: str = "height_cost"
-    # Resolve concrete defaults after overrides, not before merging different algorithms.
-    config: HeightCostConfig | GeneralOccupancyConfig | SimpleOccupancyConfig = Field(
-        default_factory=dict, validate_default=True
-    )
+    config: OccupancyConfig = Field(default_factory=HeightCostConfig)
     # for robots that cant see directly below themself
     initial_safe_radius_meters: float = 0.0
 

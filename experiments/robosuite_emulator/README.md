@@ -6,6 +6,60 @@ This is a working alternative for comparison, not an accepted migration.
 The original worktree, user changes, running simulator and upstream source
 were not modified.
 
+## G1 Navigation Migration (2026-10-01)
+
+Pim approved migrating the existing G1 GR00T blueprint to main's newer
+navigation composition instead of retaining the old CostMapper workaround.
+Both hardware and simulation now use RayTracingVoxelMap -> MLSPlannerNative
+-> LocalPlannerNative -> TrajectoryFollowerNative -> MovementManager -> the
+unchanged GR00T ControlCoordinator. G1's explicit body and conservative
+motion tuning live in `dimos/robot/unitree/g1/navigation.py`; Go2's fitted
+slip/envelope are not reused. Real hardware safety/arming settings remain.
+
+Simulation emits sensor-frame scans so ray clearing starts at the mounted
+lidar, and navigation reads its existing `world -> g1/pelvis` TF. Hardware
+uses Point-LIO plus main's existing G1 waist/mount publisher. The navigation
+inputs are kept out of the control-only core consumed by G1 WebXR teleop.
+Costmap display helpers and the duplicated sim/hardware 2D stacks are removed.
+
+The mapping patch `1949f9ce8` and its regression test are removed. Shared
+mapping, planning and coordination implementations match main `aed43d007`.
+This is blueprint configuration, not a new simulator navigation subsystem.
+Hardware navigation and collision margins are not claimed calibrated.
+
+Verified: 38 focused full-blueprint/serialization, G1 teleop/TF, sim2 wiring
+and registry checks and four MuJoCo lidar frame/origin checks pass; selected
+production files pass mypy and Ruff.
+The first test attempts had incorrect fixture inputs (hardware mode and scene
+selection, and the PoseStamped constructor); those were corrected without
+production workarounds.
+
+**Live navigation check:** actual `unitree-g1-groot-wbc` in the installed
+logistics scene, offscreen camera/lidar enabled, no GUI. All four unmodified
+native navigation binaries built successfully with their checked-in lockfiles.
+A private loopback Zenoh router isolated the probe from other applications.
+No direct motor/velocity command was injected: one `clicked_point` requested
+a goal 1 m ahead, through the normal MovementManager goal relay.
+
+- Blueprint startup: 2.332 s after native compilation and asset installation.
+- Follower reported arrival after 3.428 s. Initial pelvis position
+  `(-0.1117, -0.0006, 0.7409)`, final `(0.6581, -0.0293, 0.7416)`.
+  Displacement 0.770 m; distance to requested goal 0.232 m. MLS snaps to
+  its surface graph; the follower's 0.2 m tolerance applies to the local
+  path endpoint, not necessarily the original clicked point.
+- Observed 34 local maps, 33 global paths, 17 local paths, 34 navigation
+  commands reaching `cmd_vel`, and one arrival event. No simulator error;
+  G1 remained standing. All four native processes exited with code 0 and
+  all workers stopped. This short run does not resolve earlier shutdown races.
+- Initial TF lookup warnings and one dropped startup cloud were visible.
+  The probe router unnecessarily inherited its own connect endpoint, producing
+  self-connection warnings; it still served every worker. This is probe setup,
+  not a transport patch or a clean-log claim.
+
+Log: `/tmp/sim2-g1-3d-nav-20261001.log`; probe:
+`/tmp/demo_g1_3d_nav_20261001.py`. This proves short flat-floor goal following,
+not stairs, tight obstacle avoidance, hardware operation or calibrated margins.
+
 ## Task Reset And Eval Reliability (2026-10-01)
 
 This continuation remains an isolated comparison, not adoption for native V1.
@@ -72,10 +126,9 @@ declarations, tests and public API. `dimos/core/coordination` now matches main.
 The live run below predates that removal; it is historical evidence, not a
 claim that shutdown ordering is guaranteed on the current branch.
 
-The separate mapping prerequisite, `1949f9ce8`, remains: it reconstructs the
-existing concrete costmap settings after blueprint serialization. Removing it
-makes main's parser reject G1's height-clearance and step-height settings.
-No mapping algorithm changes are included.
+The separate mapping patch `1949f9ce8` was initially retained for the old
+CostMapper-based G1 blueprint. It is now removed by the G1 navigation migration
+above; that blueprint no longer requires CostMapper configuration.
 
 `dimos/evals/suites/robosuite_lift.py` remains one original Lift eval using the
 normal agent, blueprint, recording and runner. `LiftEnvironment.prepare_recording`
