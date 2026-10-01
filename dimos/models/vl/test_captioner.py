@@ -16,11 +16,11 @@ from collections.abc import Generator
 import time
 from typing import Protocol, TypeVar
 
+from dimos_generated.sensor_msgs.msg import Image
 import pytest
 
 from dimos.models.vl.florence import Florence2Model
 from dimos.models.vl.moondream import MoondreamVlModel
-from dimos_generated.sensor_msgs.msg import Image
 from dimos.msgs.image import image_from_file
 from dimos.utils.data import get_data
 
