@@ -65,7 +65,7 @@ def test_separate_packages_share_types_and_exchange_cdr(tmp_path):
         subprocess.run(["cmake", "--install", str(package / "build")], check=True)
     env = {
         **os.environ,
-        "PYTHONPATH": os.pathsep.join([str(base / "build"), str(custom / "build")]),
+        "PYTHONPATH": os.pathsep.join([str(base / "python"), str(custom / "python")]),
     }
     python = """
 from ownership_base.std_msgs.msg import Header

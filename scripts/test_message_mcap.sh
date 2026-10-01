@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 output="$PWD/build/message-codegen/viewers"
 mkdir -p "$output/evidence"
-export PYTHONPATH="$PWD/build/message-codegen/demo/cpp/build:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/build/message-codegen/demo/python:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 .venv/bin/python -m pytest dimos/protocol/test_cdr_mcap.py --noconftest -o addopts='' -q \
   | tee "$output/evidence/pytest.txt"
 .venv/bin/python examples/message-codegen/demo_mcap.py --output "$output/demo.mcap" \

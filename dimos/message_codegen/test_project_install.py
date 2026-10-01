@@ -23,15 +23,12 @@ import pytest
 
 def test_clean_source_wheel_sdist_and_editable_install(tmp_path):
     wheelhouse = os.environ.get("DIMOS_MESSAGE_WHEELHOUSE")
-    prefix = os.environ.get("DIMOS_FASTCDR_PREFIX")
-    if not wheelhouse or not prefix:
-        pytest.skip(
-            "Set DIMOS_MESSAGE_WHEELHOUSE and DIMOS_FASTCDR_PREFIX for isolated install acceptance"
-        )
+    if not wheelhouse:
+        pytest.skip("Set DIMOS_MESSAGE_WHEELHOUSE for isolated install acceptance")
     wheelhouse = str(Path(wheelhouse).resolve())
     environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     environment.update(
-        PIP_NO_INDEX="1", PIP_FIND_LINKS=wheelhouse, CMAKE_PREFIX_PATH=str(Path(prefix).resolve())
+        PIP_NO_INDEX="1", PIP_FIND_LINKS=wheelhouse, CC="/bin/false", CXX="/bin/false"
     )
     venv = tmp_path / "venv"
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)

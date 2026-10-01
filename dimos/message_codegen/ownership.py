@@ -23,8 +23,7 @@ from pathlib import Path
 import re
 
 from .definitions import Definitions, Message
-
-ABI = "dimos-cdr-pybind11-3.0.1-fastcdr-2.4.0-v1"
+from .python import ABI as ABI
 
 
 @dataclass(frozen=True)

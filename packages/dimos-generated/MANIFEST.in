@@ -1,4 +1,2 @@
-include pyproject.toml setup.py
-graft _codegen
-prune build
+graft src
 global-exclude __pycache__ *.pyc

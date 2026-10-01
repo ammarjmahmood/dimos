@@ -3,7 +3,7 @@
 This package reads ROS2 `.msg` files without importing or installing ROS. A pinned
 upstream `rosidl_adapter` parser validates syntax. DimOS resolves package names and
 dependencies, then emits C++ value types and Fast CDR customizations, Python
-bindings to those types, and native Rust types using Serde and `re_cdr`.
+plain source classes with CDR codecs, and native Rust types using Serde and `re_cdr`.
 
 ```bash
 python -m dimos.message_codegen.generate \
@@ -17,20 +17,8 @@ before output is written. Repeat `--package-root` and `--type` for multiple inpu
 omitting `--type` generates all available definitions. The output belongs in an
 ignored build directory. Generation never downloads dependencies.
 
-The `typing/<module>/` output describes the native Python fields, keyword-only
-constructors, sequence operations, and NumPy views. For a local generated build,
-point `MYPYPATH` at `typing/`. Wheels install the same interfaces as a PEP 561
-`<module>-stubs` package, so callers get type checking without source generation
-or runtime introspection. Fixed-array interfaces omit resizing methods.
-
-DimOS-owned definitions live under `schemas/dimos_msgs/msg/`. They use the same
-generation and packaging path as the pinned standard definitions. In particular,
-weighted line segments have explicit endpoints and weights; they do not reuse
-Path poses or quaternion fields. Stamped custom messages use standard Header,
-and trajectory durations use builtin_interfaces/Duration. Numeric convenience
-operations belong in helpers such as `dimos.msgs.time`, outside generated types.
-
-Python and C++ use Fast CDR 2.4.0; Python bindings use pybind11 3.0.1. Rust uses
+Python emits plain source values and uses rosbags 0.11.0 for CDR; C++ uses
+Fast CDR 2.4.0. Python message use requires no native message compilation. Rust uses
 `re_cdr` 0.1.0 and `serde-big-array` 0.5.1. The current generator explicitly rejects
 `wstring` because the selected Rust backend has no matching wide-string Serde
 representation. No bundled definition uses it. Service/action generation is out
@@ -58,22 +46,35 @@ To refresh the pinned inputs intentionally, edit the revisions in
 Applications and builds never run the maintenance downloader.
 
 This work is being delivered through the `replace-lcm-message-encoding` OpenSpec
-change. Generation and the runtime cutover are reviewed as separate layers;
-see the message tutorials for the workflow appropriate to your checkout.
+change. The generated pipeline is under development; the old runtime message APIs
+have not yet been replaced.
 
 ## Distribution
 
 Pass `--package` to emit a setuptools source project in `python/`, alongside the
 CMake project and Cargo crate. `--python-module` gives independent message
-packages distinct extension names; `--version` sets the package version.
-The Python sdist contains the generator, its pinned parser, and all definition
-inputs. Building the sdist regenerates source without ROS. The wheel contains
-native code plus definitions, licenses, and the `dimos.messages` provider.
+packages distinct import namespaces; `--version` sets the package version.
+The Python sdist contains generated Python source and complete schemas. Wheel, source and editable installs use setuptools
+and do not run message generation, CMake or a C++ compiler. The C++ headers and
+Rust crate remain source resources compiled by their native consumers.
 
-The independent `packages/dimos-generated` project owns built-in generation and
-the Python extension build. The root DimOS `setup.py` consumes that package.
-The release workflow preserves the existing Linux x86_64/aarch64 and macOS arm64
-wheel matrix and adds CMake/schema and Cargo source packages to GitHub releases.
-Source developers run `bash scripts/setup_message_codegen.sh` before building;
-`scripts/install.sh --mode dev` does this during dependency setup. Ordinary wheel
-users need no compiler, generator run, or ROS installation.
+Built-in source is checked into `packages/dimos-generated/src`. Maintainers run:
+
+```sh
+python scripts/generate_builtin_messages.py
+python scripts/generate_builtin_messages.py --check
+```
+
+This explicit authoring command needs Ruff 0.14.3 and rustfmt for deterministic
+formatting. Normal checkout installation uses the checked-in Python source:
+
+```sh
+pip install packages/dimos-generated
+```
+
+CI rejects source drift and verifies wheel/source/editable installation with
+message compiler commands disabled. DimOS's unrelated native runtime extensions
+retain their own build requirements.
+Native C++ applications still require explicit Fast CDR toolchain setup. The
+standalone conformance CI builds this dependency for native consumer tests;
+normal Python checkout installation does not.

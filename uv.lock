@@ -2687,6 +2687,17 @@ tests-self-hosted = [
 name = "dimos-generated"
 version = "0.1.0"
 source = { directory = "packages/dimos-generated" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "rosbags" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.26.4" },
+    { name = "rosbags", specifier = "==0.11.0" },
+]
 
 [[package]]
 name = "dimos-lcm"
@@ -2708,7 +2719,6 @@ name = "dimos-message-build"
 version = "0.1.0"
 source = { directory = "dimos/message_codegen" }
 dependencies = [
-    { name = "pybind11" },
     { name = "setuptools" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "wheel" },
@@ -2716,7 +2726,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pybind11", specifier = "==3.0.1" },
     { name = "setuptools", specifier = ">=70" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
     { name = "wheel" },

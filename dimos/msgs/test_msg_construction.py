@@ -177,7 +177,7 @@ def test_covariance_defaults_layout_and_length(message_type) -> None:
     message = message_type(covariance=covariance.flatten().tolist())
     np.testing.assert_array_equal(np.asarray(message.covariance).reshape(6, 6), covariance)
     for invalid in ([1, 2, 3], [0.0] * 35, [0.0] * 37):
-        with pytest.raises(RuntimeError, match="Unable to cast"):
+        with pytest.raises(ValueError, match="fixed-array length"):
             message_type(covariance=invalid)
 
 
