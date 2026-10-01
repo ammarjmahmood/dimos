@@ -438,3 +438,37 @@ Local development evidence is retained outside the repository in
 `radio-variation-cpu.json`; the accepted host CPU run was isolated in
 `/tmp/radio-variation-cpu.iH0rmz`. No simulator/GPU worker, physical controller,
 paid request or new dataset download was started for this preparation.
+
+
+### Full attachment dry run before the paid grounding stage
+
+The development launcher must start the coordinator RPC service before any
+borrowed `Dimos.connect()` client. `Dimos.run()` alone starts modules but does
+not advertise that coordinator service. The disposable owner now uses the
+existing public `ModuleCoordinator.build(blueprint)` and
+`coordinator.start_rpc_service()` APIs, then attaches a borrowed Dimos client;
+cleanup disconnects that client and stops the actual owner separately. This
+matches the service startup that `ModuleCoordinator.loop()` performs. No MCP
+wrapper is involved.
+
+A complete CPU dry run passed with real forkserver workers, coordinator RPC,
+module discovery, actual RadioPolicyModule initializer/supervisor and facade,
+Arm SDK group discovery, borrowed-client disconnect semantics, and the existing
+official Dimcode/Pi gateway tools. Only the external simulator-dependent motion
+factory and telemetry sources were replaced by explicitly synthetic fixtures.
+The gateway used a zero-network provider fixture, without loading the user's
+credential file: write capture Python, execute it, read its PNG image payload,
+write selected-pixel Python, execute it, then receive its actual grounding
+feedback. All five tools succeeded; six fixture responses completed in about
+1.52 seconds. Synthetic unit-depth and centered intrinsics produced expected
+base-frame `[0, 0, 1]`. This is plumbing evidence, not model inference,
+real-camera perception, physical task success or fair evaluation.
+
+Earlier live preparation verified hidden-marker visibility with unchanged
+position/radius/extent/scale/overlap result and toggle value, and completed three
+assisted inspection moves without pressing. It stopped before model inference
+because coordinator RPC was not advertised. Both that failure and the earlier
+launcher failures are retained. The full CPU test fixes and exercises that
+missing boundary before another GPU request. Paid request count and spend
+remain zero as of this preparation. The same single bounded grounding stage
+is still authorized and unspent; further paid stages require separate authority.
