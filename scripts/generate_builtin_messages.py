@@ -81,7 +81,7 @@ def main() -> None:
                     if actual[name] != expected[name]
                 )
                 parser.error(
-                    f"Generated source drift: missing={missing}, stale={stale}, changed={changed}. Run python scripts/generate_builtin_messages.py"
+                    f"Generated source drift: missing={missing}, stale={stale}, changed={changed}. Run python -m scripts.generate_builtin_messages"
                 )
             print("Built-in generated Python/C++/Rust sources match canonical definitions")
             return
