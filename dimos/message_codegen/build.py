@@ -70,7 +70,7 @@ def build_project(
         raise ValueError(
             "Python --install requires an active virtual environment; no system install is performed"
         )
-    for tool in ({"cmake", "c++"} if set(selected) & {"python", "cpp"} else set()) | (
+    for tool in ({"cmake", "c++"} if "cpp" in selected else set()) | (
         {"cargo"} if "rust" in selected else set()
     ):
         if shutil.which(tool) is None:
@@ -108,7 +108,6 @@ def build_project(
                 str(output / "cpp"),
                 "-B",
                 str(output / "cmake"),
-                "-DDIMOS_BUILD_PYTHON=OFF",
                 "-DCMAKE_PREFIX_PATH=" + ";".join(prefixes),
                 "-DCMAKE_INSTALL_PREFIX=" + str(output / "install"),
             ],

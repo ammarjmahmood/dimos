@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 from dimos.message_codegen.backend import build_sdist, get_requires_for_build_wheel
+from dimos.message_codegen.build import build_project
 from dimos.message_codegen.generate import generate
 import dimos.message_codegen.project as project_module
 from dimos.message_codegen.project import Project, prepare
@@ -109,8 +110,6 @@ def test_python_backend_never_requests_native_sdk_or_rust(tmp_path, monkeypatch)
     assert get_requires_for_build_wheel() == [
         "setuptools>=70",
         "wheel",
-        "pybind11==3.0.1",
-        "cmake>=3.20",
     ]
     name = build_sdist(str(tmp_path / "dist"))
     with tarfile.open(tmp_path / "dist" / name) as archive:
@@ -165,3 +164,13 @@ def test_transitive_dependencies_are_discovered_and_versions_checked(tmp_path, m
     config.dependency_specs["base"] = {"version": "2.0.0"}
     with pytest.raises(ValueError, match="mismatch|Conflicting package versions"):
         config.dependencies()
+
+
+def test_python_only_build_needs_no_native_build_tool(tmp_path, monkeypatch):
+    config, _ = project(tmp_path)
+    monkeypatch.setattr("dimos.message_codegen.build.shutil.which", lambda tool: None)
+    artifacts = build_project(config)
+    assert artifacts["python_wheel"].endswith("-py3-none-any.whl")
+    assert (tmp_path / "dist/example_messages-1.2.3.tar.gz").is_file()
+    assert "cmake_prefix" not in artifacts
+    assert "cargo_manifest" not in artifacts

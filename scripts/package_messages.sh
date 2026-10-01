@@ -17,7 +17,7 @@ print(version)
 PYTHON
 )"
 cmake -S "$message_output/cpp" -B "$message_output/cmake" \
-  -DDIMOS_BUILD_PYTHON=OFF -DCMAKE_PREFIX_PATH="$PWD/build/message-codegen/install" \
+  -DCMAKE_PREFIX_PATH="$PWD/build/message-codegen/install" \
   -DCMAKE_INSTALL_PREFIX="$message_output/install"
 cmake --build "$message_output/cmake"
 cmake --install "$message_output/cmake"

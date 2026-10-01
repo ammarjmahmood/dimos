@@ -39,10 +39,10 @@ Direct wheel filenames select the proposal builds; an unqualified `pip install
 dimos` may select a released package with a different API. Pip does not consult
 `[tool.uv.sources]` from a dimOS checkout.
 
-For Python source message builds, prepare a C++ compiler, Python development
-headers and Fast CDR 2.4.0, then set `CMAKE_PREFIX_PATH` to its installation prefix.
-The compiler and library are explicit prerequisites; wheels need neither. A
-full three-language application also needs CMake, Rust/Cargo and the native SDK.
+Python message source builds generate ordinary Python classes and use setuptools;
+they require no C++ compiler, Python development headers, CMake or Fast CDR.
+Installed messages use NumPy and pinned rosbags 0.11.0 for CDR. A three-language
+application additionally needs CMake, Rust/Cargo, Fast CDR and the native SDK.
 The currently verified coordinator example runs on Linux x86_64.
 
 ## Prepare native consumers once
@@ -123,12 +123,12 @@ For a Python source checkout, this is sufficient:
 pip install .
 ```
 
-The normal PEP 517 backend generates and compiles only the Python extension,
-even when the project lists C++ and Rust. Build isolation installs the lightweight
-backend and its Python build requirements; it does not install dimOS or build the
-robot runtime. A C++ compiler, Python development headers and Fast CDR 2.4.0 are
-still prerequisites. CMake and pybind11 are declared build dependencies. Prepare
-native dependencies explicitly; there are no implicit OS package installations.
+The normal PEP 517 backend generates and packages Python source only, even when
+the project lists C++ and Rust. Build isolation installs the lightweight backend,
+setuptools/wheel and pinned message dependencies; it does not install dimOS or
+build the robot runtime. No message-native compiler is needed. Python installation
+resolves NumPy and rosbags dependencies normally; it performs no OS installation
+or import-time message generation.
 
 To build all configured language artifacts instead of installing Python:
 
@@ -148,8 +148,9 @@ dimos build --offline            # require cached Cargo dependencies
 ```
 
 Use pip's `--no-index --find-links` with a prepared wheelhouse for offline Python
-builds. The compiler and Fast CDR must already be present. Missing prerequisites
-fail with an error; the command does not silently install system tools.
+builds. C++ selection requires a compiler, CMake and Fast CDR; Rust selection
+requires Cargo and its dependency cache. Python-only builds need neither native
+toolchain. Missing prerequisites fail clearly without installing system tools.
 
 Editable installation is also supported:
 

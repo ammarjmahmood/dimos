@@ -780,7 +780,6 @@ do_install_dev() {
     info "Developer installs use locked PyTorch builds; Linux x86_64 includes CUDA libraries even for CPU use."
     dim "will run: uv sync ${sync_args[*]}"
     if ! prompt_confirm "Install dependencies now?" yes; then INSTALL_DEPS=0; return; fi
-    project_cmd bash scripts/setup_message_codegen.sh
     project_cmd uv sync "${sync_args[@]}"
     ok "developer environment ready in $dir"
 }
