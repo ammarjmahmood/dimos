@@ -17,15 +17,15 @@ export CMAKE_PREFIX_PATH="$PWD/build/message-codegen/install"
 uv build --no-build-isolation --python .venv/bin/python \
   "$package_demo/generated/python" --out-dir "$package_demo/dist"
 uv venv --clear --python .venv/bin/python "$package_demo/venv"
-uv pip install --offline --no-deps --python "$package_demo/venv/bin/python" "$package_demo"/dist/*.whl
+uv pip install --offline --python "$package_demo/venv/bin/python" "$package_demo"/dist/*.whl
 cmake -S "$package_demo/generated/cpp" -B "$package_demo/cpp-package" \
-  -DDIMOS_BUILD_PYTHON=OFF -DCMAKE_INSTALL_PREFIX="$package_demo/install"
+  -DCMAKE_INSTALL_PREFIX="$package_demo/install"
 cmake --build "$package_demo/cpp-package"
 cmake --install "$package_demo/cpp-package"
 .venv/bin/python -m dimos.message_codegen.generate --type geometry_msgs/msg/Point \
   --output "$package_demo/standard"
 cmake -S "$package_demo/standard/cpp" -B "$package_demo/standard-build" \
-  -DDIMOS_BUILD_PYTHON=OFF -DCMAKE_INSTALL_PREFIX="$package_demo/install"
+  -DCMAKE_INSTALL_PREFIX="$package_demo/install"
 cmake --install "$package_demo/standard-build"
 cmake -S examples/message-codegen/external-app -B "$package_demo/cpp-consumer" \
   -DCMAKE_PREFIX_PATH="$package_demo/install;$CMAKE_PREFIX_PATH"

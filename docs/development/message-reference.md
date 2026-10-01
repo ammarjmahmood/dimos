@@ -3,8 +3,9 @@
 This reference applies to both built-in and external messages in the CDR
 proposal. Definitions are `.msg` files, with identities such as
 `dimos_msgs/msg/DeviceReading` or `story_msgs/msg/DeviceReading`. Generation
-produces Python pybind11 values, C++ declarations/codecs and Rust values/codecs;
-language builds compile those outputs. There is no import-time compilation and
+produces ordinary Python source classes with CDR codecs, C++ headers and Rust
+source. Native consumers compile C++/Rust with their applications; Python message
+installation needs no message compiler. There is no import-time compilation and
 no ROS installation requirement. CDR/schema compatibility does not mean that
 this package builds a ROS node.
 
@@ -59,3 +60,7 @@ retaining the complete payload Header.
 Changing a wire layout requires matching rebuilt packages. The proposal is a
 deliberate old-message API/wire break; transparent legacy-recording decoding and
 mixed old/new typed deployments are not supported.
+
+Invalid field values and malformed CDR raise `ValueError` in the generated
+Python source API. Fixed-array length errors no longer expose pybind11's
+`RuntimeError: Unable to cast`; invalid lengths remain rejected.

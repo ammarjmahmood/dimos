@@ -45,7 +45,7 @@ def generate(
 ) -> tuple[str, ...]:
     """Emit all three native language outputs, resolving dependencies first."""
     if not re.fullmatch(r"[a-z][a-z0-9_]*", module) or keyword.iskeyword(module):
-        raise ValueError(f"Invalid Python extension module name: {module}")
+        raise ValueError(f"Invalid Python package module name: {module}")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Package version must have the form major.minor.patch")
     definitions = Definitions(
@@ -81,8 +81,7 @@ def generate(
     native.mkdir(exist_ok=True)
     (native / "messages.hpp").write_text(cpp.generate(owned, imports))
     shutil.copyfile(TEMPLATES / "dimos_cdr.hpp", native / "dimos_cdr.hpp")
-    shutil.copyfile(TEMPLATES / "dimos_python.hpp", native / "dimos_python.hpp")
-    bindings = python.generate(
+    sources = python.generate(
         owned,
         definitions,
         module,
@@ -92,12 +91,13 @@ def generate(
         imported={name: owner.module for name, owner in owners.items()},
         dependency_versions={dep.module: dep.version for dep in dependencies},
     )
-    for name, content in bindings.items():
-        (native / name).write_text(content)
-    for stale in native.glob("bind_*.cpp"):
-        if stale.name not in bindings:
-            stale.unlink()
-    sources = " ".join(sorted(bindings))
+    package = output / "python" / module
+    if package.exists():
+        shutil.rmtree(package)
+    for name, content in sources.items():
+        path = package / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
     dependency_cmake = "".join(
         f"find_package({dep.module} {dep.version} EXACT CONFIG REQUIRED)\n" for dep in dependencies
     )
@@ -120,15 +120,6 @@ def generate(
         f"write_basic_package_version_file(${{CMAKE_CURRENT_BINARY_DIR}}/{module}ConfigVersion.cmake VERSION {version} COMPATIBILITY ExactVersion)\n"
         f"install(FILES {module}Config.cmake ${{CMAKE_CURRENT_BINARY_DIR}}/{module}ConfigVersion.cmake DESTINATION lib/cmake/{module})\n"
         f"install(DIRECTORY ../schemas DESTINATION share/{module})\n"
-        'option(DIMOS_BUILD_PYTHON "Build Python bindings" ON)\n'
-        "if(DIMOS_BUILD_PYTHON)\n"
-        "find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)\n"
-        'execute_process(COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir OUTPUT_VARIABLE pybind11_DIR OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)\n'
-        "find_package(pybind11 3.0.1 EXACT REQUIRED)\n"
-        f"pybind11_add_module({module} NO_EXTRAS {sources})\n"
-        f"target_compile_features({module} PRIVATE cxx_std_17)\n"
-        f"target_link_libraries({module} PRIVATE fastcdr {dependency_targets})\n"
-        "endif()\n"
     )
     (native / f"{module}Config.cmake").write_text(
         "include(CMakeFindDependencyMacro)\nfind_dependency(fastcdr 2.4.0 EXACT)\n"

@@ -18,13 +18,12 @@ from pathlib import Path
 import struct
 import sys
 
-from pybind11.setup_helpers import Pybind11Extension
+from pybind11.setup_helpers import Pybind11Extension, build_ext
 from setuptools import find_packages, setup
 from setuptools.command.build_py import build_py as _build_py
 
 # PEP 517 does not put the source tree on sys.path when executing setup.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from dimos.message_codegen.native_build import MessageBuildExt
 
 
 def python_is_macos_universal_binary(executable: str | None = None) -> bool:
@@ -170,5 +169,5 @@ setup(
     packages=find_packages(),
     package_dir={"": "."},
     ext_modules=ext_modules,
-    cmdclass={"build_ext": MessageBuildExt, "build_py": build_py},
+    cmdclass={"build_ext": build_ext, "build_py": build_py},
 )

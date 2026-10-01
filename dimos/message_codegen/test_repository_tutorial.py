@@ -24,9 +24,8 @@ import pytest
 
 def test_builtin_tutorial_builds_new_definition_without_runtime(tmp_path):
     wheelhouse = os.environ.get("DIMOS_MESSAGE_WHEELHOUSE")
-    fastcdr = os.environ.get("DIMOS_FASTCDR_PREFIX")
-    if not wheelhouse or not fastcdr:
-        pytest.skip("Set message wheelhouse and Fast CDR prefix for clean source acceptance")
+    if not wheelhouse:
+        pytest.skip("Set message wheelhouse for clean source acceptance")
     root = Path(__file__).resolve().parents[2]
     tutorial = (root / "docs/development/messages-in-repository.md").read_text()
     definition = re.search(r"<!-- builtin-message: [^>]+ -->\n```text\n(.*?)```", tutorial, re.S)
@@ -47,7 +46,20 @@ def test_builtin_tutorial_builds_new_definition_without_runtime(tmp_path):
     environment.update(
         PIP_NO_INDEX="1",
         PIP_FIND_LINKS=str(Path(wheelhouse).resolve()),
-        CMAKE_PREFIX_PATH=str(Path(fastcdr).resolve()),
+        CC="/bin/false",
+        CXX="/bin/false",
+    )
+    (checkout / "scripts").mkdir()
+    shutil.copyfile(
+        root / "scripts/generate_builtin_messages.py",
+        checkout / "scripts/generate_builtin_messages.py",
+    )
+    shutil.copyfile(root / "pyproject.toml", checkout / "pyproject.toml")
+    subprocess.run(
+        [sys.executable, str(checkout / "scripts/generate_builtin_messages.py")],
+        check=True,
+        cwd=checkout,
+        env={**environment, "PYTHONPATH": str(checkout)},
     )
     venv = tmp_path / "venv"
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
@@ -74,7 +86,7 @@ def test_builtin_tutorial_builds_new_definition_without_runtime(tmp_path):
     )
     wheel = next(dist.glob("dimos_generated-*.whl"))
     subprocess.run(
-        [python, "-m", "pip", "install", "--no-deps", str(wheel)],
+        [python, "-m", "pip", "install", str(wheel)],
         cwd=tmp_path,
         env=environment,
         check=True,

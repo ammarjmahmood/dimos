@@ -41,32 +41,19 @@ def python_project() -> Iterator[None]:
         (),
         project.version,
         dependencies=dependencies,
-        shared=True,
-        source_output=output,
     )
     previous = Path.cwd()
-    old_prefix = os.environ.get("CMAKE_PREFIX_PATH")
-    prefixes = [str(dep.root) for dep in dependencies]
-    if old_prefix:
-        prefixes.append(old_prefix)
-    os.environ["CMAKE_PREFIX_PATH"] = os.pathsep.join(prefixes)
     try:
         os.chdir(output / "python")
         yield
     finally:
         os.chdir(previous)
-        if old_prefix is None:
-            os.environ.pop("CMAKE_PREFIX_PATH", None)
-        else:
-            os.environ["CMAKE_PREFIX_PATH"] = old_prefix
 
 
 def get_requires_for_build_wheel(config_settings: dict[str, Any] | None = None) -> list[str]:
     return [
         "setuptools>=70",
         "wheel",
-        "pybind11==3.0.1",
-        "cmake>=3.20",
         *Project.load(Path.cwd()).requirements(),
     ]
 

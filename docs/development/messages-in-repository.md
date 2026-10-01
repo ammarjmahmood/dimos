@@ -2,21 +2,19 @@
 
 Use this tutorial when changing dimOS's own message definitions. Work in a
 checkout of the CDR proposal; this is not a main-branch or published-release API.
-The separate `packages/dimos-generated` package owns the Python extension.
+The separate `packages/dimos-generated` package owns checked-in generated Python source.
 The root dimOS package consumes it and does not generate it in `setup.py`.
 
-Prepare Python 3.12, uv, a C++ compiler with Python development headers, CMake,
-and Rust/Cargo. No ROS installation is required. These are explicit toolchain
+Prepare Python 3.12 and uv for installation. Message maintainers additionally
+need Ruff 0.14.3 and rustfmt for explicit generation. Native applications need
+their C++/Rust toolchains. No ROS installation is required. These are explicit toolchain
 prerequisites; message builds do not install OS packages. From the checkout root:
 
 ```sh skip
-bash scripts/setup_message_codegen.sh
-export CMAKE_PREFIX_PATH="$PWD/build/message-codegen/install"
 uv sync --group tests --frozen
 ```
 
-The setup script downloads and hash-checks Fast CDR 2.4.0, then installs it into
-this checkout's ignored build directory. `uv sync` uses the local packages in
+`uv sync` consumes checked-in source from the local packages in
 `[tool.uv.sources]`. **Plain `pip install .` at the dimOS root does not read those
 uv sources.** It needs matching `dimos-generated` and `dimos-message-build`
 distributions available to pip; it is not a substitute for this checkout setup.
@@ -38,9 +36,11 @@ source of truth; do not edit generated bindings. Standard message inputs are
 vendored separately and intentionally pinned; avoid editing a standard Header
 just to add an application-specific field.
 
-Build the independently packaged built-ins, then install the resulting wheel:
+Generate source explicitly after editing `.msg`, then build/install the independent package:
 
 ```sh skip
+python scripts/generate_builtin_messages.py
+python scripts/generate_builtin_messages.py --check
 uv build packages/dimos-generated --python .venv/bin/python \
   --out-dir build/message-codegen/ux-wheelhouse
 uv pip install --python .venv/bin/python --reinstall --no-deps \
@@ -48,9 +48,9 @@ uv pip install --python .venv/bin/python --reinstall --no-deps \
 ```
 
 Keep that output directory to one compatible built-in wheel, or pass the exact
-wheel filename. This invokes generation and the Python extension build; it does
-not rebuild the dimOS robot runtime. Restart running Python processes after a
-native package rebuild. Import and check the new value:
+wheel filename. Generation emits source without native compilation. Wheel/source/editable
+installation uses that source and does not regenerate it or rebuild the robot
+runtime. Restart Python processes after changing generated classes. Import and check the new value:
 
 <!-- builtin-value-check -->
 ```python skip
