@@ -172,3 +172,153 @@ file was never read or copied by the agent. The user-managed gateway remains
 running; this pilot session is idle. Its existing Bash environment inheritance
 still provides no enforced credential or evaluator isolation. No simulator,
 sensor, robot motion, model installation, or dataset operation occurred.
+
+## Prepared supervisor adapter and next-stage proposal (not run)
+
+`radio_blueprint(..., policy_supervisor=True)` now adds `RadioPolicyModule` and
+opts into render-only hiding of OmniGibson's diagnostic toggle markers. Default
+SDK baseline behavior remains unchanged. The owner initializes the module with
+only the protected collision scene via `initialize_development_scene`; the
+policy receives `RadioPolicy.from_app(app)`, not that initialization data.
+`RadioPolicy` uses the existing Python SDK and DimOS module RPC, without MCP.
+It exposes `observe`, `ground`, `state`, `pose`, `move_pose`, `press`, `status`,
+and `cancel`. The module's owner initialization remains discoverable through
+ordinary Python/DimOS introspection: this is a supported-interface boundary,
+not the deferred security sandbox.
+
+Observations contain only actual head or left-wrist RGB, optical-Z depth,
+intrinsics, camera-to-base robot TF, and an observation ID. Robot state exposes
+selected-arm joints, gripper feedback and base-frame encoder/FK pose. World
+odometry, object poses/identities, segmentation labels, contact flags, toggle
+state, BDDL results and spectator-camera images are absent. RGB/depth/calibration
+must have matching frames/dimensions, <=100 ms timestamp skew and <=1 second age.
+Grounding retains the exact sensor bundle, expires after 10 seconds, and rejects
+replaced IDs, insufficient valid depth and depth discontinuities. It unprojects
+a model-selected pixel using measured depth and camera intrinsics; it does not
+select a radio or infer a button normal.
+
+One important prerequisite emerged from installed OmniGibson 3.9.2 source:
+`ToggledOn._initialize` makes `visual_marker` visible and `_set_value` recolors it
+red/green from task state. The earlier development wrist recording therefore
+contains a simulator hint. Opt-in marker hiding now changes only USD visibility,
+checks that overlap extent is unchanged, and never writes the Boolean state,
+pose, scale, mass, friction or collision flag. The installed `GeomPrim.extent`
+uses local geometry points, independently of visibility. CPU tests verify that
+contract with doubles, but live marker removal and sensor readability have not
+been tested. A marker may be an annotated control mesh; hiding it can also make
+the relevant surface harder to see. The adapter refuses initialization unless
+runtime capabilities report hidden markers. Do not claim the new RGB envelope
+is verified until a live render check passes.
+
+`move_pose` accepts base-frame EE XYZ/XYZW action intent. `press` accepts a
+straight EE displacement <=20 mm. The supervisor keeps the existing oracle
+radio/support collision checker, frozen-joint check, stored plan ID and command
+payload admission. It converts base-frame intent into the SDK world frame,
+using the existing simulator localization and explicit model-height calibration.
+These remain development assumptions. Pose execution uses the same checked
+plan ID, nonblocking SDK dispatch and authoritative execution wait. Planning and
+cancellation share admission coordination; cancellation during checking cannot
+later dispatch. Each action has an ID and watchdog (timeout <=30 seconds).
+`TIMED_OUT` is not proof of stop: the watchdog requests cancellation, confirmed
+SDK terminal status is required, and an uncertain stop blocks subsequent
+commands. Cancelling a model turn or killing its Python client is separate from
+`policy.cancel(action_id)`. Network RPC stalls remain a limitation requiring
+owner cleanup of the simulator on an unconfirmed stop.
+
+### Recommended next bounded run: vision grounding first
+
+Approval is pending. Proposed model is still `gpt-6-luna`, standard tier,
+maximum six provider requests, six tools, 2,048 output tokens per request,
+no retries/hosted tools, <=60 seconds model/tool loop and <=180 seconds total
+simulator slot including startup and cleanup. Full-window conservative pricing
+bound is `6 * (1.05M * $0.10/M + 2048 * $0.50/M) = $0.636144`, below a proposed
+$1 ceiling. The existing pilot controller/extension must be updated and
+preflight-tested for this stage before requesting inference. Do not silently
+reuse the earlier exact-script-only two-tool limits or assume they enable this
+new flow.
+
+Use official `turning_on_radio`, scene `house_double_floor_lower`, definition 0,
+instance 0, seed 0; restart/reset the simulator for a fresh episode. Preserve
+custom base `[3.6,4.15,0.005]`, yaw pi/2, unchanged dynamics/goal. Owner closes
+the gripper and stages a collision-checked inspection pose before policy input.
+That pose can be borrowed from the known baseline for this first experiment,
+but it is explicitly oracle-assisted initialization, not autonomous perception.
+Initial head/wrist views were unusable. If marker-free inspection RGB does not
+show a usable radio/control surface, stop before a paid call; never substitute
+the evaluator camera. Owner collision scene, baseline targets, evaluator logs,
+and marker geometry must not enter the model context.
+
+Prompt: "Using only the supplied RGB/depth observation and robot feedback,
+identify the radio control you would operate. Return the selected pixel and
+uncertainty. If the control is not visible, ask for another permitted view;
+do not guess from hidden task state. Write Python using RadioPolicy to ground
+that pixel, and report the measured base-frame point. Do not command motion."
+
+The concrete sequence is model write -> Python observe/save RGB and observation
+ID -> Pi read of that actual RGB image -> model write of selected-pixel Python
+-> Python `policy.ground(observation_id, u, v)` -> model interprets XYZ/error.
+Both generated Python programs use `Dimos.connect(timeout=5)` and the task-local
+facade. `Image.save(path)` is an existing method; do not create screenshots from
+GT. The last response must distinguish observed target localization from task
+success. The observation ID prevents pairing a pixel with a newer camera frame.
+
+Example first program:
+
+```python
+import json
+from dimos.porcelain.dimos import Dimos
+from dimos.simulation.behavior.radio_policy import RadioPolicy
+
+app = Dimos.connect(timeout=5)
+try:
+    policy = RadioPolicy.from_app(app)
+    observation = policy.observe("left_wrist")
+    if not observation["rgb"].save("policy-observation.png"):
+        raise RuntimeError("RGB save failed")
+    with open("observation-id.json", "w") as stream:
+        json.dump({"id": observation["id"]}, stream)
+    print({"camera": observation["camera"], "timestamp": observation["rgb"].ts})
+finally:
+    app.stop()
+```
+
+The next program loads only that ID, supplies the pixel selected from the image,
+and calls `policy.ground`. No baseline target coordinate is supplied to it.
+The 10-second observation lifetime may require a fresh observation if the model
+is slow; treat expiry as a result, not permission to increase limits or use GT.
+
+### Physical policy step after grounding review
+
+Do not call a 3D surface point an executable end-effector pose. Still needed:
+a reliable sensor-derived contact normal/approach, and a checked transform from
+the robot's leading fingertip/TCP to the SDK `left_gripper_link` target. The
+baseline's object-marker position/normal may not substitute for either. Robot
+mesh/kinematic TCP calibration is legitimate robot information; its existing
+5.3 mm development model-height offset must retain provenance. No new learned
+perception model or asset download is proposed. The first grounding run tests
+whether RGB/depth makes the physical policy feasible before guessing a press.
+
+After those checks and stage approval, action intent becomes a precontact
+base-frame EE pose and <=20 mm press displacement, realized through
+`policy.move_pose`, `policy.press`, `policy.status` and `policy.cancel`. The
+closed gripper remains fixed in this first task; no raw joint/base commands or
+symbolic semantic primitive is exposed. A failed/uncertain action must stop and
+return allowed robot/motion feedback. Do not forward oracle collision exception
+text. Our independent owner records contact/ToggledOn/BDDL, official goal and
+termination, radio displacement, action IDs/cancel confirmations, raw camera
+frames, actual command payloads and timing. Policy video contains only sensor
+views; evaluator side-camera/status overlays belong to a separate labeled
+artifact. Success before retraction remains distinct from completed motion.
+
+This is development validation with assisted initialization and a privileged
+safety checker, not fair benchmark performance. Generic filesystem/process/
+network isolation and cheating audit remain deferred. No additional model call
+or simulator run has occurred during adapter preparation.
+
+Before the approved live stage, copy the new child revision into a fresh disposable
+runtime snapshot, reusing the already accepted simulator environment/assets.
+Keep `/tmp/behavior-validation.oNeVq8` as the successful baseline recovery
+snapshot. Point the owned gateway's Python imports and simulator worker at the
+new snapshot, then verify `inspect.getfile(RadioPolicy)` and the exact source
+revision before an agent call. Current remote gateway imports still point to the
+older successful SDK snapshot; the new policy adapter has only local CPU tests.

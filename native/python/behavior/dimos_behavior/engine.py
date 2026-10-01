@@ -267,6 +267,11 @@ class OmniEngine:
                 plain(self.robot.action_space.low), plain(self.robot.action_space.high), strict=True
             )
         )
+        self.policy_hidden_markers = 0
+        if self.config.policy_hide_toggle_markers:
+            from dimos.simulation.behavior.policy_visuals import hide_toggle_markers
+
+            self.policy_hidden_markers = hide_toggle_markers(self.env.scene.objects, ToggledOn)
         self.cameras = {role: self.robot.sensors[name] for role, name in self.camera_roles.items()}
         if not all(isinstance(sensor, VisionSensor) for sensor in self.cameras.values()):
             raise ValueError("Benchmark camera roles must refer to vision sensors")
@@ -302,6 +307,10 @@ class OmniEngine:
             "robot": "R1Pro",
             "versions": {name: version(name) for name in ("omnigibson", "isaacsim", "torch")},
             "localization": "simulator_ground_truth",
+            "policy_visuals": {
+                "toggle_markers_hidden": self.config.policy_hide_toggle_markers,
+                "hidden_count": self.policy_hidden_markers,
+            },
             "scene": self.task.scene if self.task else self.config.scene,
             "action_hz": self.config.action_hz,
             "max_episode_steps": self.config.max_episode_steps,

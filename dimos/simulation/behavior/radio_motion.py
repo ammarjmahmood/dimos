@@ -28,7 +28,12 @@ from dimos.control.tasks.trajectory_task.trajectory_task import (
 )
 from dimos.core.core import rpc
 from dimos.manipulation.manipulation_module import ManipulationModule
-from dimos.manipulation.manipulation_spec import ExecutionStatus, PlanResult, PlanStatus
+from dimos.manipulation.manipulation_spec import (
+    ExecutionResult,
+    ExecutionStatus,
+    PlanResult,
+    PlanStatus,
+)
 from dimos.manipulation.planning.planners.config import CartesianPathConfig
 from dimos.manipulation.planning.spec.protocols import WorldSpec
 from dimos.manipulation.sdk import Arm, MotionError
@@ -398,6 +403,7 @@ class DevelopmentRadioMotion:
         orientation: Sequence[float] | None,
         timeout: float,
         contact: bool,
+        executor: Callable[[str, float], ExecutionResult] | None = None,
     ) -> None:
         deadline = time.monotonic() + timeout
         state = self.full_state()
@@ -452,8 +458,12 @@ class DevelopmentRadioMotion:
             trajectory_digest(trajectory), checked["effective_digest"]
         )
         try:
-            result = self.arm.rpc.execute(
-                blocking=True, timeout=remaining, plan_id=plan.plan.plan_id
+            result = (
+                executor(plan.plan.plan_id, remaining)
+                if executor is not None
+                else self.arm.rpc.execute(
+                    blocking=True, timeout=remaining, plan_id=plan.plan.plan_id
+                )
             )
         finally:
             try:

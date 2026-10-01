@@ -33,6 +33,7 @@ from dimos.simulation.behavior.probe import BehaviorProbe
 from dimos.simulation.behavior.r1pro_bridge import BehaviorR1ProBridge
 from dimos.simulation.behavior.r1pro_model import MODEL_JOINTS
 from dimos.simulation.behavior.radio_motion import RadioCoordinator, RadioManipulationModule
+from dimos.simulation.behavior.radio_policy import RadioPolicyModule
 from dimos.simulation.behavior.types import TaskSelection
 
 
@@ -291,3 +292,15 @@ def test_terminal_episode_never_waits_for_frozen_steps_or_claims_full_retraction
     assert arm.move_linear.call_count == 1
     step.assert_not_called()
     assert evidence.call_args.args == ("episode_finished_after_press",)
+
+
+def test_policy_composition_hides_diagnostic_markers_only_when_opted_in():
+    ordinary = {a.module: a for a in radio_blueprint(TaskSelection()).blueprints}
+    policy = {
+        a.module: a for a in radio_blueprint(TaskSelection(), policy_supervisor=True).blueprints
+    }
+    assert RadioPolicyModule not in ordinary and RadioPolicyModule in policy
+    assert ordinary[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is False
+    assert policy[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is True
+    with pytest.raises(ValueError, match="left_arm only"):
+        radio_blueprint(TaskSelection(), arm="right_arm", policy_supervisor=True)

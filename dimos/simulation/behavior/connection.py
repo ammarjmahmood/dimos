@@ -50,6 +50,7 @@ class BehaviorConfig(IsolatedPythonModuleConfig):
     command_timeout: float = Field(default=0.2, gt=0)
     publish_scan: bool = False
     publish_semantic: bool = False
+    policy_hide_toggle_markers: bool = False
     max_depth: float = Field(default=5, gt=0)
     spawn_position: tuple[float, float, float] | None = None
     spawn_yaw: float = 0.0

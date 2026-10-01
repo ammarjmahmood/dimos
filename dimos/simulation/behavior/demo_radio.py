@@ -44,6 +44,7 @@ from dimos.simulation.behavior.radio_motion import (
     RadioManipulationModule,
     make_development_motion,
 )
+from dimos.simulation.behavior.radio_policy import RadioPolicyModule
 from dimos.simulation.behavior.types import ControlMode, TaskSelection
 
 
@@ -53,9 +54,12 @@ def radio_blueprint(
     arm: str = "left_arm",
     spawn_position: tuple[float, float, float] | None = None,
     spawn_yaw: float = 0.0,
+    policy_supervisor: bool = False,
 ) -> Blueprint:
     if arm not in ("left_arm", "right_arm"):
         raise ValueError("Choose left_arm or right_arm")
+    if policy_supervisor and arm != "left_arm":
+        raise ValueError("The first policy supervisor supports left_arm only")
     model = simulation_model_config()
     model.planning_groups = [g for g in model.planning_groups if g.name in (arm, "torso")]
     # One selected arm per development instance; the scalar SDK gripper binding
@@ -71,6 +75,7 @@ def radio_blueprint(
             BehaviorConnection.blueprint(
                 task=task,
                 allow_task_changes=False,
+                policy_hide_toggle_markers=policy_supervisor,
                 spawn_position=spawn_position,
                 spawn_yaw=spawn_yaw,
                 development_task_spawn=spawn_position is not None,
@@ -113,6 +118,7 @@ def radio_blueprint(
                     (RadioManipulationModule, "tf", "planning_tf"),
                 ]
             ),
+            *([RadioPolicyModule.blueprint()] if policy_supervisor else []),
         )
         .transports(
             {
