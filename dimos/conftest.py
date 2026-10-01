@@ -84,7 +84,7 @@ with suppress(ImportError, ValueError, OSError):
     if soft < target:
         resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 import pytest
 import tqdm
 
@@ -97,7 +97,10 @@ from dimos.utils.testing.waiting import retry_until as _retry_until, wait_until 
 # monitor only re-tunes miniters for smooth interactive rendering, so disable it for tests.
 tqdm.tqdm.monitor_interval = 0
 
-load_dotenv()
+_dotenv = dotenv_values()
+for _key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ALIBABA_API_KEY"):
+    if _dotenv.get(_key):
+        os.environ.setdefault(_key, _dotenv[_key])
 
 
 def _has_ros() -> bool:
@@ -168,6 +171,13 @@ def pytest_sessionstart(session):
     _arm_crash_dumps()
 
 
+def pytest_ignore_collect(collection_path: pathlib.Path) -> bool | None:
+    # Nested Python projects own their dependencies and test invocation.
+    if collection_path.is_dir() and (collection_path / "pyproject.toml").is_file():
+        return True
+    return None
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -179,7 +189,8 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "web_browser: cockpit browser e2e (playwright chromium); runs in the CI web job",
+        "web_browser: cockpit browser e2e (playwright chromium + firefox); "
+        "runs in the CI web job and the macOS self-hosted-tests job",
     )
     config.addinivalue_line(
         "markers",
@@ -192,6 +203,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "skipif_in_ci: skip when CI env var is set")
     config.addinivalue_line("markers", "skipif_no_openai: skip when OPENAI_API_KEY is not set")
     config.addinivalue_line("markers", "skipif_no_alibaba: skip when ALIBABA_API_KEY is not set")
+    config.addinivalue_line("markers", "skipif_no_typesafe: skip when TYPESAFE_API_KEY is not set")
     config.addinivalue_line("markers", "skipif_no_ros: skip when ROS dependencies are not present")
     config.addinivalue_line(
         "markers",
@@ -218,20 +230,36 @@ def pytest_configure(config):
         )
 
 
-@pytest.fixture(autouse=True)
-def _restore_global_config():
-    """Undo global_config mutations after every test.
-
-    A build from a parsed config resets the singleton to the parse's full
-    resolution. With a hermetic parse (environ={}) that reverts mcp_port to
-    its schema default, and every later test on the worker then binds the
-    port every other worker also defaults to.
-    """
+def _global_config_guard():
     from dimos.core.global_config import global_config
 
     snapshot = global_config.model_dump()
     yield
     global_config.update(**snapshot)
+
+
+# Undo global_config mutations when the scope that made them ends. Without
+# the class and module guards, a class-scoped fixture's
+# `global_config.update(viewer="none", n_workers=1)` stays in effect for
+# every later test in the session.
+#
+# A build from a parsed config resets the singleton to the parse's full
+# resolution. With a hermetic parse (environ={}) that reverts mcp_port to
+# its schema default, and every later test on the worker then binds the
+# port every other worker also defaults to.
+@pytest.fixture(autouse=True)
+def _restore_global_config():
+    yield from _global_config_guard()
+
+
+@pytest.fixture(autouse=True, scope="class")
+def _restore_global_config_class():
+    yield from _global_config_guard()
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _restore_global_config_module():
+    yield from _global_config_guard()
 
 
 @pytest.fixture(scope="session")
@@ -270,6 +298,7 @@ def pytest_collection_modifyitems(config, items):
         "skipif_in_ci": (bool(os.getenv("CI")), "Skipped in CI"),
         "skipif_no_openai": (not os.getenv("OPENAI_API_KEY"), "OPENAI_API_KEY not set"),
         "skipif_no_alibaba": (not os.getenv("ALIBABA_API_KEY"), "ALIBABA_API_KEY not set"),
+        "skipif_no_typesafe": (not os.getenv("TYPESAFE_API_KEY"), "TYPESAFE_API_KEY not set"),
         "skipif_no_ros": (not _has_ros(), "ROS dependencies are not present"),
         "skipif_no_turbojpeg": (
             not _has_turbojpeg() and not os.getenv("CI"),
