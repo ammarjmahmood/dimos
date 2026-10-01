@@ -64,6 +64,23 @@ MUJOCO_GL=egl dimos --simulation mujoco --transport zenoh \
   run xarm-perception-sim2 mcp-server observe-skill --simulationmodule.viewer=false
 ```
 
+`xarm-perception-sim2` also maps the workspace, the way `xarm-grasp` does. Its
+wrist camera is `Camera("wrist_camera", camera="wrist_camera", pointcloud=True)`
+(`XARM7_MAPPING` in `dimos/robot/manipulators/xarm/sim2.py`): with
+`pointcloud=True` an RGB-D camera also publishes each depth frame as a
+`pointcloud` in its optical frame, every second pixel by default
+(`pointcloud_decimation`) and no farther than 5 m (`pointcloud_max_range`),
+stamped like the depth image. The blueprint puts that cloud on
+`wrist_camera/pointcloud`, where `PointCloudSelfFilter` drops the arm's own
+returns and names the cells the arm occupies, `RayTracingVoxelMap` builds a
+2.5 cm voxel map of what the camera has seen (`global_map`), and
+`ManipulationModule` holds that map as its `mapping/voxel-map` octree obstacle,
+so `plan_to_pose` avoids mapped objects. All three use the same `world` frame
+and voxel size. In the planner's viser view the octree appears under
+`/manipulation/obstacles/mapping/voxel-map` once the camera has looked at the
+table; the Obstacles toggle hides it. `xarm7-planner-coordinator` keeps the
+plain camera and no map.
+
 The first download of existing robot meshes and GR00T policies is separate
 from measured startup. Install the existing simulation and robot dependencies.
 The simulation extra requires MuJoCo 3.10 or newer for batched raycasting.
@@ -425,7 +442,7 @@ planner, so retain its authored spawn for manipulation.
 | Whole-body connection | `motor_command: MotorCommandArray` | `motor_states: JointState`, `imu: Imu`, `odom: PoseStamped`, `tf: TFMessage` |
 | Manipulator connection | `joint_command: JointState` | `joint_states: JointState` |
 | RGB camera | none | `color_image: Image`, `camera_info: CameraInfo`, `tf: TFMessage` |
-| RGB-D camera | none | RGB ports plus `depth_image: Image`, `depth_camera_info: CameraInfo` |
+| RGB-D camera | none | RGB ports plus `depth_image: Image`, `depth_camera_info: CameraInfo`; with `pointcloud=True` also `pointcloud: PointCloud2` |
 | Lidar | none | `pointcloud: PointCloud2` |
 | SimulationModule | none | optional `sim_truth: SceneState` at 10 Hz |
 

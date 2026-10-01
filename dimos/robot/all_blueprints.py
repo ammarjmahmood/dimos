@@ -344,6 +344,7 @@ all_modules = {
     "semantic-search": "dimos.memory.module.SemanticSearch",
     "sim-camera-module": "dimos.sim2.sensors.camera.module.SimCameraModule",
     "sim-rgbd-camera-module": "dimos.sim2.sensors.camera.module.SimRGBDCameraModule",
+    "sim-rgbd-point-cloud-camera-module": "dimos.sim2.sensors.camera.module.SimRGBDPointCloudCameraModule",
     "simple-phone-teleop": "dimos.teleop.phone.phone_extensions.SimplePhoneTeleop",
     "simulation-module": "dimos.sim2.module.SimulationModule",
     "spatial-memory": "dimos.perception.experimental.spatial_perception.SpatialMemory",

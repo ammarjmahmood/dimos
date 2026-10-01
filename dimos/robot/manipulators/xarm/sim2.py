@@ -84,6 +84,10 @@ XARM7 = RobotConfig(
     sensors=(Camera("wrist_camera", camera="wrist_camera"),),
 )
 
+# The same arm, with the wrist camera also publishing its depth as a point cloud
+# for a blueprint that maps the workspace.
+XARM7_MAPPING = XARM7.with_sensor(Camera("wrist_camera", camera="wrist_camera", pointcloud=True))
+
 
 @dataclass(frozen=True)
 class XArm7Simulation:
@@ -99,6 +103,8 @@ def xarm7_simulation(
     scene_package: str | None,
     scene_spawn: tuple[float, float, float, float] | None = None,
     *,
+    robot: RobotConfig = XARM7,
+    tf_extra_links: list[str] | None = None,
     sim_id: str = "xarm7",
 ) -> XArm7Simulation:
     """Put one xArm7 into a sim2 scene and build its planner at the same base pose.
@@ -109,15 +115,20 @@ def xarm7_simulation(
         scene_spawn: Base pose as (x, y, z, yaw), metres and radians in the world frame.
             None stands the arm on the scene's named "workbench" support. The arm and the
             planner share it, so a wrong value moves both and they still agree.
+        robot: Which xArm7 definition to simulate; the definitions differ only in the
+            devices mounted on the arm.
+        tf_extra_links: Planning-model links whose world pose the planner publishes on
+            tf, besides the tool tip. None publishes only ``link7``; a consumer that needs
+            every collision link (a point-cloud self filter) must name them all here.
         sim_id: Name of the shared-memory channel between the coordinator and physics.
     """
     scene = scene_path(scene_package, "workbench.xml")
     if scene_spawn is None:
-        arm = scene_robot(scene, XARM7, "workbench", default=(0.0, 0.0, 0.12))
+        arm = scene_robot(scene, robot, "workbench", default=(0.0, 0.0, 0.12))
     else:
         x, y, z, yaw = scene_spawn
-        arm = RobotInstance(XARM7, xyz=(x, y, z), rpy=(0.0, 0.0, yaw))
-    model = make_xarm7_sim_robot_config().model_copy(
+        arm = RobotInstance(robot, xyz=(x, y, z), rpy=(0.0, 0.0, yaw))
+    model = make_xarm7_sim_robot_config(tf_extra_links=tf_extra_links).model_copy(
         update={
             "base_pose": PoseStamped(
                 position=Vector3(*arm.xyz),

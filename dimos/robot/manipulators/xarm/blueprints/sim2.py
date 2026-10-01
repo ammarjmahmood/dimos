@@ -24,27 +24,47 @@ from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
+from dimos.manipulation.planning.utils.point_cloud_self_filter import PointCloudSelfFilter
+from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
-from dimos.robot.manipulators.xarm.sim2 import xarm7_simulation
+from dimos.robot.manipulators.xarm.config import XARM7_COLLISION_LINKS
+from dimos.robot.manipulators.xarm.sim2 import XARM7_MAPPING, xarm7_simulation
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 if global_config.simulation and global_config.simulation != "mujoco":
     raise ValueError("xarm-perception-sim2 supports --simulation mujoco")
 
-# The scene is always simulated: this stack has no real-hardware form, and
-# --scene-package / --scene-spawn pick where the arm stands.
-_xarm7 = xarm7_simulation(global_config.scene_package, global_config.scene_spawn_pose)
+# One resolution for the whole mapping chain, the same 2.5 cm xarm-grasp uses.
+# The self filter's clear mask, the mapper's cells and the planner's octree must
+# all agree: a mismatched mask names cells the map does not hold, and a
+# mismatched octree does not line up with what was mapped.
+XARM7_SIM2_VOXEL_SIZE = 0.025
 
-# xarm-perception-sim on sim2 devices. The wrist camera stamps its images with
-# the "arm/wrist_camera_optical" frame and publishes world -> that frame on tf,
-# which is the one lookup scene registration needs for target_frame="world".
+# The scene is always simulated: this stack has no real-hardware form, and
+# --scene-package / --scene-spawn pick where the arm stands. The wrist camera
+# publishes a point cloud for the mapping chain, and the planner publishes every
+# collision link on tf: the self filter drops a whole cloud when one is missing.
+_xarm7 = xarm7_simulation(
+    global_config.scene_package,
+    global_config.scene_spawn_pose,
+    robot=XARM7_MAPPING,
+    tf_extra_links=XARM7_COLLISION_LINKS,
+)
+
+# xarm-perception-sim on sim2 devices. The wrist camera stamps its images and
+# cloud with the "arm/wrist_camera_optical" frame and publishes world -> that
+# frame on tf, which is the one lookup scene registration needs for
+# target_frame="world". The planner publishes world -> each arm link, so the
+# self filter reaches every link from the camera through "world" alone.
 xarm_perception_sim2 = autoconnect(
     _xarm7.devices,
     ManipulationModule.blueprint(
         model=_xarm7.model,
         planning_timeout=10.0,
         visualization={"backend": "viser"},
+        world_frame="world",
+        voxel_map_resolution=XARM7_SIM2_VOXEL_SIZE,
     ),
     ManipulationSkills.blueprint(),
     PickAndPlaceModule.blueprint(planning_frame="world"),
@@ -54,6 +74,27 @@ xarm_perception_sim2 = autoconnect(
         detector_backend="moondream",
         segmentation_backend="edgetam",
         detect_on_request=True,
+    ),
+    # Wrist camera -> self filter -> mapper -> the planner's octree obstacle.
+    # The wrist camera sees the arm itself, so the arm's returns must be dropped
+    # before mapping and the volume it occupies erased from the map: ray tracing
+    # cannot clear what the arm permanently occludes.
+    PointCloudSelfFilter.blueprint(
+        model=_xarm7.model.model,
+        voxel_size=XARM7_SIM2_VOXEL_SIZE,
+        world_frame="world",
+        # The planner publishes robot TF at 10 Hz and the camera at 10 Hz, so the
+        # stock 20 ms tolerance cannot bracket a publish period and drops most
+        # clouds. One full period admits them all, and the arm holds still while
+        # scanning, so a transform a period old describes the same pose.
+        tf_tolerance_s=0.1,
+        tf_forward_tolerance_s=0.1,
+    ),
+    # Tabletop reach, not a room-scale lidar sweep.
+    RayTracingVoxelMap.blueprint(
+        voxel_size=XARM7_SIM2_VOXEL_SIZE,
+        world_frame="world",
+        max_range=2.0,
     ),
     coordinator(
         hardware=[_xarm7.hardware],
@@ -68,4 +109,16 @@ xarm_perception_sim2 = autoconnect(
         ],
     ),
     RerunBridgeModule.blueprint(),
+).remappings(
+    [
+        # The camera's cloud gets its own topic: scene registration also
+        # publishes a "pointcloud" (its detected objects), and that must not be
+        # mapped as if the camera had seen it.
+        ("arm_wrist_camera", "pointcloud", "wrist_camera/pointcloud"),
+        (PointCloudSelfFilter, "pointcloud", "wrist_camera/pointcloud"),
+        # The two edges whose names differ: self filter -> mapper, and mapper ->
+        # the planner's octree.
+        (RayTracingVoxelMap, "lidar", "filtered_pointcloud"),
+        (ManipulationModule, "voxel_map", "global_map"),
+    ]
 )
