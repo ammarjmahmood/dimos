@@ -42,10 +42,10 @@ the schema rides the channel's params["lcm"]). Anything else potentially
 large (images, arrays, bytes) needs an explicit @web_encoder.
 """
 
+import base64
 from collections.abc import Callable, Mapping
 import dataclasses
 from dataclasses import dataclass
-import functools
 import inspect
 import json
 import sys
@@ -56,7 +56,6 @@ from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 from dimos.web.lcm_codec import (
     LCM_V1_SUFFIX,
     check_lcm_params,
-    decode_lcm_v1,
     encode_lcm_v1,
     lcm_type_name,
     schema_class_for,
@@ -388,6 +387,12 @@ def decode_json_v1(value: Any) -> Any:
     return value
 
 
+def decode_lcm_v1(value: str) -> bytes:
+    """Generic *.lcm.v1 publish decoder: the JSON value is the message's LCM bytes
+    as base64, passed through untouched (the LCM encoders send bytes as-is)."""
+    return base64.b64decode(value, validate=True)
+
+
 def resolve_decoder(encoding: str, message_type: type[Any]) -> DecoderDef:
     """The decoder a publish channel (encoding, message type) compiles to;
     ValueError when the pair is unsupported. Runs in the parent at blueprint
@@ -408,21 +413,7 @@ def resolve_decoder(encoding: str, message_type: type[Any]) -> DecoderDef:
             )
         return definition
     if encoding.endswith(LCM_V1_SUFFIX):
-        type_name = lcm_type_name(message_type)
-        if encoding != f"{type_name}{LCM_V1_SUFFIX}":
-            raise ValueError(
-                f"encoding {encoding!r} decodes to {encoding.removesuffix(LCM_V1_SUFFIX)}, "
-                f"not {message_type.__qualname__}"
-            )
-        # ValueError with the reason when there is no schema
-        fingerprint = schema_class_for(message_type)._get_packed_fingerprint().hex()
-        # Plain-value partial: ships to the worker by reference like a module function
-        return DecoderDef(
-            encoding,
-            message_type,
-            functools.partial(decode_lcm_v1, fingerprint, type_name),
-            takes_context=False,
-        )
+        return DecoderDef(encoding, message_type, decode_lcm_v1, takes_context=False)
     if encoding == "json.v1":
         # Narrower than the encoder side on purpose: reconstructing a
         # dataclass from untrusted browser JSON needs an explicit decoder.

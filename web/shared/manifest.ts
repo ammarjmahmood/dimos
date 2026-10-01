@@ -199,11 +199,10 @@ function scopeOf(spec: RawChannelSpec): string | null {
   return spec.requiredScope ?? null;
 }
 
-// "Supported publish encoding" for generic publish is the family-name rule
-// (json.v1, text.json.v1, ..., or <msg_name>.lcm.v1 whose JSON value is the
-// message's LCM bytes as base64): the manifest layer cannot see the codec
+// "Supported JSON encoding" for generic publish is the family-name rule
+// (json.v1, text.json.v1, ...): the manifest layer cannot see the codec
 // registries, so real decodability is enforced at authoring time.
-const PUBLISH_ENCODING_RE = /(^|\.)json\.v[0-9]+$|\.lcm\.v1$/;
+const JSON_ENCODING_RE = /(^|\.)json\.v[0-9]+$|\.lcm\.v1$/;
 
 /**
  * Depth-first layout validation + rebuild. A node's own structure (row/col
@@ -327,10 +326,10 @@ export function parseManifest(value: unknown): Manifest {
     if (publish !== "none" && spec.delivery !== "reliable") {
       throw new ManifestError("invalid_publish", `publish channel ${spec.ch} must be reliable`);
     }
-    if (publish !== "none" && !PUBLISH_ENCODING_RE.test(spec.encoding)) {
+    if (publish !== "none" && !JSON_ENCODING_RE.test(spec.encoding)) {
       throw new ManifestError(
         "invalid_publish",
-        `publish channel ${spec.ch} needs a JSON or LCM encoding`,
+        `publish channel ${spec.ch} needs a JSON encoding`,
       );
     }
     if (scope !== null && publish === "none") {

@@ -1146,7 +1146,7 @@ class RelayBridgeModule(Module):
         except Exception as e:
             nack("decode_failed", e)
             return
-        # *.lcm.v1 publishes pass through as the message's (fingerprint-checked) LCM bytes
+        # *.lcm.v1 publishes pass through as the message's LCM bytes
         passthrough = spec.encoding.endswith(LCM_V1_SUFFIX) and isinstance(result, bytes)
         if not passthrough and not _matches_message_type(result, spec.message_type):
             nack(

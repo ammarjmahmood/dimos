@@ -184,7 +184,7 @@ Codec functions must be module-level functions that can be imported by name. `co
 
 A `Channel(..., dir="tx", publish="shared")` is a browser input. It must be `reliable` and JSON-encoded. When a value arrives, the bridge decodes it with the registered decoder, publishes it on the generated `Out` port, and only then acknowledges to the browser. A decoder error or a publish error goes back as a rejection (`decode_failed`, `publish_failed`) and leaves other channels alone. The relay caps values at 32 KiB and rate-limits at the channel's `max_hz`, per viewer and per robot.
 
-A `<package>.<Message>.lcm.v1` publish channel needs no decoder: the published JSON value is the message's `lcm_encode()` bytes as a base64 string. The bridge checks their LCM fingerprint (`decode_failed` for another type) and passes the bytes through untouched, so the LCM and Zenoh transports send them as-is. In-process subscribers to that stream receive the raw `bytes`.
+A `<package>.<Message>.lcm.v1` publish channel needs no decoder: the published JSON value is the message's `lcm_encode()` bytes as base64, passed through untouched (in-process subscribers receive the raw `bytes`).
 
 ```python skip
 Channel("joint_commands", JointState, dir="tx", publish="shared", encoding="sensor_msgs.JointState.lcm.v1")

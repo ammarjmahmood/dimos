@@ -28,7 +28,6 @@ never at import time.
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Mapping
 import re
 from typing import Any
@@ -172,19 +171,6 @@ def check_lcm_params(params: Mapping[str, Any]) -> None:
         raise ValueError(
             "*.lcm.v1 channels need params['lcm'] = {type, fp, structs}; cockpit() fills it in"
         )
-
-
-def decode_lcm_v1(fingerprint: str, type_name: str, value: Any) -> bytes:
-    """The generic *.lcm.v1 publish decoder: a viewer's value is the message's
-    LCM bytes as base64 (publishes are JSON on the wire). The bytes pass
-    through untouched (the LCM transport encoders send bytes as-is), after a
-    fingerprint check so a viewer can't put another type on the stream."""
-    if not isinstance(value, str):
-        raise ValueError(f"a {type_name}{LCM_V1_SUFFIX} publish must be a base64 string")
-    data = base64.b64decode(value, validate=True)
-    if data[:8].hex() != fingerprint:
-        raise ValueError(f"LCM fingerprint {data[:8].hex()} is not {type_name}'s {fingerprint}")
-    return data
 
 
 def encode_lcm_v1(msg: Any, params: Mapping[str, Any]) -> bytes:

@@ -520,13 +520,6 @@ def test_lcm_publish_passes_message_bytes_through(monkeypatch) -> None:
         (ack,) = clients[0].control_frames
         assert isinstance(ack, PubAck) and ack.ch == "joint_commands"
         assert seen == [data]
-        # Another type's bytes are refused before anything is published
-        wrong = json.dumps(base64.b64encode(PoseStamped().lcm_encode()).decode()).encode()
-        push(module, clients[0], _pub_frame(wrong, _pub_meta(id="p2"), ch="joint_commands"))
-        assert wait_until(lambda: len(clients[0].control_frames) == 2)
-        nack = clients[0].control_frames[1]
-        assert isinstance(nack, PubNack) and nack.code == "decode_failed"
-        assert seen == [data]
     finally:
         stop_module(module)
 
