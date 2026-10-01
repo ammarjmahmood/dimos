@@ -509,3 +509,78 @@ native import and worker startup checks. All prior live failures are preserved.
 The single bounded paid grounding stage remains unspent; another GPU slot must
 be coordinated before retrying it. This preflight proves development plumbing,
 not physical contact, autonomous perception or fair task performance.
+
+### Consumed grounding pilot and same-frame evidence correction
+
+The single authorized Luna vision pilot completed on source
+`8da8f56da28124e841785f466d00fe089ec788f5`: six requests, five successful
+write/execute/read/write/execute tools, 11.77 seconds of model/tool time and
+70.67 seconds including owner cleanup. Reported usage gives a conservative
+$0.0039306 estimate, not a provider invoice. No retries or policy press occurred;
+initial/final BDDL success remained false. The paid stage is consumed. Existing
+source, original camera image, generated code, tool trace, evaluator diagnostics
+and Library archive remain historical evidence; subsequent fixes do not change
+that result.
+
+Pixel `(195, 90)` grounded to base-frame
+`[0.5045939933, 0.2097860704, 0.5258223400]` m. Post-selection evaluator analysis
+placed the point 21.73 mm from a 22.36 mm-radius analytic toggle region, about
+0.63 mm inside its boundary. That region is not a verified physical button
+surface. Semantic control identification and press viability remain unproven.
+The model's final text said it did not ground a pixel, contradicting successful
+`ground.py` execution and returned XYZ. An explicit summary claim must be checked
+against recorded command and SDK feedback; a successful tool trace is not proof
+of arbitrary Python side effects or accurate natural-language narration.
+
+The original pilot saved its selected RGB and reported depth/XYZ, but only the
+older readiness full depth and rounded TF. The approximate post-selection
+reprojection therefore cannot serve as an independent calibration measurement.
+The new development path closes that recording gap for future runs:
+
+- The native owner retains one messages() capture, tagged with an opaque capture
+  ID, episode ID and owner simulation step. `get_sensor_snapshot()` returns only
+  permitted camera RGB/depth/calibration and camera-to-base transforms; task
+  objects, goals, semantic images and world transforms are excluded.
+- Policy initialization now requires the owner to supply an absolute evidence
+  directory, for example `initialize_development_scene(collision_scene,
+  evidence_directory="/tmp/new-radio-run/sensor-evidence")`. It uses the atomic
+  snapshot RPC rather than independently polling latest camera streams.
+- An observation ID binds exact bytes, image formats, full camera calibration,
+  timestamps, TF and step metadata via a content fingerprint. Mixed capture
+  timestamps, expired frames, reused IDs with changed data, changed episodes and
+  backwards capture clocks are rejected. Nonzero distortion is rejected by this
+  pinhole-only development grounding path.
+- Allowed sensor arrays and metadata persist in immutable pickle-free NPZ
+  bundles. Grounding records bind the original observation ID/fingerprint to the
+  selected integer pixel and SDK result. Independent projection and optical-Z
+  checks reject mismatched pixel, point, depth or capture metadata. Existing
+  conflicting/corrupted bundles are not silently overwritten.
+
+This is narrow development evidence retention, not the generic isolation/audit
+backlog or a claim of cheating resistance. The step is the native owner's capture
+step; renderer latency has not been separately characterized. Evaluator truth
+must remain in a separate owner log keyed by that episode/step, never in policy
+observations or prompts.
+
+CPU validation passed 85 focused tests, including real native owner methods with
+an external engine fixture, retained-frame mutation/replacement/expiry checks,
+projection/backprojection, persistence and explicit tool-summary reconciliation.
+Two complete real planner/coordinator/policy lifecycles in a new disposable CPU
+snapshot passed RPC serialization, exact bundle retention and cleanup with
+synthetic external sensors. Native Python 3.11 source/contract imports passed
+without initializing OmniGibson. No Node gateway, model, simulator, GPU or
+actuation was started for those checks. The original paid snapshot was untouched.
+
+The next physical attempt remains gated by new run/GPU authority. First acquire
+and retain a fresh exact sensor bundle, identify the intended control or stop if
+uncertain, then estimate a same-frame surface normal across several depth patches
+and record their consistency. The historical 3/5/7-pixel plane fits are only
+candidates from older depth and conditionally inferred intrinsics; they are not
+execution-ready. Use known closed-gripper geometry to transform the chosen
+contact point into an end-effector intent:
+`p_base_ee = p_base_contact - R_base_ee * p_ee_fingertip`. Verify calibration,
+contact uncertainty and collision shapes before selecting orientation and a
+short precontact/press path. Use left arm plus explicit torso, freeze the base,
+reject a stale/moved scene, and preserve confirmed cancellation/timeouts. The
+independent evaluator must report actual contact and BDDL; sphere proximity alone
+must never be reported as physical button correctness or task success.

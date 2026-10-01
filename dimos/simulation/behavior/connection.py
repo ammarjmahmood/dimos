@@ -128,6 +128,11 @@ class BehaviorConnection(IsolatedPythonModule):
         raise NotImplementedError
 
     @rpc
+    def get_sensor_snapshot(self) -> dict[str, Any]:
+        """Read one atomic allowed-camera capture, with opaque episode/step tags."""
+        raise NotImplementedError
+
+    @rpc
     def get_ground_truth(self) -> dict[str, Any]:
         """Read simulator object poses and task goal evaluation, not perception estimates."""
         raise NotImplementedError

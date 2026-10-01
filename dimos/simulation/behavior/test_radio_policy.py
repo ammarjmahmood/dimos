@@ -70,6 +70,8 @@ def test_observation_excludes_truth_and_world_pose_and_copies_rgb(raw_camera):
     assert set(result) == {
         "id",
         "camera",
+        "capture",
+        "fingerprint",
         "rgb",
         "depth",
         "calibration",
@@ -241,7 +243,7 @@ def test_grounding_rejects_replaced_observation_id_and_expired_frames(raw_camera
     service.close()
 
 
-def test_owner_initialization_rejects_unhidden_toggle_visuals(mocker):
+def test_owner_initialization_rejects_unhidden_toggle_visuals(mocker, tmp_path):
     app = mocker.Mock()
     app.get_module.return_value.describe.return_value = {
         "policy_visuals": {"toggle_markers_hidden": False}
@@ -250,7 +252,7 @@ def test_owner_initialization_rejects_unhidden_toggle_visuals(mocker):
     module = RadioPolicyModule()
     try:
         with pytest.raises(RuntimeError, match="hidden diagnostic toggle markers"):
-            module.initialize_development_scene({})
+            module.initialize_development_scene({}, str(tmp_path))
         app.stop.assert_called_once()
         with pytest.raises(RuntimeError, match="not initialized"):
             module.observe()

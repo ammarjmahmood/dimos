@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 import copy
 from dataclasses import dataclass, replace
 import math
+from pathlib import Path
 import threading
 import time
 from typing import Any, Literal, cast
@@ -38,16 +39,12 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
-
-CAMERA_STREAMS = {
-    "head": ("color_image", "depth_image", "camera_info", "camera_optical"),
-    "left_wrist": (
-        "left_wrist_image",
-        "left_wrist_depth",
-        "left_wrist_camera_info",
-        "left_wrist_optical",
-    ),
-}
+from dimos.simulation.behavior.radio_evidence import (
+    CAMERA_STREAMS,
+    observation_fingerprint,
+    persist_grounding,
+    persist_observation,
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +70,22 @@ def camera_observation(raw: Mapping[str, Any], camera: str) -> dict[str, Any]:
     """
     if camera not in CAMERA_STREAMS:
         raise ValueError("Use head or left_wrist")
+    capture = {"capture_id": None, "episode": None, "step": None, "captured_at": None}
+    if "capture_id" in raw or "sensors" in raw:
+        if (
+            not isinstance(raw.get("capture_id"), str)
+            or not raw["capture_id"]
+            or not isinstance(raw.get("episode"), str)
+            or not raw["episode"]
+            or type(raw.get("step")) is not int
+            or raw["step"] < 0
+            or not isinstance(raw.get("captured_at"), (int, float))
+            or not math.isfinite(raw["captured_at"])
+            or not isinstance(raw.get("sensors"), Mapping)
+        ):
+            raise ValueError("Invalid atomic sensor capture metadata")
+        capture = {key: raw[key] for key in capture}
+        raw = raw["sensors"]
     rgb_key, depth_key, calibration_key, frame = CAMERA_STREAMS[camera]
     rgb, depth, calibration = (raw[k] for k in (rgb_key, depth_key, calibration_key))
     if not isinstance(rgb, Image) or not isinstance(depth, Image):
@@ -89,20 +102,29 @@ def camera_observation(raw: Mapping[str, Any], camera: str) -> dict[str, Any]:
         calibration.width,
     ):
         raise ValueError("Camera dimensions mismatch")
+    if any(not math.isfinite(v) or v != 0 for v in calibration.D):
+        raise ValueError("Policy grounding requires undistorted pinhole camera data")
     transforms = [
         t for t in raw["tf"].transforms if t.frame_id == "base_link" and t.child_frame_id == frame
     ]
     if len(transforms) != 1 or abs(transforms[0].ts - rgb.ts) > 0.1:
         raise ValueError("Camera-to-base transform unavailable or skewed")
-    return {
-        "id": uuid4().hex,
+    if capture["capture_id"] is not None and any(
+        stamp != capture["captured_at"] for stamp in (*stamps, transforms[0].ts)
+    ):
+        raise ValueError("Sensor messages do not belong to the same native capture")
+    observation = {
+        "id": f"{capture['capture_id']}:{camera}" if capture["capture_id"] else uuid4().hex,
         "camera": camera,
+        "capture": capture,
         "rgb": rgb.copy(),
         "depth": depth.copy(),
         "calibration": copy.deepcopy(calibration),
         "camera_to_base": copy.deepcopy(transforms[0]),
         "provenance": "RGB/depth/calibration and robot TF; no task-object/evaluator truth",
     }
+    observation["fingerprint"] = observation_fingerprint(observation)
+    return observation
 
 
 def ground_pixel(observation: Mapping[str, Any], u: int, v: int) -> dict[str, Any]:
@@ -111,8 +133,10 @@ def ground_pixel(observation: Mapping[str, Any], u: int, v: int) -> dict[str, An
     This does not detect a radio, infer a switch normal, or choose a target.
     Invalid/missing depth and image borders fail rather than borrowing truth.
     """
+    if observation.get("fingerprint") != observation_fingerprint(observation):
+        raise ValueError("Observation content no longer matches its fingerprint")
     image = observation["depth"]
-    if not isinstance(u, int) or not isinstance(v, int):
+    if type(u) is not int or type(v) is not int:
         raise ValueError("Use integer pixel coordinates")
     height, width = image.data.shape
     if not 1 <= u < width - 1 or not 1 <= v < height - 1:
@@ -138,6 +162,8 @@ def ground_pixel(observation: Mapping[str, Any], u: int, v: int) -> dict[str, An
         "position": xyz.tolist(),
         "frame": "base_link",
         "observation_id": observation["id"],
+        "fingerprint": observation["fingerprint"],
+        "capture": copy.deepcopy(observation["capture"]),
         "pixel": [u, v],
         "depth": z,
         "provenance": "Policy-selected RGB pixel + measured optical-Z depth + robot TF",
@@ -157,7 +183,9 @@ class RadioPolicySupervisor:
         motion: Any,
         observe: Callable[[], Mapping[str, Any]],
         base_to_world: Callable[[], Transform],
+        evidence_directory: Path | None = None,
     ) -> None:
+        self._evidence_directory = evidence_directory
         self._arm, self._motion = arm, motion
         self._observe, self._base_to_world = observe, base_to_world
         self._lock = threading.RLock()
@@ -171,6 +199,15 @@ class RadioPolicySupervisor:
     def observe(self, camera: str = "left_wrist") -> dict[str, Any]:
         observation = camera_observation(self._observe(), camera)
         with self._lock:
+            previous = self._last_observation
+            if (
+                previous
+                and previous["id"] == observation["id"]
+                and previous["fingerprint"] != observation["fingerprint"]
+            ):
+                raise ValueError("Capture ID reused for conflicting sensor data")
+            if self._evidence_directory is not None:
+                persist_observation(self._evidence_directory / "observations", observation)
             self._last_observation = copy.deepcopy(observation)
         return observation
 
@@ -182,7 +219,19 @@ class RadioPolicySupervisor:
                 raise ValueError("Observation replaced or unavailable")
             if not 0 <= time.time() - observation["rgb"].ts <= 10:
                 raise ValueError("Reobserve before grounding an expired sensor frame")
-            return ground_pixel(observation, u, v)
+            if observation["capture"]["capture_id"] is not None:
+                current = self._observe()
+                if current.get("episode") != observation["capture"]["episode"]:
+                    raise ValueError("Episode changed since the retained sensor capture")
+                if (
+                    type(current.get("step")) is not int
+                    or current["step"] < observation["capture"]["step"]
+                ):
+                    raise ValueError("Sensor capture clock moved backwards")
+            result = ground_pixel(observation, u, v)
+            if self._evidence_directory is not None:
+                persist_grounding(self._evidence_directory, observation, result)
+            return result
 
     def pose(self) -> PoseStamped:
         """Encoder/FK end-effector pose in base coordinates, not object truth."""
@@ -332,13 +381,17 @@ class RadioPolicyModule(Module):
         self._development_evidence: dict[str, Any] = {}
 
     @rpc
-    def initialize_development_scene(self, collision_scene: dict[str, Any]) -> None:
+    def initialize_development_scene(
+        self, collision_scene: dict[str, Any], evidence_directory: str | None = None
+    ) -> None:
         """Supervisor-owner setup only; never a policy tool or model prompt input."""
         from dimos.porcelain.dimos import Dimos
         from dimos.simulation.behavior.radio_motion import make_development_motion
 
         if self._supervisor is not None:
             raise RuntimeError("Supervisor already initialized")
+        if evidence_directory is None or not Path(evidence_directory).is_absolute():
+            raise ValueError("Development policy owner must choose an absolute evidence directory")
         app = Dimos.connect(timeout=5)
         try:
             sim: Any = app.get_module("BehaviorConnection")
@@ -374,7 +427,9 @@ class RadioPolicyModule(Module):
                     ts=t.ts,
                 )
 
-            self._supervisor = RadioPolicySupervisor(arm, motion, probe.observation, base_to_world)
+            self._supervisor = RadioPolicySupervisor(
+                arm, motion, sim.get_sensor_snapshot, base_to_world, Path(evidence_directory)
+            )
             self._app = app
         except Exception:
             app.stop()
