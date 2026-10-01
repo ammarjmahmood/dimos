@@ -131,6 +131,20 @@ floor. Raw scenes without spawn metadata use the blueprint's explicit support
 default. Direct `RobotInstance` and live pose edits still use absolute root
 poses. Scene metadata uses this single convention.
 
+The 20 SceneReplica tabletop scenes (five YCB objects on a cafe table, 100
+placements) ship separately in `data/.lfs/scenereplica.tar.gz` as
+`data/scenereplica/scene-01` .. `scene-20`, each with a `workbench` spawn at
+(0, 0, 0.90) m, a `table/top` and a `dropoff/top` support region, and
+provenance naming the SceneReplica scene id. `dimos/evals/scenes/scenereplica/`
+holds the converter, its README (frames, spawn-height sweep, licence note) and
+the run command:
+
+```bash
+MUJOCO_GL=egl dimos --simulation mujoco --transport zenoh \
+  --scene-package data/scenereplica/scene-01 \
+  run xarm-perception-sim2 mcp-server observe-skill --simulationmodule.viewer=false
+```
+
 Old `office` is not an alias for one of these scenes: its
 legacy collision wrapper still needs a separate visual/entity conversion.
 
