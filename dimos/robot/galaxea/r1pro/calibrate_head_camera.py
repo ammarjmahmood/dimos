@@ -586,9 +586,11 @@ def evaluate(
         valid = np.isfinite(stereo)
         depth_errors.append(np.abs(points_cam[valid, 2] - stereo[valid]))
     depth_errors, edge_distances = np.concatenate(depth_errors), np.concatenate(edge_distances)
+    # A recording without stereo depth has nothing to cross-check; the edge metric still applies.
+    has_depth = len(depth_errors) > 0
     return {
-        "median_abs_depth_error_m": float(np.median(depth_errors)),
-        "depth_error_p90_m": float(np.percentile(depth_errors, 90)),
+        "median_abs_depth_error_m": float(np.median(depth_errors)) if has_depth else None,
+        "depth_error_p90_m": float(np.percentile(depth_errors, 90)) if has_depth else None,
         "depth_pixels": len(depth_errors),
         "median_edge_distance_px": float(np.median(edge_distances)),
         "edge_within_3px_fraction": float(np.mean(edge_distances <= 3)),
