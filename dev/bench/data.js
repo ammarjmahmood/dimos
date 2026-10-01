@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790818697346,
+  "lastUpdate": 1790828555959,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -1395,6 +1395,102 @@ window.BENCHMARK_DATA = {
             "value": 0.14,
             "unit": "MB",
             "extra": "cpu: AMD EPYC 9V74 80-Core Processor"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hvent90@gmail.com",
+            "name": "Henry Ventura",
+            "username": "hvent90"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "88a77fe97ba0e7e7647613debf59c38494577541",
+          "message": "feat(habitat): allow addition of props to Habitat scenes (#4340)",
+          "timestamp": "2026-09-30T21:18:46-07:00",
+          "tree_id": "bc9fb16a67642350d7f070298e94d5c7c0dae4d1",
+          "url": "https://github.com/dimensionalOS/dimos/commit/88a77fe97ba0e7e7647613debf59c38494577541"
+        },
+        "date": 1790828555267,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 7.963,
+            "unit": "s",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 16.764,
+            "unit": "s",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "run cpu",
+            "value": 23.603,
+            "unit": "s",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 17.96,
+            "unit": "s",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 5.643,
+            "unit": "s",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "peak memory",
+            "value": 2758.969,
+            "unit": "MB",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "peak threads",
+            "value": 398,
+            "unit": "threads",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "disk read",
+            "value": 4.605,
+            "unit": "MB",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "disk write",
+            "value": 10.969,
+            "unit": "MB",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "network (transport)",
+            "value": 2723.047,
+            "unit": "MB",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "network (external rx)",
+            "value": 0.106,
+            "unit": "MB",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
+          },
+          {
+            "name": "network (external tx)",
+            "value": 0.138,
+            "unit": "MB",
+            "extra": "cpu: INTEL(R) XEON(R) PLATINUM 8573C"
           }
         ]
       }
