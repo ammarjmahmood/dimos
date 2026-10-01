@@ -762,7 +762,7 @@ jobs:
           maturin develop -m dimos/mapping/ray_tracing/rust/py/Cargo.toml
           maturin develop -m dimos/navigation/nav_3d/mls_planner/rust/py/Cargo.toml
       - name: Run tests
-        run: uv run pytest --numprocesses=logical --cov=dimos/ --junitxml=junit.xml -m 'not (self_hosted or mujoco or self_hosted_large or web_browser or bake_e2e or native_e2e)'
+        run: uv run pytest --numprocesses=logical --cov=dimos/ --junitxml=junit.xml -o faulthandler_timeout=120 -m 'not (self_hosted or mujoco or self_hosted_large or web_browser or bake_e2e or native_e2e)'
       - name: Re-run the failing tests with maximum verbosity
         if: failure()
         env:
