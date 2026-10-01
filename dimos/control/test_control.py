@@ -557,8 +557,9 @@ class TestControlCoordinatorTrajectoryExecution:
         assert "arm/joint1" in result.message
         assert not trajectory_task.is_active()
 
-    def test_cancel_fences_submission_delayed_during_hardware_read(
-        self, make_coordinator, trajectory_task, simple_trajectory, mocker
+    @pytest.mark.parametrize("fenced", [False, True])
+    def test_cancel_during_hardware_read_respects_optional_generation(
+        self, make_coordinator, trajectory_task, simple_trajectory, mocker, fenced
     ):
         coordinator = make_coordinator()
         coordinator.add_task(trajectory_task, task_type="trajectory")
@@ -573,9 +574,10 @@ class TestControlCoordinatorTrajectoryExecution:
             return trajectory_start_positions(simple_trajectory)
 
         mocker.patch.object(coordinator, "get_joint_positions", side_effect=delayed_positions)
+        kwargs = {"expected_generation": generation} if fenced else {}
         worker = Thread(
             target=lambda: results.append(
-                coordinator.execute_trajectory(simple_trajectory, expected_generation=generation)
+                coordinator.execute_trajectory(simple_trajectory, **kwargs)
             )
         )
         worker.start()
@@ -588,8 +590,13 @@ class TestControlCoordinatorTrajectoryExecution:
             worker.join(timeout=2)
 
         assert not worker.is_alive()
-        assert results[0].status is TrajectoryExecutionStatus.STALE_REQUEST
-        assert not trajectory_task.is_active()
+        expected = (
+            TrajectoryExecutionStatus.STALE_REQUEST
+            if fenced
+            else TrajectoryExecutionStatus.ACCEPTED
+        )
+        assert results[0].status is expected
+        assert trajectory_task.is_active() is (not fenced)
 
     def test_new_generation_accepts_submission_after_cancellation(
         self, make_coordinator, trajectory_task, simple_trajectory, mocker
