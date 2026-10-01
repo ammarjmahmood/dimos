@@ -32,7 +32,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
@@ -71,6 +70,8 @@ class Camera:
 
     def project(self, points: np.ndarray) -> np.ndarray:
         """Camera-frame points (N,3) to pixels (N,2) through the 8-coefficient rational model."""
+        import cv2
+
         if len(points) == 0:
             return np.zeros((0, 2))
         pixels, _ = cv2.projectPoints(
@@ -80,6 +81,8 @@ class Camera:
 
     def max_ray_slope(self) -> float:
         """Largest |ray / z| that still lands in the image; the rational model folds back beyond it."""
+        import cv2
+
         corners = np.array(
             [[0, 0], [self.width, 0], [0, self.height], [self.width, self.height]], float
         )
@@ -215,6 +218,8 @@ def load_frames(
     end_s: float,
 ) -> tuple[Camera, tuple[str, np.ndarray], list[Frame]]:
     """Two passes: small topics first to pick frames, then only the images and scans those frames need."""
+    import cv2
+
     # Only the recording reader needs these, so the math above imports without them.
     from mcap.reader import make_reader
     from mcap_ros2.decoder import DecoderFactory
@@ -354,6 +359,8 @@ def motion_compensate(
 
 def image_edge_distance(gray: np.ndarray) -> np.ndarray:
     """Per-pixel distance (px) to the nearest Canny edge."""
+    import cv2
+
     edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 1.5), 40, 120)
     return np.asarray(
         cv2.distanceTransform((edges == 0).astype(np.uint8), cv2.DIST_L2, 5), np.float32
@@ -387,6 +394,8 @@ def split_lidar_points(
     seed: int = 0,
 ) -> None:
     """Pick, under the prior, lidar points on silhouettes (with their outward image direction) and on clean surfaces."""
+    import cv2
+
     rng = np.random.default_rng(seed)
     points_cam = transform_points(frame.cam_from_lidar, frame.lidar_points)
     visible = in_view(points_cam, camera)
@@ -434,6 +443,8 @@ def split_lidar_points(
 
 def smooth_inverse_depth(depth: np.ndarray, jump: float = 0.1) -> np.ndarray:
     """1/depth, NaN next to a stereo discontinuity so bilinear lookups never blend two surfaces."""
+    import cv2
+
     inverse = (1.0 / depth).astype(np.float32)
     filled = np.nan_to_num(inverse, nan=0.0)
     spread = cv2.dilate(filled, np.ones((3, 3), np.uint8)) - cv2.erode(
@@ -603,6 +614,8 @@ def render_overlay(
     count: int = 3,
 ) -> None:
     """Each row: lidar coloured by depth over the image, prior on the left, refined on the right."""
+    import cv2
+
     rows = []
     for frame in frames[:: max(len(frames) // count, 1)][:count]:
         panels = []
