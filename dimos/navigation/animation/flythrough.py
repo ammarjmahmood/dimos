@@ -189,7 +189,10 @@ def main(
     ease: float = typer.Option(1.5, "--ease", help="Slow-start speed grows as t**ease"),
     scan: bool = typer.Option(False, "--scan/--no-scan", help="Overlay each raw lidar scan"),
     near_m: float = typer.Option(
-        10.0, "--near-m", help="Premap shown only this close to the lidar until --slow-s; 0 off"
+        8.0, "--near-m", help="Premap shown only this close to the lidar until --reveal-s; 0 off"
+    ),
+    reveal_s: float = typer.Option(
+        25.0, "--reveal-s", help="Seconds into the flight the full premap appears"
     ),
     out: Path = typer.Option(..., "--out", help=".rrd to write"),
 ) -> None:
@@ -221,7 +224,7 @@ def main(
         first = next(iter(store.stream(lidar, PointCloud2).order_by("ts")))
         tf = StreamTF.from_store(store)
         assert tf is not None
-        reveal_ts = first.ts + from_time + slow_s
+        reveal_ts = first.ts + from_time + reveal_s
         if near_m > 0 and result.fix_ts < reveal_ts:
             at_fix = tf.get(world_frame, first.data.frame_id, time_point=result.fix_ts)
             assert at_fix is not None
