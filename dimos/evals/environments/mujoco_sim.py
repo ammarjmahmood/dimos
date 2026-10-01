@@ -60,6 +60,9 @@ class MujocoEnvironment(Sim):
         proc.extra_env.setdefault(
             "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
         )
+        # Without an X display MuJoCo can only render off-screen through EGL.
+        if "DISPLAY" not in os.environ:
+            proc.extra_env.setdefault("MUJOCO_GL", os.environ.get("MUJOCO_GL", "egl"))
         if self.config.tracked_bodies:
             proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"] = json.dumps(
                 list(self.config.tracked_bodies)

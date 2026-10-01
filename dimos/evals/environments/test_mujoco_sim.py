@@ -41,11 +41,14 @@ def _tf(ts: float, child: str, z: float) -> TFMessage:
 
 def test_launch_flags(monkeypatch):
     monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("MUJOCO_GL", raising=False)
     env = environment(tracked_bodies=("apple", "cup"))
     proc = DimosCliCall()
     env.configure_launch(proc)
     assert proc.simulator == "mujoco"
     assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
+    assert proc.extra_env["MUJOCO_GL"] == "egl"
     assert json.loads(proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"]) == ["apple", "cup"]
     assert proc.global_args == [
         "--record-topics",
@@ -57,12 +60,14 @@ def test_launch_flags(monkeypatch):
     assert "MUJOCOSIMMODULE__TRACKED_BODIES" not in proc.extra_env
 
     monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")
+    monkeypatch.setenv("DISPLAY", ":0")
     proc = DimosCliCall()
     environment(
         module_env={"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}
     ).configure_launch(proc)
     assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "false"
     assert proc.extra_env["OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND"] == "yoloe"
+    assert "MUJOCO_GL" not in proc.extra_env
 
 
 def test_module_env_reaches_blueprint_parser(monkeypatch):
