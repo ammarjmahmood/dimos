@@ -62,12 +62,13 @@ pub struct Config {
     /// JPEG decoded at 1/`decode_scale` of full size (1, 2, 4 or 8), before undistorting.
     #[validate(range(min = 1, max = 8))]
     decode_scale: i64,
-    /// The pinhole image Depth Anything sees: size and focal length in pixels, centred.
-    #[validate(range(min = 16, max = 4096))]
+    /// The pinhole image Depth Anything sees: size and focal length in pixels, centred. 0 takes the
+    /// decoded image's size and the CameraInfo's focal length at that scale.
+    #[validate(range(min = 0, max = 4096))]
     undistorted_width: i64,
-    #[validate(range(min = 16, max = 4096))]
+    #[validate(range(min = 0, max = 4096))]
     undistorted_height: i64,
-    #[validate(range(min = 1.0, max = 10000.0))]
+    #[validate(range(min = 0.0, max = 10000.0))]
     undistorted_focal_px: f64,
     /// Frame the lidar history is kept in; must be fixed while the robot moves.
     world_frame: String,
@@ -302,9 +303,13 @@ impl Worker {
                 };
                 let map = UndistortMap::new(
                     &lens,
-                    cfg.undistorted_width as usize,
-                    cfg.undistorted_height as usize,
-                    cfg.undistorted_focal_px,
+                    or_derived(cfg.undistorted_width as usize, width),
+                    or_derived(cfg.undistorted_height as usize, height),
+                    if cfg.undistorted_focal_px > 0.0 {
+                        cfg.undistorted_focal_px
+                    } else {
+                        lens.fx
+                    },
                 );
                 undistort = Some((info.clone(), width, Arc::new(map)));
             }
@@ -608,6 +613,15 @@ fn make_cloud(points: &[[f32; 3]], source: &Header, frame_id: String) -> PointCl
 
 fn isometry(transform: &dimos_module::tf::Transform) -> Isometry3<f64> {
     Isometry3::from_parts(transform.translation().into(), transform.rotation())
+}
+
+/// A configured size, or the derived one when it is 0.
+fn or_derived(configured: usize, derived: usize) -> usize {
+    if configured > 0 {
+        configured
+    } else {
+        derived
+    }
 }
 
 fn seconds(stamp: &Time) -> f64 {

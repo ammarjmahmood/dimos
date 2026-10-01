@@ -50,11 +50,12 @@ class Depth2DepthCloudConfig(NativeModuleConfig):
     # Model input for candle (Mac, CPU); multiples of 14, smaller is faster.
     model_height: int = 364
     model_width: int = 448
-    # JPEG decoded at 1/decode_scale of full size, then resampled to this pinhole image for the model.
+    # JPEG decoded at 1/decode_scale of full size, then resampled to this pinhole image for the model;
+    # 0 takes the decoded size and the CameraInfo's focal length at that scale.
     decode_scale: int = Field(default=2, ge=1, le=8)
-    undistorted_width: int = Field(default=640, ge=16, le=4096)
-    undistorted_height: int = Field(default=512, ge=16, le=4096)
-    undistorted_focal_px: float = Field(default=337.5, ge=1.0, le=10000.0)
+    undistorted_width: int = Field(default=0, ge=0, le=4096)
+    undistorted_height: int = Field(default=0, ge=0, le=4096)
+    undistorted_focal_px: float = Field(default=0.0, ge=0.0, le=10000.0)
     # Scans are kept this long in world_frame, so ground the lidar saw a moment ago still anchors the frame.
     world_frame: str = "odom"
     lidar_history_s: float = Field(default=2.0, ge=0.0, le=30.0)
