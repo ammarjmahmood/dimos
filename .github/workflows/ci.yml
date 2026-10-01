@@ -1145,6 +1145,13 @@ jobs:
         run: bash scripts/setup_message_codegen.sh
       - name: Install dependencies
         run: uv sync --group tests-self-hosted --frozen
+      - name: Install Rust for offline planner bindings
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build offline planner Python bindings
+        run: |
+          source .venv/bin/activate
+          maturin develop -m dimos/mapping/ray_tracing/rust/py/Cargo.toml
+          maturin develop -m dimos/navigation/nav_3d/mls_planner/rust/py/Cargo.toml
       - name: Build C++ extensions in-place
         run: uv run python setup.py build_ext --inplace
       - name: Run tests
