@@ -15,7 +15,7 @@
 """Development-only stationary SDK motion and contact interaction; no MCP required."""
 
 import argparse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import json
 import math
 from pathlib import Path
@@ -124,7 +124,12 @@ def radio_blueprint(
 
 
 def wait_for_measured_pose(
-    arm: Arm, position: Sequence[float], timeout: float, tolerance: float = 0.005
+    arm: Arm,
+    position: Sequence[float],
+    timeout: float,
+    tolerance: float = 0.005,
+    orientation: Sequence[float] | None = None,
+    orientation_tolerance: float = 0.01,
 ) -> list[float]:
     """Require fresh encoder-derived FK after the trajectory clock completes."""
     deadline = time.monotonic() + timeout
@@ -133,7 +138,16 @@ def wait_for_measured_pose(
         pose = state.end_effector_pose
         if state.joints is not None and pose is not None:
             measured = list(pose.position.to_tuple())
-            if math.dist(measured, position) <= tolerance:
+            orientation_ok = True
+            if orientation is not None:
+                actual = pose.orientation.to_tuple()
+                dot = abs(sum(a * b for a, b in zip(actual, orientation, strict=True)))
+                denominator = math.sqrt(
+                    sum(a * a for a in actual) * sum(b * b for b in orientation)
+                )
+                angle = 2 * math.acos(min(1.0, dot / denominator)) if denominator else math.inf
+                orientation_ok = angle <= orientation_tolerance
+            if math.dist(measured, position) <= tolerance and orientation_ok:
                 return measured
         if time.monotonic() >= deadline:
             raise TimeoutError("Trajectory returned but fresh measured target pose was not reached")
@@ -148,6 +162,9 @@ def press_toggle(
     *,
     orientation: Sequence[float] | None = None,
     auxiliary_groups: Sequence[str] = (),
+    evidence: Callable[[str], None] | None = None,
+    episode_finished: Callable[[], bool] | None = None,
+    clearance_waypoints: Sequence[Mapping[str, Sequence[float]]] = (),
     approach_distance: float = 0.03,
     hold_steps: int = 8,
     timeout: float = 30.0,
@@ -179,20 +196,28 @@ def press_toggle(
             raise TimeoutError("Physical interaction deadline elapsed")
         return value
 
+    def record(stage: str) -> None:
+        if evidence is not None:
+            evidence(stage)
+
+    def pose_move(position: Sequence[float], rotation: Sequence[float] | None) -> list[float]:
+        arm.move_pose(
+            position,
+            orientation=rotation,
+            auxiliary_groups=auxiliary_groups,
+            timeout=remaining(),
+            speed_scale=0.15,
+        )
+        return wait_for_measured_pose(arm, position, remaining(), orientation=rotation)
+
     try:
-        if auxiliary_groups:
-            arm.move_pose(
-                precontact,
-                orientation=orientation,
-                auxiliary_groups=auxiliary_groups,
-                timeout=remaining(),
-                speed_scale=0.15,
-            )
-        else:
-            arm.move_pose(
-                precontact, orientation=orientation, timeout=remaining(), speed_scale=0.15
-            )
-        measured_precontact = wait_for_measured_pose(arm, precontact, remaining())
+        for index, waypoint in enumerate(clearance_waypoints):
+            record(f"before_clearance_{index}")
+            pose_move(waypoint["position"], waypoint.get("orientation"))
+            record(f"after_clearance_{index}")
+        record("before_precontact")
+        measured_precontact = pose_move(precontact, orientation)
+        record("after_precontact")
         arm.move_linear(
             *(approach_distance * v for v in direction),
             auxiliary_groups=auxiliary_groups,
@@ -200,10 +225,25 @@ def press_toggle(
             timeout=remaining(),
             speed_scale=0.1,
         )
-        measured_contact = wait_for_measured_pose(arm, contact_position, remaining())
+        if episode_finished is not None and episode_finished():
+            record("episode_finished_after_press")
+            return {"development_only": True, "motion_completed": False, "episode_finished": True}
+        measured_contact = wait_for_measured_pose(
+            arm, contact_position, remaining(), orientation=orientation
+        )
+        record("after_press")
         first_step = simulation_step()
         while simulation_step() - first_step < hold_steps:
+            if episode_finished is not None and episode_finished():
+                record("episode_finished_during_hold")
+                return {
+                    "development_only": True,
+                    "motion_completed": False,
+                    "episode_finished": True,
+                }
+            record("holding")
             time.sleep(min(0.02, remaining()))
+        record("before_retract")
         arm.move_linear(
             *(-approach_distance * v for v in direction),
             auxiliary_groups=auxiliary_groups,
@@ -211,7 +251,10 @@ def press_toggle(
             timeout=remaining(),
             speed_scale=0.1,
         )
-        measured_return = wait_for_measured_pose(arm, precontact, remaining())
+        measured_return = wait_for_measured_pose(
+            arm, precontact, remaining(), orientation=orientation
+        )
+        record("after_retract")
         return {
             "development_only": True,
             "motion_completed": True,
@@ -221,6 +264,11 @@ def press_toggle(
             "measured_return": measured_return,
         }
     except Exception as error:
+        try:
+            record("interaction_error")
+        except Exception:
+            # A secondary diagnostic failure must not prevent cancellation.
+            pass
         # Timeout of the calling Python process never proves remote motion stopped.
         try:
             result = arm.rpc.cancel()
@@ -320,6 +368,27 @@ def main() -> None:
         report["auxiliary_torso"] = args.auxiliary_torso
         if args.development_diagnostics:
             report["privileged_before"] = sim.get_ground_truth()
+        stage_keys: set[tuple[str, str, int]] = set()
+
+        def stage_evidence(stage: str) -> None:
+            status = sim.get_status()
+            key = (stage, status.episode.id, status.episode.step)
+            if key in stage_keys:
+                return
+            stage_keys.add(key)
+            entry: dict[str, Any] = {
+                "stage": stage,
+                "monotonic_time": time.monotonic(),
+                "episode": status.episode.id,
+                "step": status.episode.step,
+                "sdk_state": repr(arm.rpc.get_state()),
+                "evaluator": status.episode.model_dump(),
+            }
+            if args.development_diagnostics:
+                entry["privileged_truth"] = sim.get_ground_truth()
+            report.setdefault("stages", []).append(entry)
+            args.report.write_text(json.dumps(report, indent=2))
+
         if args.stage == "motion":
             report["gripper_closed"] = set_gripper_and_wait(arm, 0.0)
             report["gripper_open"] = set_gripper_and_wait(arm, 1.0)
@@ -342,6 +411,10 @@ def main() -> None:
                 lambda: sim.get_status().episode.step,
                 orientation=target.get("orientation"),
                 auxiliary_groups=("torso",) if args.auxiliary_torso else (),
+                evidence=stage_evidence,
+                episode_finished=lambda: sim.get_status().state == "finished",
+                clearance_waypoints=target.get("clearance_waypoints", ()),
+                approach_distance=target.get("approach_distance", 0.03),
             )
         else:
             report["ready"] = True
@@ -349,7 +422,9 @@ def main() -> None:
             threading.Event().wait()
         # This is an evaluator result, separate from SDK motion completion.
         report["evaluator"] = sim.get_status().episode.model_dump()
-        report["motion_completed"] = True
+        report["motion_completed"] = (
+            report["interaction"]["motion_completed"] if args.stage == "press" else True
+        )
     except Exception as error:
         report["error"] = str(error)
         raise

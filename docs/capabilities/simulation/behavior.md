@@ -311,6 +311,24 @@ steps now require fresh measured FK at the target before continuing. The latest
 physical attempt still reported BDDL false and zero consecutive toggle-contact
 steps. These development results do not establish fair benchmark performance.
 
+With compilation disabled and fresh measured FK required, the SDK completed
+precontact, a 30 mm press, eight hold steps, and retraction. All three measured
+poses were within about 1 mm of their targets, but BDDL remained false. The radio
+moved about 17 cm and tipped over. The final toggle-contact counter was zero;
+before/after snapshots alone cannot establish the contact history or which
+motion displaced it. Stage evidence now records precontact, press, hold, and
+retraction separately, with episode/step tags and optional privileged geometry.
+
+The accepted `wxnicr` radio marker matches the measured object's local button
+coordinates. It lies near the collision box's +X face, whose world outward normal
+is approximately `(-0.050, 0.997, 0.051)`. The earlier +Y approach points outward,
+so it can traverse the body before reaching that face. This is a face-normal
+inference from bounding geometry; the spherical marker supplies no intrinsic
+press normal. A revised candidate approaches from outside that face, after a
+collision-checked clearance motion, with shallow contact travel. Friction, mass,
+object constraints, and official task goals remain unchanged. Whether a separate
+physical stabilization action is needed has not been demonstrated.
+
 A temporary official Dimcode `0.1.0-next.7` installation completed a localhost
 mock-provider tool loop: write a Python policy file, execute it with the selected
 Python interpreter, import `dimos.manipulation.sdk.Arm`, and return API signatures

@@ -436,6 +436,8 @@ class OmniEngine:
             objects[key] = {
                 "name": obj.name,
                 "category": obj.category,
+                "model": getattr(obj, "model", None),
+                "scale": plain(obj.scale),
                 "position": plain(pos),
                 "orientation": plain(quat),
                 "states": {
@@ -456,6 +458,7 @@ class OmniEngine:
                         torch.min(toggle.visual_marker.extent * toggle.scale * toggle.link.scale)
                     ),
                     "finger_contact_steps": toggle.robot_can_toggle_steps,
+                    "finger_contact_registered": obj in (ToggledOn._finger_contact_objs or ()),
                     "privileged": True,
                 }
         return {

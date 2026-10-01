@@ -123,7 +123,10 @@ def test_press_uses_pose_sdk_then_holds_simulation_steps_and_retracts(mocker, au
     ]
     step = mocker.Mock(side_effect=[10, 10, 18])
     sleep = mocker.patch("dimos.simulation.behavior.demo_radio.time.sleep")
-    result = press_toggle(arm, [1, 2, 3], [2, 0, 0], step, auxiliary_groups=auxiliary_groups)
+    evidence = mocker.Mock()
+    result = press_toggle(
+        arm, [1, 2, 3], [2, 0, 0], step, auxiliary_groups=auxiliary_groups, evidence=evidence
+    )
     arm.move_pose.assert_called_once()
     assert arm.move_pose.call_args.args[0] == [0.97, 2.0, 3.0]
     assert [call.args for call in arm.move_linear.call_args_list] == [
@@ -148,6 +151,14 @@ def test_press_uses_pose_sdk_then_holds_simulation_steps_and_retracts(mocker, au
     }
     sleep.assert_called_once()
     arm.rpc.cancel.assert_not_called()
+    assert [call.args[0] for call in evidence.call_args_list] == [
+        "before_precontact",
+        "after_precontact",
+        "after_press",
+        "holding",
+        "before_retract",
+        "after_retract",
+    ]
 
 
 def test_motion_timeout_cancels_and_does_not_retract_or_claim_completion(mocker):
@@ -203,3 +214,80 @@ def test_trajectory_clock_completion_with_stale_feedback_never_counts_as_contact
     arm.move_pose.assert_called_once()
     arm.move_linear.assert_not_called()
     arm.rpc.cancel.assert_called_once_with()
+
+
+def test_diagnostic_failure_still_cancels_and_preserves_original_error(mocker):
+    arm = mocker.Mock(spec=Arm)
+    arm.rpc = mocker.Mock()
+    evidence = mocker.Mock(side_effect=RuntimeError("diagnostic unavailable"))
+
+    with pytest.raises(RuntimeError, match="diagnostic unavailable"):
+        press_toggle(arm, [1, 2, 3], [1, 0, 0], mocker.Mock(), evidence=evidence)
+
+    arm.move_pose.assert_not_called()
+    arm.rpc.cancel.assert_called_once_with()
+
+
+def test_clearance_poses_execute_before_precontact_and_have_stage_evidence(mocker):
+    arm = mocker.Mock(spec=Arm)
+    arm.rpc = mocker.Mock()
+    points = [[0.8, 2, 4], [0.97, 2, 3], [1, 2, 3], [0.97, 2, 3]]
+    arm.state.side_effect = [
+        PlanningGroupState(JointState(), PoseStamped(position=p), None) for p in points
+    ]
+    evidence = mocker.Mock()
+    step = mocker.Mock(side_effect=[0, 8])
+
+    press_toggle(
+        arm,
+        [1, 2, 3],
+        [1, 0, 0],
+        step,
+        clearance_waypoints=[{"position": points[0], "orientation": [0, 0, 0, 1]}],
+        evidence=evidence,
+    )
+
+    assert [call.args[0] for call in arm.move_pose.call_args_list] == points[:2]
+    assert [call.args[0] for call in evidence.call_args_list][:3] == [
+        "before_clearance_0",
+        "after_clearance_0",
+        "before_precontact",
+    ]
+
+
+def test_measured_position_without_correct_orientation_is_not_at_contact(mocker):
+    arm = mocker.Mock(spec=Arm)
+    arm.state.side_effect = [
+        PlanningGroupState(JointState(), PoseStamped(position=[0, 0, 0]), None),
+        PlanningGroupState(
+            JointState(), PoseStamped(position=[0, 0, 0], orientation=[0, 0, 1, 0]), None
+        ),
+    ]
+    sleep = mocker.patch("dimos.simulation.behavior.demo_radio.time.sleep")
+
+    assert wait_for_measured_pose(arm, [0, 0, 0], 10, orientation=[0, 0, 1, 0]) == [0, 0, 0]
+    sleep.assert_called_once()
+
+
+def test_terminal_episode_never_waits_for_frozen_steps_or_claims_full_retraction(mocker):
+    arm = mocker.Mock(spec=Arm)
+    arm.rpc = mocker.Mock()
+    arm.state.return_value = PlanningGroupState(
+        JointState(), PoseStamped(position=[0.97, 2, 3]), None
+    )
+    step = mocker.Mock()
+    evidence = mocker.Mock()
+
+    result = press_toggle(
+        arm,
+        [1, 2, 3],
+        [1, 0, 0],
+        step,
+        episode_finished=mocker.Mock(return_value=True),
+        evidence=evidence,
+    )
+
+    assert result == {"development_only": True, "motion_completed": False, "episode_finished": True}
+    assert arm.move_linear.call_count == 1
+    step.assert_not_called()
+    assert evidence.call_args.args == ("episode_finished_after_press",)
