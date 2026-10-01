@@ -452,6 +452,10 @@ class OmniEngine:
                     "position": plain(position),
                     "orientation": plain(orientation),
                     "marker_position": plain(toggle.visual_marker.get_position_orientation()[0]),
+                    "overlap_radius": float(
+                        torch.min(toggle.visual_marker.extent * toggle.scale * toggle.link.scale)
+                    ),
+                    "finger_contact_steps": toggle.robot_can_toggle_steps,
                     "privileged": True,
                 }
         return {
