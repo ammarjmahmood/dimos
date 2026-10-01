@@ -1,145 +1,349 @@
-# Add and use a message
+# Define a message and use it in Python, C++ and Rust
 
-This CDR stack lets an application own its message definitions. A ROS2 `.msg`
-file is the source of truth; the same generator produces Python bindings,
-C++ structs and native Rust structs. ROS is not required. Generated types carry
-fields, `encode`/`decode`, a qualified `msg_name` and complete `schema` metadata.
-Geometry, time, NumPy and viewer conversions stay in separate helpers.
+There are two workflows. DimOS's built-in messages are built in CI and arrive as
+prebuilt packages with DimOS. Ordinary users install and import them; they do not
+run a generator. `dimos build` is for authors of **external custom messages**.
+It builds that message project, not the robot runtime. `dimos bake` remains the
+separate command for composing Rust native modules into a host executable.
 
-## I want to add a new message type
+These packages currently belong to the CDR proposal, not a released main-branch
+API. Use matching review wheels for `dimos`, `dimos-generated` and
+`dimos-message-build`; `PIP_FIND_LINKS` can point pip at that wheel directory.
+Do not assume these proposal versions are available on a public package index.
 
-Start with [`DeviceReading.msg`](/examples/message-codegen/user-story/story_msgs/msg/DeviceReading.msg).
-Its directory gives it the identity `story_msgs/msg/DeviceReading`. It contains a
-standard Header plus an application sequence, value and default label. Use your
-own package namespace; conflicting definitions of one identity are rejected.
-Do not edit the generated sources or add the type to a handwritten registry.
+## Define one message
 
-Install the development dependencies and pinned Fast CDR as described in the
-[message example](/examples/message-codegen/README.md). With Python, C++17,
-CMake and Rust available, run from the checkout root:
+Create `interfaces/story_msgs/msg/DeviceReading.msg`:
 
-```bash
-bash scripts/test_message_user_story.sh
+<!-- source: examples/message-project/interfaces/story_msgs/msg/DeviceReading.msg -->
+```text
+std_msgs/Header header
+uint32 sequence
+float64 value
+string label "sensor"
 ```
 
-This generates only the new type and its dependency closure, builds all three
-languages, and runs Python module → C++ → Rust → Python through CDR files.
-Cargo runs offline: its dependencies must already be cached during setup.
-Expect sequence 42, value 23.5, label `new-local-type/python/cpp/rust`, and the
-original nanosecond timestamp. The process exits after the exchange; it does not
-start a robot. Outputs and terminal evidence remain under
-`build/message-codegen/user-story/`. These ignored outputs can be removed when
-no longer needed.
+The directory supplies the identity `story_msgs/msg/DeviceReading`. `Header`
+comes from the built-in package. The custom package imports that existing type
+in all three languages; it does not regenerate another Header.
 
-The generator command is explicit and can also emit a reusable Python package:
+Add `pyproject.toml` once:
 
-```bash
-.venv/bin/python -m dimos.message_codegen.generate \
-  --package-root examples/message-codegen/user-story \
-  --type story_msgs/msg/DeviceReading --python-module story_messages \
-  --package --output build/message-codegen/story-package
+<!-- source: examples/message-project/pyproject.toml -->
+```toml
+[build-system]
+requires = ["dimos-message-build==0.1.0"]
+build-backend = "dimos_message_build.backend"
+
+[project]
+name = "story-messages"
+version = "0.1.0"
+
+[tool.dimos.messages]
+languages = ["python", "cpp", "rust"]
 ```
 
-The generated `python/` project builds a wheel/sdist with schema resources and a
-`dimos.messages` provider. Its CMake target is `story_messages::messages`; its
-Cargo package is `story-messages-messages`. Use ordinary pip/build, CMake and
-Cargo tooling, as in the installed external-application story in the example
-README. Install packages at setup time. Runtime does not download schemas or
-invoke the generator. Adding a field requires rebuilding and distributing the
-matching package to all producers and typed consumers; publishing is optional.
+The module name defaults to `story_messages`, derived from the project name.
+All `.msg` files under `interfaces/<package>/msg/` are discovered automatically.
+The default dependency is the compatible `dimos_generated` message package at
+version `0.1.0`; additional packages require explicit exact versions under
+`[tool.dimos.messages.dependencies]`. Conflicting owners, definitions, versions
+or binding ABIs are errors. Runtime never downloads schemas or generates code.
 
-## I want to use the type in a Python module
+## Build or install
 
-[`ReadingProcessor`](/examples/message-codegen/user-story/demo_module.py) is the
-runnable module in the command above. Import from the generated application
-package, annotate `In[DeviceReading]` and `Out[DeviceReading]`, and implement
-`handle_reading`. The module handler receives ROS-shaped data directly. The demo
-calls the handler and subscribes to its output in-process, then crosses actual
-CDR boundaries through the native file consumers; it does not exercise worker
-startup or transport discovery. In a running blueprint, connect modules through
-[typed streams](/docs/usage/modules.md) and install the message package in every
-worker environment.
+For a Python source checkout, this is sufficient:
 
-The handler decodes an encoded copy before editing it, leaving its input intact.
-Nested message fields are live; primitive sequences are live. Elements of nested
-message sequences are values: assign an edited element back into the sequence.
-Image/cloud borrowed views are read-only and retain their storage owner. Request
-a copy for mutable processing; resizing borrowed storage raises `BufferError`.
+```sh skip
+pip install .
+```
 
-Keep generated fields explicit: `message.header.stamp.sec/nanosec`,
-`message.header.frame_id`, and `pose_stamped.pose.position`. Use the
-[time helpers](/dimos/msgs/time.py), [geometry helpers](/dimos/msgs/geometry.py),
-[image helpers](/dimos/msgs/image.py) and [point-cloud helpers](/dimos/msgs/pointcloud.py)
-for operations; generated types do not have old rich-message convenience methods.
+The normal PEP 517 backend generates and compiles only the Python extension,
+even when the project lists C++ and Rust. Build isolation installs the lightweight
+backend and its Python build requirements; it does not install DimOS or build the
+robot runtime. A C++ compiler, Python development headers and Fast CDR 2.4.0 are
+still prerequisites. CMake and pybind11 are declared build dependencies. Prepare
+native dependencies explicitly; there are no implicit OS package installations.
 
-## I want to use the type in C++
+To build all configured language artifacts instead of installing Python:
 
-[`consumer.cpp`](/examples/message-codegen/user-story/consumer.cpp) builds and
-runs in the same script. Include the generated `messages.hpp`, use
-`story_msgs::msg::DeviceReading`, and call `dimos::cdr::decode<Type>` and
-`dimos::cdr::encode`. The example prints and changes real fields before writing
-the next CDR file. Installed consumers include `story_messages/messages.hpp`
-and link the exported CMake target.
+```sh skip
+dimos build
+```
 
-For a native dimOS module, follow the actual
-[C++ CDR relay](/examples/native-modules/cpp/src/cdr_relay.cpp): derive `Module`,
-register the typed input with `Builder::input`, retain an `Output<Type>`, and
-publish the generated struct in its handler. The SDK selects the CDR codec for
-generated types. Link `dimos_native` and your generated CMake message target.
-The native SDK additionally needs its pinned Zenoh C/C++, raw LCM, JSON and PFR
-build dependencies; compiling the file consumer alone does not verify that SDK.
+Outputs go to `dist/`, with local generated/build files in `build/dimos/`.
+`build/dimos/artifacts.json` records the wheel, CMake prefix, Cargo manifest and
+schema paths. Unchanged generation inputs are reused; edited, deleted and renamed
+messages invalidate the generated package. CMake and Cargo perform native builds.
 
-## I want to use the type in Rust
+```sh skip
+dimos build --language cpp       # select one output language
+dimos build --install            # also install Python into the active virtualenv
+dimos build --offline            # require cached Cargo dependencies
+```
 
-[`consumer.rs`](/examples/message-codegen/user-story/consumer.rs) also builds
-and runs in the script. Import `story_msgs::msg::DeviceReading` and the generated
-`codec::Message` trait. Call `DeviceReading::decode` and `message.encode`;
-owned fields use ordinary Rust mutation. The default encoder emits little
-endian encapsulated XCDR1 and the decoder accepts the supported big endian form.
+Use pip's `--no-index --find-links` with a prepared wheelhouse for offline Python
+builds. The compiler and Fast CDR must already be present. Missing prerequisites
+fail with an error; the command does not silently install system tools.
 
-For a native dimOS module, follow the actual
-[Rust CDR relay](/examples/native-modules/rust/src/cdr_relay.rs): derive `Module`,
-annotate `Input<Type>` with `decode = cdr::decode` and `Output<Type>` with
-`encode = cdr::encode`, then implement `handle_<input>` and publish asynchronously.
-Add the generated message crate alongside `dimos-module` in Cargo dependencies.
-The recorder does not need a newly compiled decoder for each custom type.
+Editable installation is also supported:
 
-The [native relay demo](/examples/message-codegen/demo_native.py) runs the
-existing Python → C++ → Rust typed streams on LCM and Zenoh after the SDK builds.
-See the example README for exact build/run commands and dependencies. LCM large
-images exercise fragmentation. The file user story above proves message and
-codec use; the native relay proves SDK launch and transport use. Full coordinator
-and viewer acceptance is tracked separately in
-[the migration checklist](/openspec/changes/replace-lcm-message-encoding/tasks.md).
+```sh skip
+pip install -e .
+# After changing a .msg, rebuild explicitly, then restart running Python processes:
+pip install -e .
+```
 
-## I want to record, inspect and replay it
+An editable install is not import-time compilation or native-code hot reload.
+Consumers installing a matching wheel need no compiler:
 
-Installed providers expose each qualified type and its complete concatenated
-schema. The runtime passes this metadata through recorder stream configuration.
-MCAP stores the ROS2 profile, `cdr` channel bytes and `ros2msg` schemas, with chunk
-compression. Foxglove and Rerun can inspect fields using embedded definitions,
-without installing your application package. Typed dimOS replay needs the matching
-installed message package; unknown types can still be accessed as bytes.
-Source stamps are used for recognized stamped layouts, while unknown or unstamped
-layouts use reception time. MCAP log time always reflects reception.
+```sh skip
+pip install --only-binary=:all: story-messages
+```
 
-This is an intentional API and wire break. LCM remains a raw transport; its old
-message encoding and recordings are not a supported interchange format for the
-new stack. Mixed old/new deployments, automatic legacy recording conversion,
-ROS graph integration and runtime schema-hash enforcement are outside this change.
+## Python: a real module input and output
 
-## I have a recording from before the CDR cutover
+`demo_modules.py` receives `raw`, adds one, and publishes `reading`:
 
-Historical SQLite `lcm`, `lz4+lcm`, and private `jpeg` codec streams are an
-intentional compatibility break. The current reader rejects them with an
-actionable error; it does not reinterpret those bytes as CDR or silently
-substitute a legacy decoder. MCAP channels using `cdr` with complete `ros2msg`
-schemas and new SQLite `cdr`/`lz4+cdr` streams are the supported message paths.
+<!-- source: examples/message-project/demo_modules.py -->
+```python skip
+from story_messages.story_msgs.msg import DeviceReading
 
-Preserve the old recording. Export its contents using the original compatible
-checkout, or record the source again with the installed generated message
-package. This branch does not provide an in-place legacy recording converter.
-For an offline example, use
-[`write_demo_recording`](/dimos/memory/demo_data.py) to create a new deterministic
-CDR image/pose/cloud recording; it refuses to overwrite an existing file and
-does not download data or models. It contains no learned embedding stream.
+from dimos.core.module import Module
+from dimos.core.stream import In, Out
+
+
+class ReadingProcessor(Module):
+    raw: In[DeviceReading]
+    reading: Out[DeviceReading]
+
+    async def handle_raw(self, message: DeviceReading) -> None:
+        self.reading.publish(
+            DeviceReading(
+                header=message.header,
+                sequence=message.sequence,
+                value=message.value + 1,
+                label=message.label,
+            )
+        )
+```
+
+Automatic `handle_<input>` handlers are **async**. No manual CDR calls or
+`PYTHONPATH` changes are required after installation. The constructor copies the
+Header value while retaining its dependency package's Python type; it does not
+mutate the incoming message.
+
+## C++: use the installed message and SDK packages
+
+`cpp/processor.cpp` receives `reading` and publishes `processed`:
+
+<!-- source: examples/message-project/cpp/processor.cpp -->
+```cpp
+using namespace dimos::native;
+using Reading = story_msgs::msg::DeviceReading;
+
+class Processor : public Module {
+    Output<Reading> processed_;
+public:
+    void build(Builder& builder, Config&) override {
+        processed_ = builder.output<Reading>("processed");
+        builder.input<Reading>("reading", &Processor::process, this);
+    }
+    void process(const Reading& input) {
+        auto output = input;
+        output.value += 1;
+        processed_.publish(output);
+    }
+};
+
+int main() { run_with_transport<Processor>(); }
+```
+
+The consumer's CMake file declares packages, not generated include paths:
+
+<!-- source: examples/message-project/cpp/CMakeLists.txt -->
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(reading_processor LANGUAGES CXX)
+find_package(dimos_native CONFIG REQUIRED)
+find_package(story_messages CONFIG REQUIRED)
+add_executable(processor processor.cpp)
+target_link_libraries(processor PRIVATE dimos_native::dimos_native story_messages::messages)
+```
+
+Prepare the SDK and its pinned Zenoh/raw-LCM dependencies once. Its installation
+exports `dimos_native::dimos_native` and propagates required includes/libraries.
+`dimos build` emits a CMake toolchain file locating this project's message package
+and its dependencies. The example's standard CMake preset uses that file:
+
+<!-- source: examples/message-project/cpp/CMakePresets.json -->
+```json
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "dimos",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/../build/cpp",
+      "toolchainFile": "${sourceDir}/../build/dimos/toolchain.cmake"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dimos",
+      "configurePreset": "dimos",
+      "jobs": 2
+    }
+  ]
+}
+```
+
+With the SDK/Fast CDR prefixes supplied by your development environment:
+
+```sh skip
+cd cpp
+cmake --preset dimos
+cmake --build --preset dimos
+cd ..
+```
+
+## Rust: typed SDK ports, not a raw-byte example
+
+`rust/src/main.rs` receives `processed` and publishes `checked`:
+
+<!-- source: examples/message-project/rust/src/main.rs -->
+```rust
+use dimos_module::{cdr, run_with_transport, Input, Module, Output};
+use story_messages_messages::story_msgs::msg::DeviceReading;
+
+#[derive(Module)]
+struct Processor {
+    #[input(decode = cdr::decode)]
+    processed: Input<DeviceReading>,
+    #[output(encode = cdr::encode)]
+    checked: Output<DeviceReading>,
+}
+
+impl Processor {
+    async fn handle_processed(&mut self, mut message: DeviceReading) {
+        message.value += 1.0;
+        if let Err(error) = self.checked.publish(&message).await {
+            tracing::error!(%error, "publish failed");
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() { run_with_transport::<Processor>().await; }
+```
+
+The generated crate shares the built-in package's codec trait, so these SDK
+`cdr::encode/decode` adapters accept the custom type directly. Package locations
+belong in Cargo configuration, not application source:
+
+<!-- source: examples/message-project/rust/Cargo.toml -->
+```toml
+[package]
+name = "reading-processor"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+dimos-module = { path = "../sdk/rust/dimos-module" }
+story-messages-messages = { path = "../build/dimos/cargo-packages/story_messages" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+
+[patch.crates-io]
+dimos-generated-messages = { path = "../build/dimos/cargo-packages/dimos_generated" }
+```
+
+Here `sdk/` is an unpacked SDK review artifact. `build/dimos/cargo-packages/`
+contains the custom crate and its message dependencies, each with a single owner.
+The patch ensures the SDK resolves the same built-in crate as the custom message.
+This local source bundle works before registry publication.
+
+```sh skip
+cargo build --manifest-path rust/Cargo.toml --offline
+```
+
+Rust dependencies must be cached for `--offline`; otherwise perform an explicit
+normal Cargo dependency setup first. No ROS installation is required for either
+native language. CDR/schema compatibility is not a ROS node build integration.
+
+## Connect and run the three languages
+
+Declare the native executables' ports in Python:
+
+```python skip
+from dimos.core.native_module import NativeModule
+from dimos.core.stream import In, Out
+from story_messages.story_msgs.msg import DeviceReading
+
+class CppProcessor(NativeModule):
+    reading: In[DeviceReading]
+    processed: Out[DeviceReading]
+
+class RustProcessor(NativeModule):
+    processed: In[DeviceReading]
+    checked: Out[DeviceReading]
+```
+
+The coordinator supplies topics and transport configuration to native workers.
+For the finite acceptance example, `Exchange` publishes one input and checks the
+reply; the module chain itself uses the normal blueprint API:
+
+```python skip
+from dimos.core.coordination.blueprints import autoconnect
+
+application = autoconnect(
+    Exchange.blueprint(),
+    ReadingProcessor.blueprint(),
+    CppProcessor.blueprint(executable=str(cpp.resolve()), stdin_config=True),
+    RustProcessor.blueprint(executable=str(rust.resolve()), stdin_config=True),
+)
+```
+
+After building both processors and installing the custom Python wheel, run the
+provided finite harness from this project:
+
+```sh skip
+python demo_blueprint.py --transport zenoh
+```
+
+It starts a loopback-only Zenoh router, runs actual Python and native workers,
+validates the complete returned CDR value, and stops all owned processes:
+
+```text
+PASS: 20.5 -> Python 21.5 -> C++ 22.5 -> Rust 23.5; Header and sequence preserved
+```
+
+`--transport lcm` uses the same modules on a multicast-configured host. The harness
+reports system tuning requirements without applying them. Host multicast and
+hardware acceptance remain separate from the offline Zenoh check.
+
+The source files are in [the complete example](/examples/message-project).
+CI checks that the embedded file blocks match those sources, compiles the native
+processors and runs the coordinator example. Installation/coordinator blocks use
+`skip` in the generic Markdown runner because dedicated isolated/native tests own
+their environments and cleanup; they are not substitute pseudocode.
+
+## Distribute, record and evolve
+
+Distribute the custom wheel/sdist, CMake archive and Cargo source bundle together
+with matching dependency versions. Local installation does not require publishing
+to a registry. Standard types retain their original Python class, C++ declaration
+and Rust crate identity across package boundaries.
+
+Message providers export owned types plus the full schema closure. MCAP embeds
+`cdr` bytes and complete `ros2msg` schemas, so a viewer does not need your custom
+package installed. Typed replay needs the matching package. Source timestamps
+remain `header.stamp.sec`/`nanosec`; helpers handle geometry and image operations
+outside generated value types.
+
+Changing a wire layout requires rebuilding and distributing matching packages to
+producers and typed consumers. This proposal intentionally breaks the old LCM
+message API/wire format. LCM remains a transport; mixed old/new typed deployments
+and transparent legacy-recording decoding are not supported.

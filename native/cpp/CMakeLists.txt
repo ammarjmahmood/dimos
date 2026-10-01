@@ -101,3 +101,19 @@ if(DIMOS_NATIVE_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# Installed consumers need no checkout or FetchContent invocation. The two pinned
+# header-only dependencies travel with the SDK, together with upstream licenses.
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY ${pfr_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES ${pfr_SOURCE_DIR}/LICENSE_1_0.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/dimos_native/licenses/pfr)
+if(nlohmann_json_SOURCE_DIR)
+  install(DIRECTORY ${nlohmann_json_SOURCE_DIR}/include/nlohmann DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(FILES ${nlohmann_json_SOURCE_DIR}/LICENSE.MIT DESTINATION ${CMAKE_INSTALL_DATADIR}/dimos_native/licenses/nlohmann_json)
+endif()
+configure_package_config_file(cmake/dimos_nativeConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/dimos_nativeConfig.cmake
+  INSTALL_DESTINATION lib/cmake/dimos_native)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/dimos_nativeConfig.cmake DESTINATION lib/cmake/dimos_native)

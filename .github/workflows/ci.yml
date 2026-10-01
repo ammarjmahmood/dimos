@@ -412,6 +412,27 @@ jobs:
       - name: Test
         run: ctest --test-dir build/native-cpp --output-on-failure
 
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Verify the documented external three-language project
+        run: |
+          uv sync --group tests --frozen
+          cmake --install build/native-cpp --prefix "$PWD/build/native-sdk"
+          uv run python scripts/package_native_sdk.py --output examples/message-project/sdk
+          export CMAKE_PREFIX_PATH="$PWD/build/native-sdk:$CMAKE_PREFIX_PATH"
+          uv run dimos build --project examples/message-project
+          uv pip install --no-deps examples/message-project/dist/story_messages-*.whl
+          (cd examples/message-project/cpp && cmake --preset dimos && cmake --build --preset dimos)
+          cargo build --locked --manifest-path examples/message-project/rust/Cargo.toml
+          uv run python examples/message-project/demo_blueprint.py --transport zenoh
+      - name: Retain custom message and native SDK review artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: external-message-project
+          path: |
+            examples/message-project/dist/
+            examples/message-project/sdk/
+            build/native-sdk/
+
       - name: Find C++ native modules
         id: find-modules
         run: |

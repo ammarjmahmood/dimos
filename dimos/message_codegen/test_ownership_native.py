@@ -12,15 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 
+from mcap.reader import make_reader
 import pytest
+from rosbags.typesys import Stores, get_types_from_msg, get_typestore
 
 from dimos.message_codegen.generate import generate
 from dimos.message_codegen.ownership import Dependency
+from dimos.protocol.cdr_mcap import CdrMcapWriter
 
 
 def test_separate_packages_share_types_and_exchange_cdr(tmp_path):
@@ -178,3 +182,28 @@ assert reference.deserialize_cdr(msg.encode(), Reading.msg_name).value == 22.5
         )
         assert result.returncode != 0
         assert "ImportError" in result.stderr
+
+    # Playback has only the recording: imported dependency schemas must be embedded.
+    name = "custom_msgs/msg/Reading"
+    schema = json.loads((custom / "schemas.json").read_text())[name]
+    recording = tmp_path / "custom.mcap"
+    with CdrMcapWriter(recording) as writer:
+        writer.write(
+            "/reading",
+            (tmp_path / "rust.cdr").read_bytes(),
+            schema_name=name,
+            schema=schema,
+            log_time_ns=1,
+        )
+    with recording.open("rb") as stream:
+        [(stored, channel, message)] = list(make_reader(stream).iter_messages())
+    assert channel.message_encoding == "cdr"
+    assert stored.encoding == "ros2msg"
+    reference = get_typestore(Stores.EMPTY)
+    reference.register(get_types_from_msg(stored.data.decode(), stored.name))
+    decoded = reference.deserialize_cdr(message.data, stored.name)
+    assert (decoded.value, decoded.header.frame_id, decoded.header.stamp.nanosec) == (
+        22.5,
+        "map",
+        123456789,
+    )
