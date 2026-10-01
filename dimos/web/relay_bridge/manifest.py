@@ -128,10 +128,11 @@ def _bounded_id(s: str) -> bool:
     return 1 <= len(s) <= MAX_MANIFEST_ID_LEN
 
 
-# "Supported JSON encoding" for generic publish is the family-name rule
-# (json.v1, text.json.v1, ...): the manifest layer cannot see the codec
+# "Supported publish encoding" for generic publish is the family-name rule
+# (json.v1, text.json.v1, ..., or <msg_name>.lcm.v1 whose JSON value is the
+# message's LCM bytes as base64): the manifest layer cannot see the codec
 # registries, so real decodability is enforced at authoring time.
-_JSON_ENCODING_RE = re.compile(r"(^|\.)json\.v[0-9]+$")
+_PUBLISH_ENCODING_RE = re.compile(r"(^|\.)json\.v[0-9]+$|\.lcm\.v1$")
 
 
 def _validate_layout_node(node: Any, panel_ids: set[str], seen: set[str]) -> Any:
@@ -266,9 +267,9 @@ def parse_manifest(data: Any) -> Manifest:
             raise ManifestError("invalid_publish", f"rx channel {spec.ch} cannot declare publish")
         if spec.publish != "none" and spec.delivery != "reliable":
             raise ManifestError("invalid_publish", f"publish channel {spec.ch} must be reliable")
-        if spec.publish != "none" and not _JSON_ENCODING_RE.search(spec.encoding):
+        if spec.publish != "none" and not _PUBLISH_ENCODING_RE.search(spec.encoding):
             raise ManifestError(
-                "invalid_publish", f"publish channel {spec.ch} needs a JSON encoding"
+                "invalid_publish", f"publish channel {spec.ch} needs a JSON or LCM encoding"
             )
         if spec.requiredScope is not None and spec.publish == "none":
             raise ManifestError(

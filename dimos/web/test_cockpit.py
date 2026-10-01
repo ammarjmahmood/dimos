@@ -777,7 +777,19 @@ def test_publish_tx_codec_errors() -> None:
                 Channel("human_input", int, dir="tx", encoding="text.json.v1", publish="shared")
             ]
         )
-    # Non-JSON-family encodings fail the manifest's invalid_publish rule.
+    # <msg_name>.lcm.v1 publishes are allowed (base64 LCM bytes in the JSON value).
+    cockpit(
+        channels=[
+            Channel(
+                "joint_commands",
+                JointState,
+                dir="tx",
+                encoding="sensor_msgs.JointState.lcm.v1",
+                publish="shared",
+            )
+        ]
+    )
+    # Other non-JSON-family encodings fail the manifest's invalid_publish rule.
     with pytest.raises(ManifestError, match="invalid_publish"):
         cockpit(channels=[Channel("blob", bytes, dir="tx", encoding="blob.v1", publish="shared")])
 

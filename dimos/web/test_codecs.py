@@ -14,6 +14,7 @@
 
 """Codec registry tests: decorators, validation, lookup, json.v1 gate."""
 
+import base64
 from collections.abc import Mapping
 from dataclasses import dataclass
 import subprocess
@@ -26,6 +27,7 @@ import pytest
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.web.codecs import (
     MAX_ENCODED_META_BYTES,
@@ -375,6 +377,23 @@ def test_resolve_decoder_rejections() -> None:
     # one from untrusted browser JSON needs an explicit decoder.
     with pytest.raises(ValueError, match="register an explicit decoder"):
         resolve_decoder("json.v1", _Point)
+
+
+def test_resolve_decoder_lcm_v1_passes_checked_bytes_through() -> None:
+    definition = resolve_decoder("sensor_msgs.JointState.lcm.v1", JointState)
+    assert definition.takes_context is False
+    data = JointState(name=["j1", "j2"], position=[0.5, -1.25]).lcm_encode()
+    # The bytes pass through untouched (no decode/re-encode); the transport sends them as-is
+    assert definition.decode(base64.b64encode(data).decode()) == data
+    other = PoseStamped().lcm_encode()
+    with pytest.raises(ValueError, match="is not sensor_msgs.JointState's"):
+        definition.decode(base64.b64encode(other).decode())
+    with pytest.raises(ValueError, match="must be a base64 string"):
+        definition.decode([1, 2])
+    with pytest.raises(ValueError):
+        definition.decode("not base64!")
+    with pytest.raises(ValueError, match="decodes to sensor_msgs.JointState, not PoseStamped"):
+        resolve_decoder("sensor_msgs.JointState.lcm.v1", PoseStamped)
 
 
 def test_resolve_decoder_rechecks_pickle_by_reference(monkeypatch: pytest.MonkeyPatch) -> None:
