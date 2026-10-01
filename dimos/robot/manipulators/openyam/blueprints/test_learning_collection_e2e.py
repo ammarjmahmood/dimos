@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 from typing import Any, cast
@@ -27,13 +28,14 @@ import pytest
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.global_config import global_config
 from dimos.core.transport import ZenohTransport
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.dataprep.core import EpisodeExtractor, extract_episodes
 from dimos.memory.store.sqlite import SqliteStore
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.protocol import DimosMsg
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.pubsub.impl.zenohpubsub import QOS_NEVER_DROP, Topic
 from dimos.robot.manipulators.openyam.collection import OPENYAM_QUEST_COLLECTION
@@ -47,16 +49,22 @@ pytestmark = [
 ]
 
 _RUST_WORKSPACE = DIMOS_PROJECT_ROOT / "dimos" / "experimental" / "memory" / "rust"
-_EXECUTABLE = DIMOS_PROJECT_ROOT / "target" / "debug" / "dimos-memory-recorder"
+_EXECUTABLE = Path(
+    os.environ.get(
+        "DIMOS_MEMORY_RECORDER_TEST_EXECUTABLE",
+        str(DIMOS_PROJECT_ROOT / "target" / "debug" / "dimos-memory-recorder"),
+    )
+)
 
 
 @pytest.fixture(scope="module")
 def native_recorder_executable() -> Path:
-    subprocess.run(
-        ["cargo", "build", "--locked", "-p", "dimos-memory-recorder"],
-        cwd=_RUST_WORKSPACE,
-        check=True,
-    )
+    if "DIMOS_MEMORY_RECORDER_TEST_EXECUTABLE" not in os.environ:
+        subprocess.run(
+            ["cargo", "build", "--locked", "-p", "dimos-memory-recorder"],
+            cwd=_RUST_WORKSPACE,
+            check=True,
+        )
     return _EXECUTABLE
 
 
@@ -85,7 +93,7 @@ def test_native_collection_records_typed_zenoh_streams(
         "wrist_image": Image,
         "coordinator_joint_state": JointState,
         "applied_joint_position_command": JointState,
-        "status": EpisodeStatus,
+        "status": String,
         "tf": TFMessage,
     }
     publishers: dict[str, ZenohTransport[Any]] = {}
@@ -101,7 +109,9 @@ def test_native_collection_records_typed_zenoh_streams(
         publishers[name] = transport
 
     def publish(name: str, message: Any) -> None:
-        publishers[name].broadcast(None, message)
+        publishers[name].broadcast(
+            None, String(message.to_json()) if isinstance(message, EpisodeStatus) else message
+        )
 
     try:
         recorder.start()
@@ -200,8 +210,8 @@ def test_native_collection_records_typed_zenoh_streams(
         joint_ts = joint_observation.ts
         action = store.stream("applied_joint_position_command", JointState).last().data
         statuses = [
-            (observation.ts, observation.data.last_event)
-            for observation in store.stream("status", EpisodeStatus).to_list()
+            (observation.ts, EpisodeStatus.from_json(observation.data.data).last_event)
+            for observation in store.stream("status", String).to_list()
         ]
         episodes = extract_episodes(store, EpisodeExtractor(status_stream="status"))
 

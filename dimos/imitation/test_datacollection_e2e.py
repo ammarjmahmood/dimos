@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 from typing import Any, cast
@@ -29,6 +30,11 @@ import pytest
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.global_config import global_config
 from dimos.core.transport import ZenohTransport
+from dimos.imitation.collection.episode import (
+    EpisodeEvent,
+    EpisodeStatus,
+    RecordingState,
+)
 from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
@@ -43,14 +49,10 @@ from dimos.imitation.dataprep.core import (
     extract_episodes,
 )
 from dimos.memory.store.sqlite import SqliteStore
-from dimos.msgs.imitation_msgs.EpisodeStatus import (
-    EpisodeEvent,
-    EpisodeStatus,
-    RecordingState,
-)
 from dimos.msgs.protocol import DimosMsg
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.protocol.pubsub.impl.zenohpubsub import QOS_NEVER_DROP, Topic
 from dimos.utils.testing.waiting import wait_until
 
@@ -142,7 +144,7 @@ def _record_session(db_path: Path, executable: Path) -> dict[str, int]:
     payload_types = {
         "color_image": Image,
         "coordinator_joint_state": JointState,
-        "status": EpisodeStatus,
+        "status": String,
     }
     transports = {
         name: ZenohTransport(
@@ -158,12 +160,17 @@ def _record_session(db_path: Path, executable: Path) -> dict[str, int]:
         with SqliteStore(path=str(db_path), must_exist=True) as store:
             stream = store.stream(name)
             if name == "status":
-                return sum(obs.data.last_event != "init" for obs in stream.to_list())
+                return sum(
+                    EpisodeStatus.from_json(obs.data.data).last_event != "init"
+                    for obs in stream.to_list()
+                )
             return stream.count()
 
     def publish(name: str, message: Any) -> None:
         counts[name] += 1
-        transports[name].broadcast(None, message)
+        transports[name].broadcast(
+            None, String(message.to_json()) if isinstance(message, EpisodeStatus) else message
+        )
         wait_until(
             lambda: stream_count(name) == counts[name],
             timeout=5.0,
@@ -184,7 +191,7 @@ def _record_session(db_path: Path, executable: Path) -> dict[str, int]:
             with SqliteStore(path=str(db_path), must_exist=True) as store:
                 if store.stream("status").count() > 0:
                     return True
-            transports["status"].broadcast(None, ready)
+            transports["status"].broadcast(None, String(ready.to_json()))
             return False
 
         wait_until(
@@ -259,12 +266,18 @@ EXPECTED_ACTION = EXPECTED_STATE.copy()
 def recorded_session(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> tuple[Path, dict[float, np.ndarray[Any, Any]]]:
-    subprocess.run(
-        ["cargo", "build", "--locked", "-p", "dimos-memory-recorder"],
-        cwd=DIMOS_PROJECT_ROOT,
-        check=True,
+    if "DIMOS_MEMORY_RECORDER_TEST_EXECUTABLE" not in os.environ:
+        subprocess.run(
+            ["cargo", "build", "--locked", "-p", "dimos-memory-recorder"],
+            cwd=DIMOS_PROJECT_ROOT,
+            check=True,
+        )
+    executable = Path(
+        os.environ.get(
+            "DIMOS_MEMORY_RECORDER_TEST_EXECUTABLE",
+            str(DIMOS_PROJECT_ROOT / "target" / "debug" / "dimos-memory-recorder"),
+        )
     )
-    executable = DIMOS_PROJECT_ROOT / "target" / "debug" / "dimos-memory-recorder"
     db_path = tmp_path_factory.mktemp("recorded-session") / "session" / "recording.db"
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(global_config, "transport", "zenoh")
@@ -273,7 +286,10 @@ def recorded_session(
         assert store.stream("color_image").count() == 9
         assert store.stream("coordinator_joint_state").count() == 9
         assert (
-            sum(obs.data.last_event != "init" for obs in store.stream("status").to_list())
+            sum(
+                EpisodeStatus.from_json(obs.data.data).last_event != "init"
+                for obs in store.stream("status").to_list()
+            )
             == counts["status"]
             == 7
         )
