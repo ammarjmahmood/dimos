@@ -18,6 +18,7 @@ import argparse
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from dimos.message_codegen.distribution import write_distribution
@@ -39,11 +40,28 @@ def main() -> None:
         # Formatting is a maintainer codegen prerequisite, never an install/import step.
         python_files = [str(path) for package in packages for path in package.rglob("*.py")]
         subprocess.run(
-            ["ruff", "check", "--fix", "--config", str(root / "pyproject.toml"), *python_files],
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                "check",
+                "--fix",
+                "--config",
+                str(root / "pyproject.toml"),
+                *python_files,
+            ],
             check=True,
         )
         subprocess.run(
-            ["ruff", "format", "--config", str(root / "pyproject.toml"), *python_files],
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                "format",
+                "--config",
+                str(root / "pyproject.toml"),
+                *python_files,
+            ],
             check=True,
         )
         rust_root = source / "dimos_generated_schemas/package/rust/src"
