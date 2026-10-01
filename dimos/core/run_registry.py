@@ -110,6 +110,23 @@ def generate_run_id(blueprint: str) -> str:
     return f"{ts}-{safe_name}-{secrets.token_hex(2)}"
 
 
+def run_blueprint(run_id: str) -> str | None:
+    """The blueprint a run id (or run directory name) was generated for, or None when it
+    does not look like one. The trailing token is dropped only when the name without it is a
+    known blueprint and the whole name is not: a blueprint whose own name ends in four hex
+    characters keeps it."""
+    m = re.fullmatch(r"\d{8}-\d{6}-(.+)", run_id)
+    if not m:
+        return None
+    name = m.group(1)
+    from dimos.robot.all_blueprints import all_blueprints
+
+    bare = re.sub(r"-[0-9a-f]{4}$", "", name)
+    if name not in all_blueprints and bare in all_blueprints:
+        return bare
+    return name
+
+
 def is_pid_alive(pid: int) -> bool:
     """Check whether a process with the given PID is still running."""
     try:

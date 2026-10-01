@@ -133,6 +133,15 @@ class TestGenerateRunId:
     def test_same_second_runs_differ(self):
         assert generate_run_id("unitree-go2") != generate_run_id("unitree-go2")
 
+    def test_run_blueprint_drops_the_token_only_for_a_known_blueprint(self):
+        from dimos.core.run_registry import run_blueprint
+
+        assert run_blueprint(generate_run_id("unitree-go2")) == "unitree-go2"
+        assert run_blueprint("20260101-000000-unitree-go2") == "unitree-go2"
+        # Four hex characters that are part of an unknown name are not a token.
+        assert run_blueprint("20260101-000000-keyboard-teleop-a750") == "keyboard-teleop-a750"
+        assert run_blueprint("not-a-run-id") is None
+
     def test_sanitizes_slashes(self):
         rid = generate_run_id("path/to/bp")
         assert "/" not in rid

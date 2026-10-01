@@ -19,6 +19,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -128,10 +129,10 @@ def screen_capture(path: Path, url: str, size: str = "1920x1080", fps: int = 15)
     )  # fmt: skip
     os.close(wr)
     with os.fdopen(rd) as reader:
-        number = reader.readline().strip()
+        number = reader.readline().strip() if select.select([reader], [], [], 10.0)[0] else ""
     if not number:
         xvfb.kill()
-        raise RuntimeError("Xvfb did not report a display")
+        raise RuntimeError("Xvfb did not report a display within 10 s")
     display = f":{number}"
     env = {**os.environ, "DISPLAY": display}
     beside = Path(sys.executable).with_name("dimos-viewer")
