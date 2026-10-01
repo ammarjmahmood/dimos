@@ -30,8 +30,8 @@ from pydantic import ValidationError
 import pytest
 import pytest_mock
 
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.episode_monitor import EpisodeMonitorModule
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
 from dimos.robot.manipulators.dual_openyam.joints import DUAL_OPENYAM_JOINTS
@@ -71,7 +71,9 @@ def make_monitor(
 
 def _events(monitor: EpisodeMonitorModule) -> list[EpisodeStatus]:
     """The EpisodeStatus objects published on the monitor's `status` port."""
-    return [call.args[0] for call in monitor.status.publish.call_args_list]  # type: ignore[attr-defined]
+    return [
+        EpisodeStatus.from_json(call.args[0].data) for call in monitor.status.publish.call_args_list
+    ]  # type: ignore[attr-defined]
 
 
 def _press(monitor: EpisodeMonitorModule, alias: str) -> None:

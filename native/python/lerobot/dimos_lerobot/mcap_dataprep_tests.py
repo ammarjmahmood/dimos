@@ -26,6 +26,7 @@ from mcap.writer import Writer as McapWriter
 import numpy as np
 import pytest
 
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.build import run_dataprep
@@ -34,9 +35,9 @@ from dimos.imitation.dataprep.core import (
     SyncConfig,
 )
 from dimos.memory.codecs.jpeg import JpegCodec
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 
 JOINTS = [f"joint_{i}" for i in range(14)]
 
@@ -66,7 +67,9 @@ def _add(writer: McapWriter, channel_id: int, ts: float, message: Any) -> None:
         channel_id=channel_id,
         log_time=timestamp_ns,
         publish_time=timestamp_ns,
-        data=message if isinstance(message, bytes) else message.lcm_encode(),
+        data=message.to_json().encode("utf-8")
+        if isinstance(message, EpisodeStatus)
+        else (message if isinstance(message, bytes) else message.lcm_encode()),
     )
 
 
@@ -77,7 +80,7 @@ def _record(path: Path, camera_count: int) -> None:
         image_channels = [_channel(writer, f"view_{i}", Image, "jpeg") for i in range(camera_count)]
         state_channel = _channel(writer, "measured", JointState)
         action_channel = _channel(writer, "commanded", JointState)
-        status_channel = _channel(writer, "status", EpisodeStatus)
+        status_channel = _channel(writer, "status", String, "json")
         events: tuple[Literal["save", "discard"], ...] = ("save", "discard")
         for episode, event in enumerate(events):
             start_time = 20.0 + episode

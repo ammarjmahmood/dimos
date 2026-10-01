@@ -29,12 +29,13 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
 from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.control.teleop_coordinator import TeleopControlCoordinator
 from dimos.core.coordination.blueprints import Blueprint
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.manipulation.planning.spec.validation import prepare_robot_model
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_groot_wbc import (
     _G1_TELEOP_MODEL,
     _G1GrootCoordinator,
@@ -153,7 +154,7 @@ async def test_g1_collection_accepts_blueprint_config_and_records_without_world_
         assert {name: port.type for name, port in ports.items()} == {
             "color_image": Image,
             "coordinator_joint_state": JointState,
-            "status": EpisodeStatus,
+            "status": String,
             "left_cartesian_command": PoseStamped,
             "right_cartesian_command": PoseStamped,
         }
@@ -194,3 +195,23 @@ def test_g1_teleop_wires_manipulation_to_existing_coordinator() -> None:
         unitree_g1_teleop.remapping_map[("G1Manipulation", "_control_coordinator")]
         is _G1GrootCoordinator
     )
+
+
+@pytest.fixture
+def g1_json_recorder(tmp_path):
+    recorder = G1CollectionRecorder(db_path=tmp_path / "recording.db")
+    try:
+        yield recorder
+    finally:
+        recorder.stop()
+
+
+def test_g1_records_episode_source_time_without_parsing_other_string_streams(
+    g1_json_recorder, mocker
+):
+    mocker.patch("dimos.memory.module.time.time", return_value=99.0)
+    event = EpisodeStatus(
+        ts=12.5, state="idle", episodes_saved=1, episodes_discarded=0, last_event="save"
+    )
+    assert g1_json_recorder._resolve_ts("status", String(event.to_json())) == 12.5
+    assert g1_json_recorder._resolve_ts("another_status", String(event.to_json())) == 99.0
