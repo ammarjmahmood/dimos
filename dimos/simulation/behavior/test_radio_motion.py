@@ -18,7 +18,10 @@ import copy
 
 import pytest
 
-from dimos.control.tasks.trajectory_task.trajectory_task import JointTrajectoryTask
+from dimos.control.tasks.trajectory_task.trajectory_task import (
+    JointTrajectoryTask,
+    JointTrajectoryTaskConfig,
+)
 from dimos.manipulation.manipulation_spec import (
     ExecutionResult,
     ExecutionStatus,
@@ -39,6 +42,7 @@ from dimos.simulation.behavior.radio_motion import (
     anchored_trajectory,
     assert_scene_unchanged,
     trajectory_digest,
+    trajectory_payload,
     validate_development_trajectory,
 )
 
@@ -192,6 +196,7 @@ def checked_motion(mocker, trajectory):
     arm.rpc.execute.return_value = ExecutionResult(ExecutionStatus.COMPLETED)
     coordinator = mocker.Mock(spec=RadioCoordinator)
     coordinator.prepare_development_trajectory.return_value = trajectory
+    coordinator.get_development_dispatch_evidence.return_value = {}
     world = mocker.Mock(spec=WorldSpec)
     world.check_config_collision_free.return_value = True
     world.check_edge_collision_free.return_value = True
@@ -255,3 +260,89 @@ def test_start_state_drift_prevents_execution(checked_motion):
     with pytest.raises(RuntimeError, match="start changed"):
         motion.move([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], 10.0, False)
     arm.rpc.execute.assert_not_called()
+
+
+def test_uncached_encoder_drift_does_not_rewrite_real_task_trajectory(coordinator, trajectory):
+    module, _ = coordinator
+    task = JointTrajectoryTask(JointTrajectoryTaskConfig(joint_names=["arm", "torso"]))
+    module._trajectory_task = task
+    module.get_joint_positions.return_value = {"arm": 0.0, "torso": 0.0}
+    effective = module.prepare_development_trajectory(trajectory)
+    module.authorize_development_trajectory(
+        trajectory_digest(trajectory), trajectory_digest(effective)
+    )
+    module.get_joint_positions.return_value = {
+        "arm": -9.271425369661301e-7,
+        "torso": 4.76837158203125e-7,
+    }
+    result = module.task_invoke("joint_trajectory", "execute", {"trajectory": trajectory})
+    assert result.status.name == "ACCEPTED"
+    assert trajectory_payload(task._trajectory) == trajectory_payload(effective)
+    evidence = module.get_development_dispatch_evidence()
+    assert evidence["dispatch"]["effective_diff"]["changed_points"] == []
+    assert evidence["dispatch"]["start_errors"]["arm"] == pytest.approx(9.271425369661301e-7)
+
+
+def test_partial_cached_commands_match_real_task_first_point(coordinator, trajectory):
+    module, _ = coordinator
+    task = JointTrajectoryTask(JointTrajectoryTaskConfig(joint_names=["arm", "torso"]))
+    task._commanded_positions = {"arm": 0.01}
+    module._trajectory_task = task
+    module.get_joint_positions.return_value = {"arm": 0.01, "torso": 0.000001}
+    effective = module.prepare_development_trajectory(trajectory)
+    assert effective.points[0].positions == [0.01, 0.0]
+    module.authorize_development_trajectory(
+        trajectory_digest(trajectory), trajectory_digest(effective)
+    )
+    module.get_joint_positions.return_value = {"arm": 0.010001, "torso": 0.000002}
+    result = module.task_invoke("joint_trajectory", "execute", {"trajectory": trajectory})
+    assert result.status.name == "ACCEPTED"
+    assert trajectory_payload(task._trajectory) == trajectory_payload(effective)
+
+
+def test_large_uncached_start_drift_rejected_without_rewriting(coordinator, trajectory):
+    module, _ = coordinator
+    task = JointTrajectoryTask(JointTrajectoryTaskConfig(joint_names=["arm", "torso"]))
+    module._trajectory_task = task
+    module.get_joint_positions.return_value = {"arm": 0.0, "torso": 0.0}
+    effective = module.prepare_development_trajectory(trajectory)
+    module.authorize_development_trajectory(
+        trajectory_digest(trajectory), trajectory_digest(effective)
+    )
+    module.get_joint_positions.return_value = {"arm": 0.003, "torso": 0.0}
+    result = module.task_invoke("joint_trajectory", "execute", {"trajectory": trajectory})
+    assert result.status.name == "START_STATE_MISMATCH"
+    assert task._trajectory is None
+    assert (
+        module.get_development_dispatch_evidence()["rejection"] == "measured_start_out_of_tolerance"
+    )
+
+
+def test_validation_snapshot_is_independent_of_mutated_pending_plan(trajectory):
+    snapshot = anchored_trajectory(trajectory, {})
+    before = trajectory_payload(snapshot)
+    trajectory.points[-1].positions[0] += 0.01
+    assert trajectory_payload(snapshot) == before
+    assert trajectory_digest(snapshot) != trajectory_digest(trajectory)
+
+
+def test_transport_roundtrip_preserves_canonical_numeric_digest():
+    plan = JointTrajectory(
+        joint_names=["arm"], points=[TrajectoryPoint(0, [0], [0]), TrajectoryPoint(1, [1], [0])]
+    )
+    transmitted = JointTrajectory.decode(plan.encode())
+    assert trajectory_payload(plan) == trajectory_payload(transmitted)
+    assert trajectory_digest(plan) == trajectory_digest(transmitted)
+
+
+def test_dispatch_diagnostic_failure_preserves_primary_execution_result(checked_motion):
+    motion, arm, _, _, _ = checked_motion
+    arm.rpc.execute.return_value = ExecutionResult(
+        ExecutionStatus.REJECTED, "Pending plan was replaced"
+    )
+    motion.coordinator.get_development_dispatch_evidence.side_effect = RuntimeError(
+        "Diagnostic RPC unavailable"
+    )
+    with pytest.raises(MotionError, match="replaced"):
+        motion.move([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0], 10.0, False)
+    assert motion.evidence[-1]["dispatch_evidence_error"] == "Diagnostic RPC unavailable"

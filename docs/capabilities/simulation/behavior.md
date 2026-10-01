@@ -402,3 +402,15 @@ tracking deviations, and object motion during execution remain outside that
 claim. Candidate boxes have a recorded 1 mm margin per face for asset scale
 rounding; this margin changes only the planning geometry. Per-stage physical
 pose/contact logs and independent BDDL results remain the actual trial evidence.
+
+The first live checked trial exposed a guard-contract error before any arm
+motion: the checker substituted fresh measured feedback for every first
+waypoint, while JTT only substitutes cached commanded positions. Saved encoder
+snapshots drifted by at most 0.000000928 rad, sufficient to change the erroneous
+hash although the task would retain its stored first waypoint. The guard now
+mirrors only cached substitutions, keeps an independent validation snapshot,
+and separately rejects measured start deviations above 0.002 in the selected arm/torso joint coordinates. Actual path or cached-command changes still reject
+by digest. Future reports capture both prepared and dispatched command payloads,
+their numeric diff, and start errors. The failed trial did not record the full
+pending trajectory; its CPU reconstruction uses saved feedback and an explicitly
+synthetic endpoint, rather than claiming recovery of that missing payload.

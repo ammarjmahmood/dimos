@@ -15,6 +15,7 @@
 """Development-only radio path checks; oracle scene geometry is never a policy sensor."""
 
 from collections.abc import Callable, Mapping, Sequence
+import copy
 import hashlib
 import json
 import math
@@ -36,11 +37,10 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
-from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 from dimos.simulation.behavior.r1pro_bridge import BehaviorCoordinator
 
 
-def trajectory_digest(trajectory: JointTrajectory) -> str:
+def trajectory_payload(trajectory: JointTrajectory) -> dict[str, Any]:
     """Hash command content independent of transport column ordering/timestamp."""
     names = trajectory.joint_names
     if not names or len(set(names)) != len(names) or not trajectory.points:
@@ -60,34 +60,72 @@ def trajectory_digest(trajectory: JointTrajectory) -> str:
         previous = point.time_from_start
         rows.append(
             [
-                point.time_from_start,
-                [point.positions[i] for i in columns],
-                [point.velocities[i] for i in columns],
+                float(point.time_from_start),
+                [float(point.positions[i]) for i in columns],
+                [float(point.velocities[i]) for i in columns],
             ]
         )
-    content = [[names[i] for i in columns], rows]
-    return hashlib.sha256(json.dumps(content, separators=(",", ":")).encode()).hexdigest()
+    return {"joint_names": [names[i] for i in columns], "points": rows}
+
+
+def trajectory_digest(trajectory: JointTrajectory) -> str:
+    return hashlib.sha256(
+        json.dumps(trajectory_payload(trajectory), separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def trajectory_payload_diff(
+    expected: Mapping[str, Any], actual: Mapping[str, Any]
+) -> dict[str, Any]:
+    if expected["joint_names"] != actual["joint_names"] or len(expected["points"]) != len(
+        actual["points"]
+    ):
+        return {"shape_changed": True}
+    changes = []
+    for index, (before, after) in enumerate(zip(expected["points"], actual["points"], strict=True)):
+        if before != after:
+            changes.append(
+                {
+                    "point": index,
+                    "before": before,
+                    "after": after,
+                    "position_delta": [b - a for a, b in zip(before[1], after[1], strict=True)],
+                }
+            )
+    return {"shape_changed": False, "changed_points": changes}
 
 
 def anchored_trajectory(
     trajectory: JointTrajectory, anchors: Mapping[str, float]
 ) -> JointTrajectory:
-    """Mirror JTT's documented start anchoring without changing the pending plan."""
+    """Mirror JTT: only cached commands replace the planned first waypoint.
+
+    Fresh measured feedback initializes execution; it does not rewrite an
+    uncached joint's stored command. Snapshot every point independently.
+    """
     if len(trajectory.points) < 2:
         raise ValueError("Radio motion requires a multi-point trajectory")
-    first = trajectory.points[0]
-    return JointTrajectory(
-        joint_names=trajectory.joint_names,
-        timestamp=trajectory.timestamp,
-        points=[
-            TrajectoryPoint(
-                first.time_from_start,
-                [anchors[n] for n in trajectory.joint_names],
-                first.velocities,
-            ),
-            *trajectory.points[1:],
-        ],
-    )
+    snapshot = copy.deepcopy(trajectory)
+    snapshot.points[0].positions = [
+        anchors.get(n, snapshot.points[0].positions[i]) for i, n in enumerate(snapshot.joint_names)
+    ]
+    return snapshot
+
+
+DEVELOPMENT_START_TOLERANCE = 0.002
+
+
+def check_development_start(
+    trajectory: JointTrajectory, current: Mapping[str, float]
+) -> dict[str, float]:
+    """Bound initial encoder drift without changing the stored command path."""
+    errors = {
+        n: abs(current.get(n, math.nan) - p)
+        for n, p in zip(trajectory.joint_names, trajectory.points[0].positions, strict=True)
+    }
+    if any(not math.isfinite(v) or v > DEVELOPMENT_START_TOLERANCE for v in errors.values()):
+        raise RuntimeError("Radio measured start exceeds development tolerance")
+    return errors
 
 
 class RadioCoordinator(BehaviorCoordinator):
@@ -97,6 +135,7 @@ class RadioCoordinator(BehaviorCoordinator):
         super().__init__(**kwargs)
         self._radio_ticket: tuple[str, str, float] | None = None
         self._radio_validation_required = False
+        self._radio_evidence: dict[str, Any] = {}
 
     @rpc
     def prepare_development_trajectory(self, trajectory: JointTrajectory) -> JointTrajectory:
@@ -106,12 +145,18 @@ class RadioCoordinator(BehaviorCoordinator):
                 raise RuntimeError("No trajectory task")
             self._radio_validation_required = True
             self._radio_ticket = None
-            anchors = {
-                n: self._trajectory_task._commanded_positions.get(n, current.get(n, math.nan))
-                for n in trajectory.joint_names
-            }
+            anchors = dict(self._trajectory_task._commanded_positions)
             effective = anchored_trajectory(trajectory, anchors)
-            trajectory_digest(effective)
+            errors = check_development_start(effective, current)
+            self._radio_evidence = {
+                "prepared": {
+                    "original": trajectory_payload(trajectory),
+                    "effective": trajectory_payload(effective),
+                    "cached_commands": anchors,
+                    "measured": copy.deepcopy(current),
+                    "start_errors": errors,
+                }
+            }
             return effective
 
     @rpc
@@ -120,6 +165,11 @@ class RadioCoordinator(BehaviorCoordinator):
             if not self._radio_validation_required:
                 raise RuntimeError("Prepare the development trajectory first")
             self._radio_ticket = (original_digest, effective_digest, time.monotonic())
+
+    @rpc
+    def get_development_dispatch_evidence(self) -> dict[str, Any]:
+        with self._task_lock:
+            return copy.deepcopy(self._radio_evidence)
 
     @rpc
     def task_invoke(self, task_name: str, method: str, kwargs: dict[str, Any] | None = None) -> Any:
@@ -142,15 +192,38 @@ class RadioCoordinator(BehaviorCoordinator):
                 return TrajectoryExecutionResult(
                     TrajectoryExecutionStatus.INVALID_TRAJECTORY, "Missing trajectory"
                 )
-            anchors = {
-                n: task._commanded_positions.get(n, current.get(n, math.nan))
-                for n in trajectory.joint_names
-            }
+            anchors = dict(task._commanded_positions)
             effective = anchored_trajectory(trajectory, anchors)
+            original_payload, effective_payload = (
+                trajectory_payload(trajectory),
+                trajectory_payload(effective),
+            )
+            self._radio_evidence["dispatch"] = {
+                "original": original_payload,
+                "effective": effective_payload,
+                "cached_commands": anchors,
+                "measured": copy.deepcopy(current),
+                "original_diff": trajectory_payload_diff(
+                    self._radio_evidence["prepared"]["original"], original_payload
+                ),
+                "effective_diff": trajectory_payload_diff(
+                    self._radio_evidence["prepared"]["effective"], effective_payload
+                ),
+            }
             if (trajectory_digest(trajectory), trajectory_digest(effective)) != ticket[:2]:
+                self._radio_evidence["rejection"] = "path_or_cached_anchor_changed"
                 return TrajectoryExecutionResult(
                     TrajectoryExecutionStatus.INVALID_TRAJECTORY,
-                    "Radio path/anchor changed after validation",
+                    "Radio path/cached anchor changed after validation",
+                )
+            try:
+                self._radio_evidence["dispatch"]["start_errors"] = check_development_start(
+                    effective, current
+                )
+            except RuntimeError as error:
+                self._radio_evidence["rejection"] = "measured_start_out_of_tolerance"
+                return TrajectoryExecutionResult(
+                    TrajectoryExecutionStatus.START_STATE_MISMATCH, str(error)
                 )
             # Same lock protects JTT execution and anchor lookup. Its first-point
             # adjustment is exactly the effective trajectory checked above.
@@ -378,7 +451,17 @@ class DevelopmentRadioMotion:
         self.coordinator.authorize_development_trajectory(
             trajectory_digest(trajectory), checked["effective_digest"]
         )
-        result = self.arm.rpc.execute(blocking=True, timeout=remaining, plan_id=plan.plan.plan_id)
+        try:
+            result = self.arm.rpc.execute(
+                blocking=True, timeout=remaining, plan_id=plan.plan.plan_id
+            )
+        finally:
+            try:
+                self.evidence[-1]["coordinator_dispatch"] = (
+                    self.coordinator.get_development_dispatch_evidence()
+                )
+            except Exception as error:
+                self.evidence[-1]["dispatch_evidence_error"] = str(error)
         if result.status is not ExecutionStatus.COMPLETED:
             raise MotionError("checked_radio_execute", result)
 
