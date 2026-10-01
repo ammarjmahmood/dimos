@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """xArm7 at a table with a red ball (``apple``) and a cylinder (``cup``): two picks,
-planner skills and the wrist camera only, graded on the bodies' recorded poses.
+planner skills and the wrist camera only. The pick is graded on what its probe saw in the
+simulator, the placement on the bodies' recorded poses.
 
     dimos evals run dimos.evals.suites.mujoco_xarm --agent dimos.evals.agents.pi
 """
@@ -21,12 +22,19 @@ planner skills and the wrist camera only, graded on the bodies' recorded poses.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 import math
+from typing import TYPE_CHECKING
 
-from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
+from dimos.evals.environments.lib.recorded_poses import last_body_transform
+from dimos.evals.environments.lib.recorded_probe import probe_ctx
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 from dimos.evals.scorers import ramp
 from dimos.evals.types import EvalCase, Outcome, Suite, recording
+from dimos.simulation.engines.mujoco_probe import Contact, MujocoProbe, ProbeSetup
+
+if TYPE_CHECKING:
+    import mujoco
 
 TRACKED = ("apple", "cup")
 
@@ -45,26 +53,57 @@ SCENE = (
     "roll=3.1416, pitch=0. roll=pitch=yaw=0 points the gripper up."
 )
 
+ARM_LINKS = frozenset({*(f"link{i}" for i in range(1, 8)), "xarm_gripper_base_link"})
 
-def environment() -> MujocoEnvironment:
+
+@dataclass
+class Pick:
+    """What the pick probe saw in the simulator."""
+
+    cup_start_z: float | None = None
+    """Height of the cylinder's centre on the first physics step."""
+    cup_z: float = 0.0
+    """Its height on the latest step."""
+    table_hits: list[str] = field(default_factory=list)
+    """Arm links that hit the table top, in order; the fingers may touch it."""
+
+
+def pick_probe(probe: MujocoProbe) -> Pick:
+    pick = Pick()
+
+    def track_cup(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        pick.cup_z = float(data.body("cup").xpos[2])
+        if pick.cup_start_z is None:
+            pick.cup_start_z = pick.cup_z
+
+    def hit(contact: Contact) -> None:
+        if contact.other in ARM_LINKS:
+            pick.table_hits.append(contact.other)
+
+    probe.on_tick(track_cup)
+    probe.on_contact_begin("table_top", hit)
+    return pick
+
+
+def environment(probe: ProbeSetup | None = None) -> MujocoEnvironment:
     return MujocoEnvironment(
         blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
         disable=PERCEPTION_MODULES,
         tracked_bodies=TRACKED,
+        probe=probe,
     )
 
 
-def lifted(body: str, *, by_m: float) -> Callable[[Outcome], float]:
-    """How far the body ended above where it started, full credit at ``by_m``."""
+def picked_up(*, by_m: float) -> Callable[[Outcome], float]:
+    """How far the cylinder ended above where it started, full credit at ``by_m``; 0.0 if an
+    arm link hit the table top."""
 
     def grade(outcome: Outcome) -> float:
         with recording(outcome) as store:
-            try:
-                start = first_body_transform(store, body).translation.z
-                end = last_body_transform(store, body).translation.z
-            except LookupError:
-                return 0.0
-        return min(max((end - start) / by_m, 0.0), 1.0)
+            pick = probe_ctx(store, Pick)
+        if pick.table_hits or pick.cup_start_z is None:
+            return 0.0
+        return min(max((pick.cup_z - pick.cup_start_z) / by_m, 0.0), 1.0)
 
     return grade
 
@@ -93,8 +132,8 @@ SUITE: Suite = [
     EvalCase(
         id="xarm_pick_cylinder",
         inputs=f"Pick up the cylinder from the table and hold it in the air. {SCENE}",
-        environment=environment(),
-        grade=lifted("cup", by_m=0.05),
+        environment=environment(pick_probe),
+        grade=picked_up(by_m=0.05),
         timeout_s=600.0,
         tags=frozenset({"mujoco", "manipulation", "pick"}),
     ),

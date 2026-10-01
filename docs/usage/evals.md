@@ -458,15 +458,70 @@ lift_apple = EvalCase(
 )
 ```
 
+A case can also run its own handlers inside the simulator. `probe` names a
+module-level function that registers them on a `MujocoProbe` and returns the
+object they write to. `on_tick` handlers get the `MjModel` and `MjData` after
+every physics step, so they can read anything the simulator knows;
+`on_contact_begin` and `on_contact_end` are per-object contact events on top of
+that. An object is a body, or a named geom of the world body such as
+`table_top`. The simulator publishes the returned object as JSON on `sim_probe`
+twice a second, and `probe_ctx` reads the last one back as its type:
+
+```python skip
+@dataclass
+class Pick:
+    cup_start_z: float | None = None
+    cup_z: float = 0.0
+    table_hits: list[str] = field(default_factory=list)
+
+
+def pick_probe(probe: MujocoProbe) -> Pick:
+    pick = Pick()
+
+    def track_cup(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        pick.cup_z = float(data.body("cup").xpos[2])
+        if pick.cup_start_z is None:
+            pick.cup_start_z = pick.cup_z
+
+    def hit(contact: Contact) -> None:
+        if contact.other in ARM_LINKS:
+            pick.table_hits.append(contact.other)
+
+    probe.on_tick(track_cup)
+    probe.on_contact_begin("table_top", hit)
+    return pick
+
+
+def picked_up(o):
+    with recording(o) as store:
+        pick = probe_ctx(store, Pick)
+    if pick.table_hits:
+        return 0.0
+    return min(max((pick.cup_z - pick.cup_start_z) / 0.05, 0.0), 1.0)
+
+
+MujocoEnvironment(blueprint=["xarm-perception-sim", "mcp-server"], probe=pick_probe)
+```
+
+The function runs in the simulator process, which imports it by module and
+name, so it cannot be a lambda or a closure, and what it returns must be
+something pydantic can serialise: a dataclass of numbers, strings and lists,
+with arrays converted by `.tolist()`. A handler that raises stops the probe and
+`probe_ctx` raises the same error at grading, so the case reports an error
+instead of a score. A contact that bounces counts once: it ends after the two
+objects have been apart for `probe.release_s` (0.1 s of simulated time).
+
 A fixed-base arm has no odometry, so readiness waits for fresh `color_image`
-and `coordinator_joint_state` plus a pose for every tracked body, and settling
+and `coordinator_joint_state` plus a pose for every tracked body and the probe's
+first report, and settling
 waits until every joint is slower than `at_rest_rad_s`. Floating-base robots
 still settle on `odom`. The recording keeps color, camera info, joint state,
 `tf` and `odom`; depth frames are float32, which the JPEG recorder rejects. `module_env` passes extra
 `MODULE__FIELD` overrides to the launched dimos, which beat blueprint-pinned
 values, so a case can retune a module without a new blueprint.
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
-modules disabled: pick up the cylinder, then put the red ball on top of it.
+modules disabled: pick up the cylinder, graded by the probe above, then put the
+red ball on top of it, graded on recorded poses.
 
 ## Running
 

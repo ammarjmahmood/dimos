@@ -21,10 +21,11 @@ import os
 import time
 from typing import TYPE_CHECKING, cast
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from dimos.evals.environments.lib.recorded_poses import last_body_transform
 from dimos.evals.environments.sim import Sim, SimConfig
+from dimos.simulation.engines.mujoco_probe import ProbeSetup, setup_path
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
 
 class MujocoEnvironmentConfig(SimConfig):
     tracked_bodies: tuple[str, ...] = ()
+    probe: ProbeSetup | None = None
+    """Registers handlers that run in the simulator after every physics step"""
     at_rest_rad_s: float = 0.02
     module_env: dict[str, str] = Field(default_factory=dict)
     ready_streams: tuple[str, ...] = ("color_image", "coordinator_joint_state")
@@ -47,6 +50,13 @@ class MujocoEnvironmentConfig(SimConfig):
         "odom",
     )
 
+    @field_validator("probe")
+    @classmethod
+    def importable_probe(cls, probe: ProbeSetup | None) -> ProbeSetup | None:
+        if probe is not None:
+            setup_path(probe)
+        return probe
+
 
 class MujocoEnvironment(Sim):
     """Run agent evaluations in a MuJoCo scene, with ground-truth object poses recorded on tf."""
@@ -55,7 +65,11 @@ class MujocoEnvironment(Sim):
 
     def configure_launch(self, proc: DimosCliCall) -> None:
         proc.simulator = "mujoco"
-        proc.global_args = ["--record-topics", ",".join(self.config.recorded_topics)]
+        topics = self.config.recorded_topics
+        if self.config.probe is not None:
+            topics = (*topics, "sim_probe")
+            proc.extra_env["MUJOCOSIMMODULE__PROBE"] = setup_path(self.config.probe)
+        proc.global_args = ["--record-topics", ",".join(topics)]
         proc.extra_env.update(self.config.module_env)
         proc.extra_env.setdefault(
             "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
@@ -70,7 +84,8 @@ class MujocoEnvironment(Sim):
         return {}
 
     def wait_ready(self, recording: Store, *, deadline: float) -> None:
-        """Wait for fresh samples on every ready stream and a pose for every tracked body."""
+        """Wait for fresh samples on every ready stream, a pose for every tracked body and
+        the probe's first report."""
         while time.monotonic() < deadline:
             try:
                 ages = [
@@ -80,6 +95,8 @@ class MujocoEnvironment(Sim):
                 ]
                 for body in self.config.tracked_bodies:
                     last_body_transform(recording, body)
+                if self.config.probe is not None:
+                    recording.streams.sim_probe.last()
             except (LookupError, AttributeError):
                 ages = []
             if len(ages) == len(self.config.ready_streams) and all(age < 10.0 for age in ages):
@@ -92,6 +109,7 @@ class MujocoEnvironment(Sim):
                 if self.config.tracked_bodies
                 else ""
             )
+            + (" and a probe report" if self.config.probe is not None else "")
         )
 
     def latest_pose(self, recording: Store) -> PoseStamped:

@@ -52,6 +52,7 @@ from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.std_msgs.String import String
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.simulation.engines.mujoco_engine import (
     CameraConfig,
@@ -59,6 +60,7 @@ from dimos.simulation.engines.mujoco_engine import (
     MujocoEngine,
     RaycastLidarConfig,
 )
+from dimos.simulation.engines.mujoco_probe import ProbeRun, load_setup
 from dimos.simulation.engines.mujoco_shm import (
     CMD_MODE_PD_TAU,
     ManipShmWriter,
@@ -253,6 +255,10 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     reset_joint_positions: list[float] | None = None
     headless: bool = False
     tracked_bodies: list[str] = Field(default_factory=list)
+    probe: str = ""
+    """``module:name`` of a ``ProbeSetup`` whose handlers run after every physics step."""
+    probe_period_s: float = 0.5
+    """Wall-clock seconds between publications of the probe's ctx on ``sim_probe``."""
     dof: int = 7
 
     # Camera config (matches former MujocoCameraConfig).
@@ -334,6 +340,7 @@ class MujocoSimModule(
     # this to translate the robot in world space.
     odom: Out[PoseStamped]
     tf: Out[TFMessage]
+    sim_probe: Out[String]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -350,6 +357,8 @@ class MujocoSimModule(
         self._shm_ready_signaled = False
         self._latest_frame_ts: float | None = None
         self._missing_bodies: set[str] = set()
+        self._probe: ProbeRun | None = None
+        self._probe_published_at = 0.0
 
         # IMU sensor slices into MjData.sensordata, resolved once at start.
         # None if the MJCF has no recognized IMU sensors (e.g. arm-only sims).
@@ -553,6 +562,9 @@ class MujocoSimModule(
             self._imu_base_qpos_slice = None
         self._root_spawn_clearance_z = self._compute_root_spawn_clearance_z()
 
+        if self.config.probe:
+            self._probe = ProbeRun(load_setup(self.config.probe), self._engine.model)
+
         # Wire SHM bridge hooks.
         self._sim_hooks = _WholeBodySimHooks(
             self._shm,
@@ -694,6 +706,7 @@ class MujocoSimModule(
                 errors.append(("shm.cleanup", exc))
 
         self._sim_hooks = None
+        self._probe = None
         with self._state_lock:
             self._camera_info_base = None
             self._latest_frame_ts = None
@@ -780,6 +793,7 @@ class MujocoSimModule(
         """
         if self._sim_hooks is not None:
             self._sim_hooks.post_step(engine)
+        self._step_probe(engine)
         shm = self._shm
         if shm is None:
             return
@@ -848,6 +862,16 @@ class MujocoSimModule(
         if not self._shm_ready_signaled:
             shm.signal_ready(num_joints=len(engine.joint_names), arm_joints=self.config.dof)
             self._shm_ready_signaled = True
+
+    def _step_probe(self, engine: MujocoEngine) -> None:
+        probe = self._probe
+        if probe is None:
+            return
+        probe.step(engine.data)
+        now = time.monotonic()
+        if now - self._probe_published_at >= self.config.probe_period_s:
+            self._probe_published_at = now
+            self.sim_probe.publish(String(probe.report()))
 
     def _build_camera_info(self) -> None:
         if self._engine is None:
