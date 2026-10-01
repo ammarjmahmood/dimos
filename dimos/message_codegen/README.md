@@ -58,8 +58,8 @@ To refresh the pinned inputs intentionally, edit the revisions in
 Applications and builds never run the maintenance downloader.
 
 This work is being delivered through the `replace-lcm-message-encoding` OpenSpec
-change. The generated pipeline is under development; the old runtime message APIs
-have not yet been replaced.
+change. Generation and the runtime cutover are reviewed as separate layers;
+see the message tutorials for the workflow appropriate to your checkout.
 
 ## Distribution
 
@@ -70,7 +70,8 @@ The Python sdist contains the generator, its pinned parser, and all definition
 inputs. Building the sdist regenerates source without ROS. The wheel contains
 native code plus definitions, licenses, and the `dimos.messages` provider.
 
-DimOS's own wheel uses the same `MessageBuildExt` and generator from `setup.py`.
+The independent `packages/dimos-generated` project owns built-in generation and
+the Python extension build. The root DimOS `setup.py` consumes that package.
 The release workflow preserves the existing Linux x86_64/aarch64 and macOS arm64
 wheel matrix and adds CMake/schema and Cargo source packages to GitHub releases.
 Source developers run `bash scripts/setup_message_codegen.sh` before building;

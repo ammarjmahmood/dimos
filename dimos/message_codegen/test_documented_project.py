@@ -18,14 +18,15 @@ import re
 
 def test_documented_sources_match_compiled_example():
     root = Path(__file__).resolve().parents[2]
-    document = (root / "docs/development/messages.md").read_text()
+    document = (root / "docs/development/messages-external-project.md").read_text()
     blocks = re.findall(r"<!-- source: ([^ ]+) -->\n```[^\n]*\n(.*?)```", document, re.S)
     assert len(blocks) >= 8
     for name, snippet in blocks:
         source = (root / name).read_text()
         if name.endswith((".py", ".cpp", ".rs")):
             lines = source.splitlines()
-            while lines and (lines[0].startswith(("#", "//")) or not lines[0].strip()):
+            comment = "#" if name.endswith(".py") else "//"
+            while lines and (lines[0].startswith(comment) or not lines[0].strip()):
                 lines.pop(0)
             if lines and lines[0].startswith(chr(34) * 3):
                 lines.pop(0)
