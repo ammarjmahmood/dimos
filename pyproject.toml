@@ -415,6 +415,8 @@ project-deps = [
 ]
 
 tests = [
+    # Independent ROS CDR/schema reference used by message and MCAP tests.
+    "rosbags==0.11.0",
     # Test runner
     "pytest==8.3.5",
     "pytest-asyncio==1.4.0",
