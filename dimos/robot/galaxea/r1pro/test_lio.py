@@ -27,11 +27,12 @@ from dimos.robot.galaxea.r1pro.config import (
     R1PRO_CHASSIS_LIDAR_HOST_IP,
     R1PRO_CHASSIS_LIDAR_IP,
 )
-from dimos.robot.galaxea.r1pro.connection import LIDAR_MOUNT_XYZ, R1ProConnection
+from dimos.robot.galaxea.r1pro.connection import R1ProConnection
 from dimos.robot.galaxea.r1pro.lio import (
     BASE_FRAME,
     CHASSIS_LIDAR_FRAME,
     LIDAR_FRAME,
+    LIDAR_MOUNT_XYZ,
     R1ProLioMountTf,
     R1ProLioOdomPose,
     mount_transforms,

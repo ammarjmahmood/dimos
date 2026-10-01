@@ -29,12 +29,15 @@ from dimos.protocol.tf.static_tf_publisher import (
     StaticTfPublisher,
     frames_to_edge_transforms,
 )
-from dimos.robot.galaxea.r1pro.connection import LIDAR_MOUNT_XYZ
+from dimos.robot.galaxea.r1pro.config import R1PRO_MODEL
 
 ODOM_FRAME = "odom"
 LIDAR_FRAME = "lidar_pointlio_link"
 BASE_FRAME = "base_link"
 CHASSIS_LIDAR_FRAME = "lidar_chassis_left_link"
+_lidar_joint = R1PRO_MODEL.load().get_joint("lidar_chassis_left_joint")
+assert _lidar_joint is not None
+LIDAR_MOUNT_XYZ = _lidar_joint.origin_xyz
 
 FRAMES: list[FrameSpec] = [
     (BASE_FRAME, None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
