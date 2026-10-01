@@ -49,7 +49,7 @@ class MujocoEnvironmentConfig(SimConfig):
 
 
 class MujocoEnvironment(Sim):
-    """Run agent evaluations in a MuJoCo scene, with ground-truth object poses recorded on tf."""
+    """Run sim2 blueprints, with selected ground-truth object poses recorded on tf."""
 
     config: MujocoEnvironmentConfig
 
@@ -58,10 +58,10 @@ class MujocoEnvironment(Sim):
         proc.global_args = ["--record-topics", ",".join(self.config.recorded_topics)]
         proc.extra_env.update(self.config.module_env)
         proc.extra_env.setdefault(
-            "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
+            "SIMULATIONMODULE__VIEWER", os.environ.get("SIMULATIONMODULE__VIEWER", "false")
         )
         if self.config.tracked_bodies:
-            proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"] = json.dumps(
+            proc.extra_env["SIMULATIONMODULE__TRACKED_BODIES"] = json.dumps(
                 list(self.config.tracked_bodies)
             )
 

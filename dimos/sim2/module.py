@@ -30,6 +30,10 @@ import mujoco
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.sim2.runtime import SimulationRuntime
 from dimos.sim2.scene_types import SceneDescription, SceneState, SceneUpdate
 from dimos.sim2.spec import WorldConfig
@@ -47,12 +51,14 @@ class SimulationModuleConfig(ModuleConfig):
     world: WorldConfig
     sim_id: str = "sim"
     viewer: bool = False
+    tracked_bodies: tuple[str, ...] = ()
 
 
 class SimulationModule(Module):
     config: SimulationModuleConfig
     dedicated_worker = True
     sim_truth: Out[SceneState]
+    tf: Out[TFMessage]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -65,6 +71,7 @@ class SimulationModule(Module):
         self._failure: str | None = None
         self._truth_enabled = False
         self._truth_thread: threading.Thread | None = None
+        self._tracked_bodies: tuple[tuple[str, int], ...] = ()
 
     @rpc
     def build(self) -> None:
@@ -74,12 +81,19 @@ class SimulationModule(Module):
             runtime = SimulationRuntime(self.config.world, self.config.sim_id)
             directory = tempfile.TemporaryDirectory(prefix="dimos-sim2-")
             try:
+                tracked = []
+                for name in self.config.tracked_bodies:
+                    body = mujoco.mj_name2id(runtime.model, mujoco.mjtObj.mjOBJ_BODY, name)
+                    if body < 0:
+                        raise ValueError(f"unknown tracked body {name!r}")
+                    tracked.append((name, body))
                 mujoco.mj_saveModel(runtime.model, str(Path(directory.name) / "world.mjb"), None)
             except BaseException:
                 runtime.close()
                 directory.cleanup()
                 raise
             self._runtime, self._directory = runtime, directory
+            self._tracked_bodies = tuple(tracked)
             (Path(directory.name) / "world.json").write_text(json.dumps(self.describe()))
             logger.info(
                 "sim2 world prepared", robots=list(self.config.world.robots), nq=runtime.model.nq
@@ -102,6 +116,8 @@ class SimulationModule(Module):
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="sim2-physics", daemon=True)
         self._thread.start()
+        if self._tracked_bodies:
+            self._start_truth_publisher()
         if self.config.viewer:
             description = self.describe()
             executable = Path(sys.executable)
@@ -138,23 +154,49 @@ class SimulationModule(Module):
 
     def _publish_truth(self) -> None:
         while not self._stop.wait(0.1):
-            if self._truth_enabled:
-                try:
+            try:
+                if self._truth_enabled:
                     self.sim_truth.publish(self.scene_state())
-                except Exception:
-                    logger.exception("sim2 evaluation truth publication failed")
-                    self._truth_enabled = False
-                    return
+                if self._tracked_bodies:
+                    self.tf.publish(self._body_transforms())
+            except Exception:
+                logger.exception("sim2 evaluation truth publication failed")
+                self._truth_enabled = False
+                return
+
+    def _body_transforms(self) -> TFMessage:
+        with self._lifecycle_lock:
+            runtime = self._require_runtime()
+            with runtime.lock:
+                ts = time.time()
+                transforms = []
+                for name, body in self._tracked_bodies:
+                    qw, qx, qy, qz = runtime.data.xquat[body]
+                    transforms.append(
+                        Transform(
+                            translation=Vector3(*runtime.data.xpos[body]),
+                            rotation=Quaternion(qx, qy, qz, qw),
+                            frame_id="world",
+                            child_frame_id=name,
+                            ts=ts,
+                        )
+                    )
+                return TFMessage(*transforms)
+
+    def _start_truth_publisher(self) -> None:
+        with self._lifecycle_lock:
+            if self._truth_thread is None or not self._truth_thread.is_alive():
+                self._truth_thread = threading.Thread(target=self._publish_truth, daemon=True)
+                self._truth_thread.start()
 
     @rpc
     def set_truth_enabled(self, enabled: bool) -> None:
         """Enable the privileged 10 Hz sim_truth stream for explicit evaluation recording."""
         with self._lifecycle_lock:
             self._require_runtime()
-            if enabled and (self._truth_thread is None or not self._truth_thread.is_alive()):
-                self._truth_thread = threading.Thread(target=self._publish_truth, daemon=True)
-                self._truth_thread.start()
             self._truth_enabled = enabled
+            if enabled:
+                self._start_truth_publisher()
 
     def _require_runtime(self) -> SimulationRuntime:
         if self._runtime is None:

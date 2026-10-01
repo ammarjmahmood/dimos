@@ -40,13 +40,13 @@ def _tf(ts: float, child: str, z: float) -> TFMessage:
 
 
 def test_launch_flags(monkeypatch):
-    monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
+    monkeypatch.delenv("SIMULATIONMODULE__VIEWER", raising=False)
     env = environment(tracked_bodies=("apple", "cup"))
     proc = DimosCliCall()
     env.configure_launch(proc)
     assert proc.simulator == "mujoco"
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "true"
-    assert json.loads(proc.extra_env["MUJOCOSIMMODULE__TRACKED_BODIES"]) == ["apple", "cup"]
+    assert proc.extra_env["SIMULATIONMODULE__VIEWER"] == "false"
+    assert json.loads(proc.extra_env["SIMULATIONMODULE__TRACKED_BODIES"]) == ["apple", "cup"]
     assert proc.global_args == [
         "--record-topics",
         "color_image,camera_info,coordinator_joint_state,tf,odom",
@@ -54,19 +54,19 @@ def test_launch_flags(monkeypatch):
 
     proc = DimosCliCall()
     environment().configure_launch(proc)
-    assert "MUJOCOSIMMODULE__TRACKED_BODIES" not in proc.extra_env
+    assert "SIMULATIONMODULE__TRACKED_BODIES" not in proc.extra_env
 
-    monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")
+    monkeypatch.setenv("SIMULATIONMODULE__VIEWER", "true")
     proc = DimosCliCall()
     environment(
         module_env={"OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND": "yoloe"}
     ).configure_launch(proc)
-    assert proc.extra_env["MUJOCOSIMMODULE__HEADLESS"] == "false"
+    assert proc.extra_env["SIMULATIONMODULE__VIEWER"] == "true"
     assert proc.extra_env["OBJECTSCENEREGISTRATIONMODULE__DETECTOR_BACKEND"] == "yoloe"
 
 
 def test_module_env_reaches_blueprint_parser(monkeypatch):
-    monkeypatch.delenv("MUJOCOSIMMODULE__HEADLESS", raising=False)
+    monkeypatch.delenv("SIMULATIONMODULE__VIEWER", raising=False)
     from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
     from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_perception_sim
 
@@ -82,9 +82,9 @@ def test_module_env_reaches_blueprint_parser(monkeypatch):
     perception = parsed.module_kwargs("objectsceneregistrationmodule")
     assert perception["detector_backend"] == "owlv2"
     assert perception["segmentation_backend"] == "yolo"
-    sim = parsed.module_kwargs("mujocosimmodule")
-    assert sim["headless"] is True
-    assert sim["tracked_bodies"] == ["apple", "cup"]
+    sim = parsed.module_kwargs("simulationmodule")
+    assert sim["viewer"] is False
+    assert sim["tracked_bodies"] == ("apple", "cup")
 
 
 def test_latest_pose_needs_odom():
@@ -158,7 +158,7 @@ def test_launch_and_cleanup(tmp_path, mocker):
             "--disable",
             "rerun-bridge-module",
         ]
-        assert "MUJOCOSIMMODULE__HEADLESS" in proc.extra_env
+        assert "SIMULATIONMODULE__VIEWER" in proc.extra_env
         ready.assert_called_once()
         assert set(result.artifacts) == {"recording"}
     finally:

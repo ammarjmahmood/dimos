@@ -59,14 +59,15 @@ The first focused run exposed a stale native-only site-count assertion;
 the test now includes robosuite's one NullBase marker per robot while still
 checking named camera/site poses and preserving camera calibration.
 Optional upstream-model/IK warnings and macOS GLFW/Open3D warnings remain.
-No LLM eval or end-to-end Lift solution was run.
+That refresh did not run an LLM eval or end-to-end Lift solution; the
+follow-up eval check below records separate evidence.
 The commit's LFS hook was skipped only because the preexisting, ignored
 `data/m20_sdk` extraction no longer has an archive on the G1/xArm branch.
 No M20 assets were added, deleted or repackaged; other commit hooks passed.
 
-### Current Eval Boundary
+### Authored Eval Check (2026-10-01)
 
-No eval implementation was changed by this refresh. Main's API is now
+Main's API is now
 `EvalCase` / `Environment` / `Agent` / `Outcome`, not `InteractiveEval`:
 
 ```text
@@ -83,19 +84,91 @@ and ball-on-cylinder placement. `MujocoEnvironment` starts
 TF, then grades initial/final object positions. These cases do not import
 upstream tasks, randomize placements or prove gripper contacts.
 
-The migrated `xarm7-planner-coordinator` is not `xarm-perception-sim`: the
-latter still uses the old MuJoCo module. Its headless/tracked-body configuration
-and recorded TF must be preserved when migrating it. sim2's opt-in
-`sim_truth` stream is not automatically the same interface.
+The follow-up eval check migrates the existing `xarm-perception-sim` blueprint
+as well. It uses the same xArm definition, normal manipulation modules and
+coordinator as the planner blueprint. `assets/table.xml` extracts the original
+robot-free eval world from `data/xarm7/scene.xml`; it does not substitute the
+sim2 workbench scene. The two suite instructions and graders are unchanged.
+XML runtime assets are included in both wheel and source-distribution rules.
 
-The existing Lift test proves our robot can use the upstream sampler and
-oracle, not that a deployed DimOS agent can solve Lift. The deployed spike
-still constructs `EmulatorEnvironment` with an authored-baseline reset and
-zero reward. A future task integration must instantiate the original upstream
-task, let that task own sampled resets, reset controller history coherently,
-and record success for grading after shutdown. Replaying the generic authored
-baseline over a task reset would erase the sampled placement. Reuse the
-current eval runner; do not revive a separate task compiler or population cache.
+`SimulationModule.tracked_bodies` publishes only explicitly requested body poses
+on ordinary TF at 10 Hz, using the existing optional truth-publisher thread,
+not the physics thread. `MujocoEnvironment` now configures this sim2 output and
+its viewer directly; no legacy-module fallback was added. Its existing readiness,
+recording, settling and grading code remains the consumer. Unit checks compare
+object mass, inertia, poses, geometry and contact parameters against the original
+scene and verify selected-body publication without enabling full scene truth.
+
+The first deployed run exposed an eval-launcher lifecycle bug: `DimosCliCall`
+sent SIGTERM to every worker simultaneously, so the coordinator received broken
+pipes instead of running module cleanup. The following case encountered the
+previous sim's SHM name. The fix signals the main process first and retains
+process-group SIGKILL on timeout. It does not randomize SHM identities or add
+automatic stale-segment deletion. Two unit tests cover graceful and escalated
+shutdown. The residue from that failed experiment was removed once after its
+processes had exited; it is not a runtime workaround.
+
+Verification for this follow-up, separate from the refresh counts above:
+
+- 16 selected-body TF, scene-equivalence, eval-environment and blueprint tests
+  passed; six blueprint-registry checks passed with no generated diff.
+- Two launcher shutdown tests passed. The existing upstream Lift component
+  test passed (one selected test).
+- Ruff, mypy on the four changed production Python files and `uv lock --check`
+  passed. No performance benchmark or full repository test run was performed.
+
+Real evals used the existing `McpClientAdapter` with `mcp-client`, its default
+model, an xArm-specific system prompt and an isolated local Zenoh router.
+Case instructions, graders and timeouts were not modified. These results are
+**partial integration evidence, not a passing suite**:
+
+| Run under `~/.local/state/dimos/evals/` | Result |
+|---|---|
+| `run-20261001-141700-o0vmscb6` | Cylinder case: 31 trajectory steps, 145.58 s, score 0.0, agent returned an answer. Next case failed at startup because SHM survived the old group-SIGTERM shutdown. |
+| `run-20261001-142234-nky8r0as` | With the launcher fix, the cylinder case again ran and scored 0.0. The next simulator started with the same sim ID, with no cleanup between cases, and produced fresh camera, joint and tracked-body data. The agent then made no LLM requests or tool calls; the run was interrupted after over six idle minutes, before its 900 s case timeout. No second-case score is claimed. |
+
+The first recording contains real wrist-camera images, arm/gripper commands
+and object transforms. The cylinder task was not solved; neither the policy
+nor the grader was changed to make it pass. In the second case of the rerun,
+the agent trace directory was created but remained empty. A process sample
+showed the eval parent waiting on a lock/event; this does not establish why
+the instruction failed to start an agent turn. Do not label it a proven Zenoh
+bug or add blind prompt retransmission, which could execute the task twice.
+The interrupted run has a saved first-case trajectory but no final suite
+summary. Its console log is retained as `diagnostic-console.log` in that run.
+
+Remaining lifecycle defects observed during graceful shutdown:
+
+- The coordinator's dependency graph does not capture the control hardware
+  adapter's SHM dependency on sim2. In this blueprint it stopped the simulator
+  before `ControlCoordinator`, briefly producing `sim2 device is closed` errors.
+- The existing Viser manipulation teardown raised a missing-handle error for
+  `/targets/manipulator/ee_control`; the coordinator logged an undeploy error.
+  A Python resource-tracker destructor warning was also emitted.
+
+The launcher fix removes the demonstrated stale-SHM startup failure, not all
+lifecycle defects. The earlier direct-coordinator smoke runs did not exercise
+this CLI subprocess shutdown path. All processes launched for these checks
+were stopped. No transport, manipulation-visualizer or shared lifecycle
+contract was patched as part of this bounded check.
+
+### Upstream Task Boundary
+
+The upstream Lift check still passes after this migration: the same xArm model
+and motor controller instantiate the original upstream task, three soft resets
+sample different cube poses without recompilation, and the original success
+method responds to a deliberately constructed oracle-test state. This is a
+component test, **not a solved Lift episode or a deployed Lift eval**.
+
+The deployed spike still constructs `EmulatorEnvironment` with zero reward.
+`SimulationRuntime.reset()` restores its authored baseline after resetting the
+environment. Substituting Lift without changing that ownership would erase
+the upstream sampler's new cube position. The next integration therefore needs
+an explicit choice: an authored world owns its saved baseline; an upstream task
+owns construction, sampled reset and success. Both use the same sim2 device and
+sensor machinery, and the same existing eval runner. Success must be recorded
+before shutdown so the grader can consume it. No new task factory, compiler,
+population cache or second runtime was added pending that ownership decision.
 
 ## G1 GR00T: Full Blueprint Run (2026-09-30)
 

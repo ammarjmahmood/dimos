@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from dimos.control.coordinator import TaskConfig
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
@@ -25,16 +27,21 @@ from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
-    XARM7_SIM_PATH,
-    make_xarm7_sim_hardware,
-    make_xarm7_sim_module_kwargs,
     make_xarm7_sim_robot_config,
 )
-from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
+from dimos.robot.manipulators.xarm.sim2 import XARM7
+from dimos.sim2.blueprint import simulation
+from dimos.sim2.spec import RobotInstance
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 _xarm7_sim_model = make_xarm7_sim_robot_config()
-_xarm7_sim_hw = make_xarm7_sim_hardware(XARM7_SIM_PATH)
+_simulation = simulation(
+    scene=Path(__file__).resolve().parents[1] / "assets" / "table.xml",
+    robots={"arm": RobotInstance(XARM7, xyz=(0.0, 0.0, 0.12))},
+    sim_id="xarm7",
+    timestep=0.002,
+)
+_xarm7_sim_hw = _simulation.hardware["arm"]
 
 xarm_perception_sim = autoconnect(
     ManipulationModule.blueprint(
@@ -45,7 +52,7 @@ xarm_perception_sim = autoconnect(
     ManipulationSkills.blueprint(),
     PickAndPlaceModule.blueprint(planning_frame="world"),
     HeuristicGraspModule.blueprint(),
-    MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(XARM7_SIM_PATH)),
+    _simulation.blueprint,
     ObjectSceneRegistrationModule.blueprint(
         target_frame="world",
         detector_backend="moondream",
