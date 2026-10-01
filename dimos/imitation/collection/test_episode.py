@@ -14,14 +14,13 @@
 
 import json
 
-from dimos_lcm.std_msgs import String as LCMString
 import pytest
 
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
+from dimos.imitation.collection.episode import EpisodeStatus
 
 
 @pytest.mark.parametrize("task_label", ["pick", None, "", "拿起积木 🦾"])
-def test_episode_status_lcm_roundtrip_preserves_status_update(
+def test_episode_status_json_roundtrip_preserves_status_update(
     task_label: str | None,
 ) -> None:
     expected = EpisodeStatus(
@@ -33,12 +32,12 @@ def test_episode_status_lcm_roundtrip_preserves_status_update(
         task_label=task_label,
     )
 
-    actual = EpisodeStatus.lcm_decode(expected.lcm_encode())
+    actual = EpisodeStatus.from_json(expected.to_json())
 
     assert actual == expected
 
 
-def test_episode_status_uses_existing_string_envelope() -> None:
+def test_episode_status_describes_the_json_recording_document() -> None:
     status = EpisodeStatus(
         ts=1790796295.1234567,
         state="idle",
@@ -46,11 +45,11 @@ def test_episode_status_uses_existing_string_envelope() -> None:
         episodes_discarded=0,
         task_label="拿起积木 🦾",
     )
-    payload = json.loads(LCMString.lcm_decode(status.lcm_encode()).data)
+    payload = json.loads(status.to_json())
     assert payload == {"schema_version": 1, **status.model_dump()}
     assert "schema_version" not in status.model_dump()
     assert payload["schema_version"] == 1
-    assert EpisodeStatus.lcm_decode(status.lcm_encode()) == status
+    assert EpisodeStatus.from_json(status.to_json()) == status
 
 
 @pytest.mark.parametrize(
@@ -73,16 +72,16 @@ def test_episode_status_rejects_invalid_wire_payload(updates) -> None:
     }
     payload.update(updates)
     with pytest.raises(ValueError):
-        EpisodeStatus.lcm_decode(LCMString(data=json.dumps(payload)).lcm_encode())
+        EpisodeStatus.from_json(json.dumps(payload))
 
 
 @pytest.mark.parametrize("payload", ["not json", "null", "[]", '{"schema_version":2}'])
 def test_episode_status_rejects_malformed_json_or_wrong_shape(payload) -> None:
     with pytest.raises(ValueError):
-        EpisodeStatus.lcm_decode(LCMString(data=payload).lcm_encode())
+        EpisodeStatus.from_json(payload)
 
 
 def test_episode_status_requires_explicit_wire_version() -> None:
     payload = '{"ts":1.0,"state":"idle","episodes_saved":0,"episodes_discarded":0}'
     with pytest.raises(ValueError, match="requires schema_version"):
-        EpisodeStatus.lcm_decode(LCMString(data=payload).lcm_encode())
+        EpisodeStatus.from_json(payload)
