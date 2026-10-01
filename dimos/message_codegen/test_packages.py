@@ -53,32 +53,39 @@ def test_invalid_definition_does_not_create_output(tmp_path):
     assert not output.exists()
 
 
-def test_distribution_carries_source_closure_and_pinned_generator(tmp_path):
-    names = generate([], tmp_path, ["sensor_msgs/msg/Image"])
+def test_distribution_carries_source_closure_without_native_build(tmp_path):
+    names = generate([], tmp_path, ["sensor_msgs/msg/Image"], module="example_messages")
     write_distribution(tmp_path, "example_messages", names)
     project = tmp_path / "python"
 
     assert (project / "example_messages_schemas/schemas/std_msgs/msg/Header.msg").is_file()
-    assert (project / "_codegen/dimos/message_codegen/_vendor/rosidl_parser.py").is_file()
+    assert (project / "example_messages/_types.py").is_file()
+    assert not (project / "_codegen").exists()
     assert "dimos.messages" in (project / "setup.py").read_text()
-    assert "pybind11==3.0.1" in (project / "pyproject.toml").read_text()
+    assert "pybind11" not in (project / "pyproject.toml").read_text()
+    assert "rosbags==0.11.0" in (project / "setup.py").read_text()
+    assert "ext_modules" not in (project / "setup.py").read_text()
 
 
-def test_bundled_generator_wins_over_installed_dimos(tmp_path):
-    names = generate([], tmp_path / "messages", ["geometry_msgs/msg/Point"])
+def test_generated_source_imports_without_dimos_or_native_tools(tmp_path):
+    names = generate(
+        [], tmp_path / "messages", ["geometry_msgs/msg/Point"], module="example_messages"
+    )
     write_distribution(tmp_path / "messages", "example_messages", names)
     installed = tmp_path / "installed" / "dimos"
     installed.mkdir(parents=True)
     (installed / "__init__.py").write_text("raise RuntimeError('wrong installed generator')\n")
-    bundled = tmp_path / "messages/python/_codegen"
+    bundled = tmp_path / "messages/python"
     subprocess.run(
         [
             sys.executable,
             "-I",
             "-c",
-            "import sys; from pathlib import Path; sys.path[:0] = sys.argv[1:]; "
-            "from dimos.message_codegen import native_build; "
-            "assert Path(native_build.__file__).is_relative_to(sys.argv[1])",
+            "import sys; sys.path[:0] = sys.argv[1:]; "
+            "from example_messages.geometry_msgs.msg import Point; "
+            "value = Point(x=1.25, y=-2.5, z=3); "
+            "assert Point.decode(value.encode()) == value; "
+            "assert not any(name == 'dimos' or name.startswith('dimos.') for name in sys.modules)",
             str(bundled),
             str(installed.parent),
         ],

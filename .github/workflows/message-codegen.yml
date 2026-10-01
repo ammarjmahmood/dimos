@@ -9,6 +9,9 @@ on:
       - scripts/*message*codegen*
       - scripts/test_message_packages.sh
       - scripts/vendor_message_definitions.py
+      - scripts/generate_builtin_messages.py
+      - scripts/test_builtin_message_source.sh
+      - packages/dimos-generated/**
       - .github/workflows/message-codegen.yml
       - .github/docker/message-codegen-reference.Dockerfile
       - Cargo.toml
@@ -29,8 +32,12 @@ jobs:
         run: |
           test ! -d /opt/ros
           uv venv .venv --python 3.12
-          uv pip install --python .venv/bin/python pybind11==3.0.1 rosbags==0.11.0 numpy pytest pytest-asyncio pytest-env lcm-dimos-fork setuptools wheel
+          uv pip install --python .venv/bin/python rosbags==0.11.0 numpy ruff==0.14.3 pytest pytest-asyncio pytest-env lcm-dimos-fork setuptools wheel
           .venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('rclpy') is None"
+      - name: Reject checked-in generated source drift
+        run: .venv/bin/python scripts/generate_builtin_messages.py --check
+      - name: Install built-in source without message compilers
+        run: bash scripts/test_builtin_message_source.sh
       - name: Build the pinned standalone CDR library
         run: bash scripts/setup_message_codegen.sh
       - name: Generate, build, test, and demonstrate all three languages
