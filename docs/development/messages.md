@@ -213,7 +213,7 @@ cd ..
 
 <!-- source: examples/message-project/rust/src/main.rs -->
 ```rust
-use dimos_module::{cdr, run_with_transport, Input, Module, Output};
+use dimos_module::{Input, Module, Output, cdr, run_with_transport};
 use story_messages_messages::story_msgs::msg::DeviceReading;
 
 #[derive(Module)]
@@ -234,7 +234,9 @@ impl Processor {
 }
 
 #[tokio::main]
-async fn main() { run_with_transport::<Processor>().await; }
+async fn main() {
+    run_with_transport::<Processor>().await;
+}
 ```
 
 The generated crate shares the built-in package's codec trait, so these SDK

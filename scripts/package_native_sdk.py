@@ -34,6 +34,9 @@ def main() -> None:
         manifest.write_text(
             manifest.read_text().replace(', path = "../../../dimos/message_codegen"', "")
         )
+    (args.output / "rust" / "Cargo.toml").write_text(
+        '[workspace]\nmembers = ["dimos-module", "dimos-module-macros", "dimos-lcm-transport"]\nresolver = "2"\n'
+    )
     print(args.output.resolve())
 
 
