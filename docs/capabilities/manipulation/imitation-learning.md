@@ -131,7 +131,7 @@ feature does **not** construct a webcam. Add any number of camera features and
 matching producers, using normal blueprint remappings when names differ.
 Source names must be nonreserved Python identifiers, and message classes must
 be importable and support native LCM encoding. The recorder also requires the
-reserved `status: In[EpisodeStatus]` input.
+reserved `status: In[String]` input carrying a versioned JSON episode document.
 
 Export the blueprint using an installed package entry point:
 

@@ -21,8 +21,8 @@ import pytest
 from typer.testing import CliRunner
 
 from dimos.cli.commands.imitation import imitation_app
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.recording import RecordingSchema
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.robot.manipulators.openyam.collection import OPENYAM_TEACH_COLLECTION
 from dimos.utils.data import get_project_root
 

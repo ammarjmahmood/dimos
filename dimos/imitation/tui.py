@@ -24,9 +24,9 @@ from textual.containers import Container, Horizontal
 from textual.widgets import Button, Footer, Static
 
 from dimos.cli import theme
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.episode_monitor import EpisodeCommand, EpisodeControlSpec
 from dimos.imitation.policy.lerobot.module import RolloutControlSpec, RolloutStatus
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.porcelain.dimos import Dimos
 
 
