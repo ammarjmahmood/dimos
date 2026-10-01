@@ -18,7 +18,6 @@ import mujoco
 import numpy as np
 import pytest
 
-from dimos.robot.deeprobotics.m20.sim2 import M20
 from dimos.robot.manipulators.xarm.sim2 import XARM7
 from dimos.robot.unitree.g1.sim2 import G1_GROOT
 from dimos.sim2.models import SceneModel
@@ -36,12 +35,6 @@ pytestmark = pytest.mark.mujoco
             MotorLegged,
             Path(__file__).parents[1] / "robot/unitree/g1/assets/g1_29dof.xml",
             LfsPath("g1_urdf/meshes"),
-        ),
-        (
-            M20,
-            MotorLegged,
-            Path(__file__).parents[1] / "robot/deeprobotics/m20/assets/m20.xml",
-            LfsPath("m20_sdk/meshes"),
         ),
         (XARM7, MotorManipulator, LfsPath("xarm7/xarm7.xml"), None),
     ],

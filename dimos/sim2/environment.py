@@ -29,7 +29,7 @@ from dimos.sim2.models import SceneModel
 from dimos.sim2.robot import MotorRobot, motor_controller_config
 from dimos.sim2.scene import quaternion
 from dimos.sim2.scene_types import SceneDescription, SceneEntity
-from dimos.sim2.sensors.spec import Camera, Imu
+from dimos.sim2.sensors.spec import Camera, Imu, Mount
 from dimos.sim2.spec import WorldConfig
 
 
@@ -86,35 +86,41 @@ class EmulatorEnvironment(ManipulationEnv):  # type: ignore[misc]  # Upstream is
             if keyframes is not None:
                 model.root.remove(keyframes)
             for sensor in instance.config.sensors:
-                body = model.worldbody.find(
-                    f".//body[@name='{model.correct_naming(sensor.mount.link)}']"
-                )
-                if body is None:
-                    raise ValueError(
-                        f"{robot_id}/{sensor.name}: unknown mount {sensor.mount.link!r}"
+                attachment = sensor.camera if isinstance(sensor, Camera) else sensor.site
+                tag = "camera" if isinstance(sensor, Camera) else "site"
+                name = model.correct_naming(sensor.model_name)
+                if isinstance(attachment, Mount):
+                    body = model.worldbody.find(
+                        f".//body[@name='{model.correct_naming(attachment.link)}']"
                     )
-                name = f"{robot_id}/sensor/{sensor.name}"
-                attrs = {
-                    "name": name,
-                    "pos": array_to_string(sensor.mount.xyz),
-                    "quat": array_to_string(quaternion(sensor.mount.rpy)),
-                }
-                if isinstance(sensor, Camera):
-                    ET.SubElement(body, "camera", **attrs, fovy=str(sensor.fovy))
+                    if body is None:
+                        raise ValueError(
+                            f"{robot_id}/{sensor.name}: unknown mount {attachment.link!r}"
+                        )
+                    attrs = {
+                        "name": name,
+                        "pos": array_to_string(attachment.xyz),
+                        "quat": array_to_string(quaternion(attachment.rpy)),
+                    }
+                    if isinstance(sensor, Camera):
+                        fovy = sensor.fovy if sensor.fovy is not None else 60.0
+                        ET.SubElement(body, tag, **attrs, fovy=str(fovy))
+                    else:
+                        ET.SubElement(body, tag, **attrs, size=".001", rgba="0 0 0 0")
                 else:
-                    ET.SubElement(body, "site", **attrs, size=".001", rgba="0 0 0 0")
-                    if isinstance(sensor, Imu):
-                        ET.SubElement(model.sensor, "gyro", name=name + "/gyro", site=name)
-                        ET.SubElement(
-                            model.sensor, "accelerometer", name=name + "/accel", site=name
-                        )
-                        ET.SubElement(
-                            model.sensor,
-                            "framequat",
-                            name=name + "/quat",
-                            objtype="site",
-                            objname=name,
-                        )
+                    if model.worldbody.find(f".//{tag}[@name='{name}']") is None:
+                        raise ValueError(f"{robot_id}/{sensor.name}: unknown {tag} {attachment!r}")
+                if isinstance(sensor, Imu):
+                    prefix = f"{robot_id}/sensor/{sensor.name}"
+                    ET.SubElement(model.sensor, "gyro", name=prefix + "/gyro", site=name)
+                    ET.SubElement(model.sensor, "accelerometer", name=prefix + "/accel", site=name)
+                    ET.SubElement(
+                        model.sensor,
+                        "framequat",
+                        name=prefix + "/quat",
+                        objtype="site",
+                        objname=name,
+                    )
 
         objects = []
         for item in self.config.objects:

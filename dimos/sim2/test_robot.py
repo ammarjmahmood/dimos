@@ -18,7 +18,6 @@ import numpy as np
 import pytest
 from robosuite.environments.manipulation.lift import Lift
 
-from dimos.robot.deeprobotics.m20.sim2 import M20
 from dimos.robot.manipulators.xarm.sim2 import XARM7
 from dimos.robot.unitree.g1.sim2 import G1_GROOT
 from dimos.sim2.robot import motor_controller_config
@@ -28,7 +27,7 @@ from dimos.sim2.spec import RobotInstance, WorldConfig
 pytestmark = pytest.mark.mujoco
 
 
-@pytest.fixture(params=[("g1", G1_GROOT), ("m20", M20), ("xarm", XARM7)])
+@pytest.fixture(params=[("g1", G1_GROOT), ("xarm", XARM7)])
 def device_world(request, tmp_path):
     name, definition = request.param
     scene = tmp_path / "scene.xml"
@@ -48,7 +47,7 @@ def test_upstream_robot_observations_and_reset_share_runtime_state(device_world)
     robot = env.robot_by_id[name]
     observations = env._get_observations(force_update=True)
     np.testing.assert_array_equal(observations[f"{name}/joint_pos"], robot._joint_positions)
-    assert set(robot.arms) == {"g1": {"right", "left"}, "m20": set(), "xarm": {"right"}}[name]
+    assert set(robot.arms) == {"g1": {"right", "left"}, "xarm": {"right"}}[name]
     for arm in robot.arms:
         prefix = f"{name}/" + (f"{arm}_" if len(robot.arms) > 1 else "")
         np.testing.assert_array_equal(

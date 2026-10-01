@@ -26,7 +26,7 @@ from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParse
 from dimos.core.coordination.python_worker import PythonWorker
 from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.Pose import Pose
-from dimos.sim2.blueprint import simulation_blueprint
+from dimos.sim2.blueprint import simulation
 from dimos.sim2.control.adapters import ManipulatorAdapter
 from dimos.sim2.module import SimulationModule
 from dimos.sim2.robot import MotorManipulator, register_robot
@@ -119,12 +119,12 @@ def test_upstream_robot_objects_observable_and_dimos_control():
 
 
 def test_object_and_robot_factories_survive_blueprint_configuration():
-    blueprint = simulation_blueprint(
+    blueprint = simulation(
         scene=scene_path(None, "workbench.xml"),
         robots={"panda": RobotInstance(PANDA)},
         objects=(ObjectInstance(BoxObject, "box", (0.3, 0, 0.8), {"size": [0.03, 0.03, 0.03]}),),
         viewer=False,
-    )
+    ).blueprint
     parsed = BlueprintConfigParser(blueprint).parse(environ={})
     assert parsed is not None
 

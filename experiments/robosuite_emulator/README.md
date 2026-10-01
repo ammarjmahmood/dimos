@@ -6,6 +6,97 @@ This is a working alternative for comparison, not an accepted migration.
 The original worktree, user changes, running simulator and upstream source
 were not modified.
 
+## Current-Main Refresh (2026-10-01)
+
+The refreshed branch is `pim/test/robosuite-emulator-spike`, following main's
+current branch-naming rule. It is based on main `aed43d007`, followed by the clean G1/xArm
+emulator foundation (`test/robosuite-core-base-20261001`, `23516cd3d`).
+The five robosuite experiment commits were replayed on that foundation, rather
+than carrying forward the old native/M20/InteractiveEval implementation.
+The complete pre-update branch is preserved locally as
+`test/robosuite-before-main-20261001` at `0d35ad5e3`.
+
+The prototype still replaces native world composition with robosuite models
+and `EmulatorEnvironment`; it does not choose between two runtime fallbacks.
+It now uses the core's `simulation(...).blueprint` / `.hardware` API, concrete
+settings reconstruction, named asset cameras/sites and dependency-ordered
+shutdown. An explicit `Mount` still adds a new sensor. M20 remains outside
+this G1/xArm branch; its earlier measurements below are historical.
+MuJoCo remains pinned below 3.10 for the existing upstream robosuite revision.
+
+Provision the extras used by both robot stacks:
+
+```bash
+uv sync --extra sim --extra visualization --extra planning --inexact --frozen
+```
+
+Main's xArm planner now requires `roboplan`; omitting the planning extra
+caused the first deployed xArm check to fail at planner startup. Installing
+the declared extra resolves that dependency without substituting a planner.
+
+### Refresh Verification
+
+On the local M4 Max, macOS, MuJoCo 3.9.0, with already downloaded assets:
+
+| Deployed blueprint | Checked duration | Startup | Real-time factor | Shutdown |
+|---|---:|---:|---:|---:|
+| `unitree-g1-groot-wbc`, logistics | 10 simulated seconds | 4.50 s | 1.00025 | 0.250 s |
+| `xarm7-planner-coordinator`, workbench | 5 simulated seconds | 19.06 s | 0.99986 | 0.096 s |
+
+Both used `python -m dimos.sim2.demo_smoke <robot> --local-router --move`
+with their listed `--seconds`, without a viewer. G1 walked and remained
+standing (final pelvis z=0.745 m); RGB-D and lidar published. xArm reached
+the commanded joint angle within 0.03 rad and published RGB-D. About 8.9 s
+of the xArm startup was inside `ManipulationModule.start`. These are bounded
+real-worker smoke checks, not task completion or comparative performance
+measurements. The Rerun/MuJoCo windows and long-run behavior were not retested.
+
+Verification: 68 focused sim2/robosuite/G1/MuJoCo-eval-environment tests passed
+(two self-hosted tests excluded), seven shutdown regression checks passed,
+and six blueprint-registry checks passed. Ruff passed; mypy passed on the
+32 selected sim2 and robot-definition files; the dependency lock is current.
+The first focused run exposed a stale native-only site-count assertion;
+the test now includes robosuite's one NullBase marker per robot while still
+checking named camera/site poses and preserving camera calibration.
+Optional upstream-model/IK warnings and macOS GLFW/Open3D warnings remain.
+No LLM eval or end-to-end Lift solution was run.
+The commit's LFS hook was skipped only because the preexisting, ignored
+`data/m20_sdk` extraction no longer has an archive on the G1/xArm branch.
+No M20 assets were added, deleted or repackaged; other commit hooks passed.
+
+### Current Eval Boundary
+
+No eval implementation was changed by this refresh. Main's API is now
+`EvalCase` / `Environment` / `Agent` / `Outcome`, not `InteractiveEval`:
+
+```text
+EvalCase: instruction + environment + grader
+  -> Environment starts the ordinary DimOS blueprint and recording
+  -> Agent receives the instruction and uses the stack's tools
+  -> Environment waits for remaining motion, then shuts down
+  -> grade(Outcome) reads the recording and returns a score
+```
+
+`dimos/evals/suites/mujoco_xarm.py` defines two authored cases, cylinder lift
+and ball-on-cylinder placement. `MujocoEnvironment` starts
+`xarm-perception-sim`, waits for images/joint feedback and recorded named-body
+TF, then grades initial/final object positions. These cases do not import
+upstream tasks, randomize placements or prove gripper contacts.
+
+The migrated `xarm7-planner-coordinator` is not `xarm-perception-sim`: the
+latter still uses the old MuJoCo module. Its headless/tracked-body configuration
+and recorded TF must be preserved when migrating it. sim2's opt-in
+`sim_truth` stream is not automatically the same interface.
+
+The existing Lift test proves our robot can use the upstream sampler and
+oracle, not that a deployed DimOS agent can solve Lift. The deployed spike
+still constructs `EmulatorEnvironment` with an authored-baseline reset and
+zero reward. A future task integration must instantiate the original upstream
+task, let that task own sampled resets, reset controller history coherently,
+and record success for grading after shutdown. Replaying the generic authored
+baseline over a task reset would erase the sampled placement. Reuse the
+current eval runner; do not revive a separate task compiler or population cache.
+
 ## G1 GR00T: Full Blueprint Run (2026-09-30)
 
 The existing G1 integration at `fe48ee062` now has a real deployed-blueprint
@@ -140,28 +231,27 @@ dimos/sim2/
   assets/end_effector_frame.xml  # massless metadata, no robot geometry
 dimos/robot/
   unitree/g1/sim2.py         # G1 model, body parts and hardware configuration
-  deeprobotics/m20/sim2.py    # M20 model, body parts and hardware configuration
   manipulators/xarm/sim2.py  # xArm model, gripper component and hardware configuration
 ```
 
 ### API And Extension Example
 
 An existing robot's definition changes from a model path to a small model
-class; asset paths live in that robot-local class. Examples are the three
-robot-local `sim2.py` files. G1, M20 and xArm blueprints need no new copies.
+class; asset paths live in that robot-local class. Examples are the G1 and
+xArm robot-local `sim2.py` files. Their blueprints need no new copies.
 An upstream model can instead be subclassed directly, as the Panda example
 does, with our instance namespace and joint/actuator mappings.
 
 ```python
 from robosuite.models.objects import BoxObject
-from dimos.sim2.blueprint import simulation_blueprint
+from dimos.sim2.blueprint import simulation
 from dimos.sim2.scene import scene_path
 from dimos.sim2.sensors.spec import Camera, Mount
 from dimos.sim2.spec import ObjectInstance, RobotInstance
 from dimos.robot.manipulators.xarm.sim2 import XARM7
 
 arm = XARM7.with_sensor(Camera("overview", Mount("link_base"), depth=False))
-blueprint = simulation_blueprint(
+devices = simulation(
     scene=scene_path(None, "workbench.xml"),
     robots={"arm": RobotInstance(arm, xyz=(0, 0, 0.12))},
     objects=(
@@ -170,6 +260,8 @@ blueprint = simulation_blueprint(
     ),
     viewer=False,
 )
+blueprint = devices.blueprint
+arm_hardware = devices.hardware["arm"]
 ```
 
 The object becomes an ordinary named sim2 scene entity: inspect, relocate
@@ -220,7 +312,7 @@ finally:
 replacement, joint-command movement, standard joint/EEF observations, negative
 and positive grasp-contact checks, and the original Lift success/reward check.
 The positive contact and success states are deliberately placed by the test:
-**this is task interoperability, not a policy solving Lift**. G1/M20/xArm also
+**this is task interoperability, not a policy solving Lift**. G1 and xArm also
 exercise their upstream observations and reset lifecycle through normal sim2.
 Two xArms retain independent names, cameras and motor actions in one world.
 
@@ -251,7 +343,7 @@ Native `MjSpec.to_xml()` compiles internally. Consequently this path adds
 cold model preparation, especially costly for a large scene. It also rounds
 XML numbers to six significant digits; this is **not a universally lossless
 MJCF importer**. A 90-degree test differs by approximately 3.7e-6 radians.
-Real G1, M20 and xArm parameter tests cover masses/inertias, joint dynamics,
+Real G1 and xArm parameter tests cover masses/inertias, joint dynamics,
 actuators, contacts and materials at 1e-6 tolerance. No arbitrary-model or
 cross-MuJoCo-version equivalence is claimed.
 
@@ -391,7 +483,7 @@ PYTHONPATH=. .venv/bin/python -m pytest dimos/sim2 \
   -q -o addopts='' -m '' --timeout=45
 ```
 
-Use `--robot m20` or `--robot xarm` without `--groot` for motor comparisons;
+Use `--robot xarm` without `--groot` for an arm motor comparison;
 add `--scene robocasa-kitchen-1` or `--scene hssd-home` to the G1 command.
 The baseline worktree must remain at the compared implementation for matching
 results. Scripts are headless and use unique SHM names; they do not restart a

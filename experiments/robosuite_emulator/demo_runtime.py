@@ -38,7 +38,6 @@ from dimos.control.tasks.g1_groot_wbc_task.g1_groot_wbc_task import (
     g1_legs_waist,
 )
 from dimos.hardware.whole_body.spec import MotorCommand
-from dimos.robot.deeprobotics.m20.sim2 import M20
 from dimos.robot.manipulators.xarm.sim2 import XARM7
 from dimos.robot.unitree.g1.sim2 import G1_GROOT
 from dimos.sim2.control.adapters import ManipulatorAdapter, WholeBodyAdapter
@@ -74,7 +73,7 @@ def standing_policy(adapter: WholeBodyAdapter) -> G1GrootWBCTask:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--robot", choices=("g1", "m20", "xarm"), required=True)
+    parser.add_argument("--robot", choices=("g1", "xarm"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=2)
     parser.add_argument("--scene")
@@ -87,7 +86,6 @@ def main() -> None:
         parser.error("seconds must be positive; --groot requires --robot g1")
     definition, dt, xyz, scene = {
         "g1": (G1_GROOT, 0.005, (0, 0, 0.793), "logistics.xml"),
-        "m20": (M20, 0.001, (0, 0, 0.6), "logistics.xml"),
         "xarm": (XARM7, 0.005, (0, 0, 0.12), "workbench.xml"),
     }[args.robot]
     if not args.sensors:
@@ -152,7 +150,7 @@ def main() -> None:
                 )
                 camera = next(s for s in definition.sensors if isinstance(s, Camera))
                 renderer = MujocoCamera(reader.model, camera.width, camera.height)
-                camera_id = reader.model.camera(f"{args.robot}/sensor/{camera.name}").id
+                camera_id = reader.model.camera(f"{args.robot}/{camera.model_name}").id
                 lidar = next((s for s in definition.sensors if isinstance(s, Lidar)), None)
                 # A lidar owns a different model from the camera, like the real workers.
                 if lidar is not None:
@@ -161,8 +159,9 @@ def main() -> None:
                     raycaster = Raycaster(
                         ray_model, ray_model.body(f"{args.robot}/{definition.root_body}").id
                     )
-                    site = ray_model.site(f"{args.robot}/sensor/{lidar.name}").id
-                    directions = lidar.model.directions()
+                    site = ray_model.site(f"{args.robot}/{lidar.model_name}").id
+                    pattern = lidar.model(**lidar.model_kwargs)
+                    directions = pattern.directions()
             qpos, qvel, controls, step_times, root_heights = [], [], [], [], []
             root_id = world.model.body(f"{args.robot}/{definition.root_body}").id
             targets = np.array([j.home for j in definition.joints])
@@ -232,8 +231,8 @@ def main() -> None:
                             ray_data,
                             ray_data.site_xpos[site],
                             directions @ ray_data.site_xmat[site].reshape(3, 3).T,
-                            lidar.model.min_range,
-                            lidar.model.max_range,
+                            pattern.min_range,
+                            pattern.max_range,
                         )
                         point_count = len(points)
                         lidar_frames += 1
