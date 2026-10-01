@@ -761,9 +761,14 @@ class ViserPanelGui:
 
     def _remove_panel_handles(self) -> None:
         for key, handle in list(self._handles.items()):
-            remove = getattr(handle, "remove", None)
-            if callable(remove):
-                remove()
+            if key.startswith("ee_control:"):
+                # The scene owns this handle; remove it through its owner once.
+                if self.scene is not None:
+                    self.scene.remove_target_controls(key.removeprefix("ee_control:"))
+            else:
+                remove = getattr(handle, "remove", None)
+                if callable(remove):
+                    remove()
             self._handles.pop(key, None)
 
     def _sync_preset_dropdown(self) -> None:

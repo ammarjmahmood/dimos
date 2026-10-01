@@ -50,6 +50,7 @@ from dimos.manipulation.visualization.operator import (
 )
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.manipulation.visualization.viser.gui import ViserPanelGui
+from dimos.manipulation.visualization.viser.scene import ViserManipulationScene
 from dimos.manipulation.visualization.viser.state import (
     ActionStatus,
     BackendConnectionStatus,
@@ -241,6 +242,22 @@ def make_gui(module: FakeOperatorBackend | None = None) -> ViserPanelGui:
         lambda: None,
         ViserVisualizationConfig(),
     )
+
+
+def test_panel_close_removes_scene_controls_through_their_owner(mocker):
+    gui = make_gui()
+    scene = ViserManipulationScene(mocker.Mock(), mocker.Mock())
+    control = mocker.Mock()
+    gui.scene = scene
+    gui._handles["ee_control:manipulator"] = control
+    scene._handles["manipulator:ee_control"] = control
+    try:
+        gui.close()
+        scene.close()
+        control.remove.assert_called_once_with()
+    finally:
+        gui.close()
+        scene.close()
 
 
 @pytest.fixture

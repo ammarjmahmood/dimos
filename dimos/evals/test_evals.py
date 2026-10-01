@@ -743,11 +743,11 @@ def test_load_agent_is_the_module_plus_set_overrides() -> None:
 
 
 @pytest.mark.parametrize("goes_idle", [True, False])
-def test_mcp_client_adapter_drives_a_turn_over_real_transports(
+def test_mcp_client_adapter_enqueues_once_and_reads_a_turn_over_real_transports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, goes_idle: bool
 ) -> None:
     """The production agent points the McpClient's raw capture at run_dir/raw,
-    publishes on /human_input, reads the turn back on /agent until
+    enqueues through RPC, reads the turn back on /agent until
     /agent_idle or its budget runs out, and links every model call to the
     McpClient's trace files (the message must arrive with no flush sleep: LCM
     publish is a synchronous send)."""
@@ -756,17 +756,23 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
     trace_dir.mkdir(parents=True)
 
     repointed: list[str] = []
+    enqueued: list[HumanMessage] = []
+
+    def enqueue(msg: HumanMessage) -> None:
+        enqueued.append(msg)
+        on_human(str(msg.content))
+
     app = SimpleNamespace(
-        McpClient=SimpleNamespace(set_trace_dir=repointed.append), stop=lambda: None
+        McpClient=SimpleNamespace(set_trace_dir=repointed.append, add_message=enqueue),
+        stop=lambda: None,
     )
     monkeypatch.setattr("dimos.porcelain.dimos.Dimos.connect", lambda: app)
 
-    human, agent_t, idle = (
-        make_transport("/human_input"),
+    agent_t, idle = (
         make_transport("/agent"),
         make_transport("/agent_idle"),
     )
-    for t in (human, agent_t, idle):
+    for t in (agent_t, idle):
         t.start()
 
     def fake_mcp_client(text: str) -> None:
@@ -797,7 +803,6 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
         workers.append(worker)
         worker.start()
 
-    unsubscribe = human.subscribe(on_human)
     try:
         env = RunningEnvironment(mcp_url="http://localhost:1/mcp", streams=(), artifacts={})
         agent = McpClientAdapter()
@@ -805,13 +810,13 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
             "go to the bed", env, tmp_path / "case", timeout_s=10.0 if goes_idle else 0.5
         )
     finally:
-        unsubscribe()
         for worker in workers:  # a publish still in flight would race the undeclare below
             worker.join(timeout=5.0)
-        for t in (human, agent_t, idle):
+        for t in (agent_t, idle):
             t.stop()
 
     assert repointed == [str(trace_dir)]
+    assert enqueued == [HumanMessage(content="go to the bed")]
     assert trajectory.extra.ended_by == ("answer" if goes_idle else "timeout")
     assert trajectory.final_answer == "I am at the bed"
     assert len(trajectory.steps) == 3 and trajectory.final_metrics.total_prompt_tokens == 10
