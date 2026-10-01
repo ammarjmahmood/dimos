@@ -1,7 +1,7 @@
 # Define a message and use it in Python, C++ and Rust
 
-There are two workflows. DimOS's built-in messages are built in CI and arrive as
-prebuilt packages with DimOS. Ordinary users install and import them; they do not
+There are two workflows. dimOS's built-in messages are built in CI and arrive as
+prebuilt packages with dimOS. Ordinary users install and import them; they do not
 run a generator. `dimos build` is for authors of **external custom messages**.
 It builds that message project, not the robot runtime. `dimos bake` remains the
 separate command for composing Rust native modules into a host executable.
@@ -13,7 +13,7 @@ Do not assume these proposal versions are available on a public package index.
 The `message-authoring-packages` CI artifact also contains matching built-in
 CMake headers (`dimos-messages-cmake-0.1.0.tar.gz`) and a Rust crate
 (`dimos-generated-messages-0.1.0.crate`). These use the message package's version,
-independently of the DimOS runtime version; native consumers do not regenerate them.
+independently of the dimOS runtime version; native consumers do not regenerate them.
 
 ## Define one message
 
@@ -64,7 +64,7 @@ pip install .
 
 The normal PEP 517 backend generates and compiles only the Python extension,
 even when the project lists C++ and Rust. Build isolation installs the lightweight
-backend and its Python build requirements; it does not install DimOS or build the
+backend and its Python build requirements; it does not install dimOS or build the
 robot runtime. A C++ compiler, Python development headers and Fast CDR 2.4.0 are
 still prerequisites. CMake and pybind11 are declared build dependencies. Prepare
 native dependencies explicitly; there are no implicit OS package installations.
