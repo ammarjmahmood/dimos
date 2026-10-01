@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790876998378,
+  "lastUpdate": 1790891402851,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -1681,6 +1681,102 @@ window.BENCHMARK_DATA = {
           {
             "name": "network (external tx)",
             "value": 0.338,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jeff.hykin@gmail.com",
+            "name": "Jeff Hykin",
+            "username": "jeff-hykin"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6adc5720130d1171f4fb0bf9531cf0316b66be7",
+          "message": "r1pro: fix constant (#4354)",
+          "timestamp": "2026-10-01T21:45:58Z",
+          "tree_id": "017ea833c8282b60f4b3cbb5435cd1484cd4348b",
+          "url": "https://github.com/dimensionalOS/dimos/commit/a6adc5720130d1171f4fb0bf9531cf0316b66be7"
+        },
+        "date": 1790891401595,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 9.805,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 20.365,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "run cpu",
+            "value": 32.695,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 24.906,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 7.789,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "peak memory",
+            "value": 2710.309,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "peak threads",
+            "value": 400,
+            "unit": "threads",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "disk read",
+            "value": 16.371,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "disk write",
+            "value": 11.172,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "network (transport)",
+            "value": 2733.269,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "network (external rx)",
+            "value": 0.063,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "network (external tx)",
+            "value": 0.158,
             "unit": "MB",
             "extra": "cpu: AMD EPYC 7763 64-Core Processor"
           }
