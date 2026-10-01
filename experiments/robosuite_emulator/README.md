@@ -64,7 +64,69 @@ environment/draft grading tests, six registry tests. After the mount correction,
 11 robot/module/model-import tests passed. Selected mypy (eight production files)
 and Ruff passed. These overlapping counts are not a complete-repository test run.
 
-### Decisions Still Open
+### Follow-Up: Lifetime Ordering And Saved Task Results
+
+Pim approved both corrections below. They remain separate changes in the spike:
+
+- `e9a3f056c`: `Blueprint.lifetime_dependencies([(consumer, provider)])` adds
+  resource ownership to the existing shutdown graph without a fake RPC or
+  simulator-specific ControlCoordinator branch. Sim2 connections and the G1/xArm
+  coordinators declare their dependency on the physics owner. Composition,
+  namespaces, consumer restart, disabled modules and individual provider unload
+  are covered by the 102 passing coordination/blueprint/registry checks.
+- `dimos/evals/suites/robosuite_lift.py`: one original Lift eval using the normal
+  agent, blueprint, recording and runner. `LiftEnvironment.prepare_recording`
+  registers a final snapshot callback on the existing resource stack. The
+  callback saves `lift-result.json` beside `memory.db` before either the store
+  or simulator closes. Grading reads this saved `task_result` after shutdown.
+  No `sim_truth` stream or recorder change is needed. Missing or invalid oracle
+  data is an eval error, not a fabricated zero or success.
+
+The original Lift oracle tests cube-center height above the tabletop by 4 cm.
+The instruction asks the agent to hold it 10 cm above the table; the score is
+the unchanged upstream oracle, not an additional 10 cm/contact/holding grader.
+The snapshot is privileged grading data and is not exposed as an agent tool.
+
+Real production-agent run, 2026-10-01:
+
+- Run `~/.local/state/dimos/evals/run-20261001-153714-92zmpctk`, using the
+  production `McpClientAdapter` and `BASE_MANIPULATION_AGENT_SYSTEM_PROMPT`.
+  An ephemeral loopback Zenoh router and MCP port isolated this check; no
+  transport implementation changed. Native viewer disabled.
+- 137.012 s total, 111.581 s agent time, 30 model turns and 23 tool calls.
+  The agent observed RGB and executed arm/gripper commands, then returned an
+  answer claiming a lift. The unchanged upstream oracle was **false** and the
+  eval scored **0.0 with no eval error**. This is a working task/eval path,
+  not a solved-task demonstration.
+- `recordings/20261001-153726-xarm-robosuite-lift-mcp-server-observe-skill-mcp-client/`
+  retains `memory.db` and the 1,331-byte `lift-result.json`. The saved snapshot
+  is generation 1, tick 59,958, simulation time 119.916 s. The runner graded it
+  after simulator shutdown. Final RGB is nonblank (640x480, std 96.54), visually
+  inspected in `/tmp/sim2-lift-final-20261001.png`; the cube is not in the gripper.
+- The control tick loop stopped at 13:39:31.039, before simulator stop began
+  at 13:39:31.055. All workers stopped by 13:39:31.094. No closed-device errors
+  or shutdown timeout. All owned processes exited.
+- Residual issues are visible, not suppressed: Viser warns about duplicate
+  removal of child handles; Python 3.12's resource-tracker destructor emits
+  `ChildProcessError`. These did not prevent saving/grading the result or
+  worker shutdown. They remain separate cleanup work, not fixed by this claim.
+
+Full log: `/tmp/sim2-lift-eval-20261001.log`. Fourteen focused artifact/environment
+tests passed; the suite passes mypy and Ruff. The first lifecycle test pass had
+wrong uppercase instance-name expectations; those tests were corrected before
+the 102-test pass. No repeated agent retries, altered oracle or task-state
+injection was used to obtain a pass.
+
+With an API key and the normal local transport configuration:
+
+```bash
+export MCPCLIENT__SYSTEM_PROMPT="$(uv run --frozen --inexact python -c \
+  'from dimos.robot.manipulators.common.agent_prompts import BASE_MANIPULATION_AGENT_SYSTEM_PROMPT; print(BASE_MANIPULATION_AGENT_SYSTEM_PROMPT)')"
+uv run --frozen --inexact dimos evals run dimos.evals.suites.robosuite_lift \
+  --agent dimos.evals.agents.mcp_client_adapter --set 'modules=["mcp-client"]'
+```
+
+### Earlier Stopping Point (Superseded Above)
 
 1. The shared shutdown graph only knows RPC dependencies, not the coordinator's
    SHM hardware dependency. Physics still stops before control in this composed
