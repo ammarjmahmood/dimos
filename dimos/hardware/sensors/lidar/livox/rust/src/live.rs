@@ -62,8 +62,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const HANDSHAKE_ATTEMPTS: u32 =
     (HANDSHAKE_TIMEOUT.as_millis() / HANDSHAKE_RETRY.as_millis()) as u32;
 const RECV_POLL: Duration = Duration::from_millis(200);
-/// Clock queries at startup; the one with the fastest round trip sets the offset.
-const CLOCK_QUERIES: u32 = 5;
+/// Clock replies to collect at startup; the fastest round trip sets the offset.
+const CLOCK_QUERIES: usize = 5;
 /// About two seconds of Mid-360 data. A stalled consumer drops packets at
 /// this bound instead of growing memory without limit.
 const QUEUE_DEPTH: usize = 4096;
@@ -156,13 +156,9 @@ impl PacketSource for LiveSource {
                 Ok(packet) => {
                     let len = packet.len().min(buf.len());
                     buf[..len].copy_from_slice(&packet[..len]);
+                    // Two's complement: adding the offset's bits as u64 adds it signed.
                     let offset = self.host_offset_ns.load(Ordering::Relaxed);
-                    if let Some(device_ns) = wire::read_timestamp_ns(&buf[..len]) {
-                        wire::write_timestamp_ns(
-                            &mut buf[..len],
-                            device_ns.wrapping_add_signed(offset),
-                        );
-                    }
+                    wire::shift_timestamp_ns(&mut buf[..len], offset as u64);
                     return Some(len);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -322,17 +318,19 @@ fn run_handshake(
 ) {
     let device = SocketAddrV4::new(config.lidar_ip, config.ports.cmd_data);
     let mut seq: u32 = 0;
-    match measure_clock_offset(cmd, device, &mut seq, &failure.stop) {
-        Some((offset, rtt)) => {
-            host_offset_ns.store(offset, Ordering::Relaxed);
-            tracing::info!(
-                offset_ns = offset,
-                rtt_us = rtt / 1_000,
-                "stamping on the host clock"
-            );
-        }
-        None => tracing::warn!("device clock query failed; stamps stay on the device's clock"),
-    }
+    let Some((offset, rtt)) = measure_clock_offset(cmd, device, &mut seq, &failure.stop) else {
+        failure.set(format!(
+            "device {} did not answer the clock query within {HANDSHAKE_ATTEMPTS} attempts",
+            config.lidar_ip
+        ));
+        return;
+    };
+    host_offset_ns.store(offset, Ordering::Relaxed);
+    tracing::info!(
+        offset_ns = offset,
+        rtt_us = rtt / 1_000,
+        "stamping on the host clock"
+    );
     for step in handshake_steps(config) {
         let mut acked = false;
         for _ in 0..HANDSHAKE_ATTEMPTS {
@@ -394,8 +392,9 @@ fn host_now_ns() -> i64 {
         .map_or(0, |d| d.as_nanos() as i64)
 }
 
-/// Host minus device clock, NTP style: the device's `local_time_now` against the
-/// midpoint of the query's round trip, from the fastest of a few. Returns (offset, rtt).
+/// Ask the device for its clock until it has answered `CLOCK_QUERIES` times,
+/// retrying like a handshake step so a booting device is waited for.
+/// Returns (offset, rtt) from the fastest round trip.
 fn measure_clock_offset(
     cmd: &UdpSocket,
     device: SocketAddrV4,
@@ -403,8 +402,11 @@ fn measure_clock_offset(
     stop: &AtomicBool,
 ) -> Option<(i64, i64)> {
     let body = wire::build_query_body(&[wire::param_key::LOCAL_TIME_NOW]);
-    let mut best: Option<(i64, i64)> = None;
-    for _ in 0..CLOCK_QUERIES {
+    let mut samples = Vec::new();
+    for _ in 0..HANDSHAKE_ATTEMPTS {
+        if samples.len() == CLOCK_QUERIES || stop.load(Ordering::Relaxed) {
+            break;
+        }
         *seq = seq.wrapping_add(1);
         let request = wire::build_control(
             *seq,
@@ -425,12 +427,20 @@ fn measure_clock_offset(
         let Some(device_ns) = local_time_now(&reply) else {
             continue;
         };
-        let rtt = received - sent;
-        if best.is_none_or(|(_, best_rtt)| rtt < best_rtt) {
-            best = Some(((sent + received) / 2 - device_ns as i64, rtt));
-        }
+        samples.push((sent, received, device_ns));
     }
-    best
+    fastest_offset(&samples)
+}
+
+/// Host minus device clock, NTP style: the device's time against the midpoint
+/// of its query's round trip, taken from the fastest (sent, received, device) sample.
+fn fastest_offset(samples: &[(i64, i64, u64)]) -> Option<(i64, i64)> {
+    samples
+        .iter()
+        .map(|&(sent, received, device_ns)| {
+            ((sent + received) / 2 - device_ns as i64, received - sent)
+        })
+        .min_by_key(|&(_, rtt)| rtt)
 }
 
 fn local_time_now(reply: &[u8]) -> Option<u64> {
@@ -517,6 +527,35 @@ mod tests {
     /// The fake device's uptime clock; its packets are stamped just after this.
     const FAKE_DEVICE_NOW_NS: u64 = 500;
 
+    fn clock_ack(seq: u32) -> Vec<u8> {
+        let body = InternalInfoAck {
+            ret_code: 0,
+            params: vec![KeyValue {
+                key: wire::param_key::LOCAL_TIME_NOW,
+                value: &FAKE_DEVICE_NOW_NS.to_le_bytes(),
+            }],
+        }
+        .build();
+        wire::build_control(
+            seq,
+            wire::cmd_id::GET_INTERNAL_INFO,
+            wire::CMD_TYPE_ACK,
+            wire::SENDER_LIDAR,
+            &body,
+        )
+    }
+
+    #[test]
+    fn offset_comes_from_the_fastest_round_trip_midpoint() {
+        // Device clock 1000 s behind the host. A slow, lopsided round trip (all
+        // of its 9 ms on the way back) would skew the midpoint by 4.5 ms.
+        let behind = 1_000_000_000_000;
+        let slow = (5_000_000_000_000, 5_000_009_000_000, 4_000_000_000_000);
+        let fast = (6_000_000_000_000, 6_000_001_000_000, 5_000_000_500_000);
+        assert_eq!(fastest_offset(&[slow, fast]), Some((behind, 1_000_000)));
+        assert_eq!(fastest_offset(&[]), None);
+    }
+
     fn spawn_fake_device(ports: Ports) -> std::thread::JoinHandle<Vec<u16>> {
         std::thread::spawn(move || {
             let loopback = Ipv4Addr::LOCALHOST;
@@ -528,22 +567,7 @@ mod tests {
                 let (len, from) = cmd.recv_from(&mut buf).unwrap();
                 let frame = ControlFrame::parse(&buf[..len]).unwrap();
                 if frame.cmd_id == wire::cmd_id::GET_INTERNAL_INFO {
-                    let body = InternalInfoAck {
-                        ret_code: 0,
-                        params: vec![KeyValue {
-                            key: wire::param_key::LOCAL_TIME_NOW,
-                            value: &FAKE_DEVICE_NOW_NS.to_le_bytes(),
-                        }],
-                    }
-                    .build();
-                    let ack = wire::build_control(
-                        frame.seq,
-                        frame.cmd_id,
-                        wire::CMD_TYPE_ACK,
-                        wire::SENDER_LIDAR,
-                        &body,
-                    );
-                    cmd.send_to(&ack, from).unwrap();
+                    cmd.send_to(&clock_ack(frame.seq), from).unwrap();
                     continue;
                 }
                 let params = wire::parse_param_set_body(frame.data).unwrap();
@@ -759,13 +783,14 @@ mod tests {
                 UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, ports.cmd_data)).unwrap();
             cmd.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
             let mut buf = [0u8; 2048];
-            // Leave the clock queries unanswered; reject the first param set.
+            // Answer the clock queries; reject the first param set.
             let (frame, from) = loop {
                 let (len, from) = cmd.recv_from(&mut buf).unwrap();
                 let frame = ControlFrame::parse(&buf[..len]).unwrap();
                 if frame.cmd_id == wire::cmd_id::PARAM_SET {
                     break (frame, from);
                 }
+                cmd.send_to(&clock_ack(frame.seq), from).unwrap();
             };
             let nack_body = AsyncControlAck {
                 ret_code: 1,
