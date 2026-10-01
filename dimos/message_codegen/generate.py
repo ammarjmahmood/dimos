@@ -57,11 +57,13 @@ def generate(
     native.mkdir(exist_ok=True)
     (native / "messages.hpp").write_text(cpp.generate(messages))
     shutil.copyfile(TEMPLATES / "dimos_cdr.hpp", native / "dimos_cdr.hpp")
-    shutil.copyfile(TEMPLATES / "dimos_python.hpp", native / "dimos_python.hpp")
-    bindings = python.generate(messages, definitions, module)
-    for name, content in bindings.items():
-        (native / name).write_text(content)
-    sources = " ".join(sorted(bindings))
+    package = output / "python" / module
+    if package.exists():
+        shutil.rmtree(package)
+    for name, content in python.generate(messages, definitions, module, version=version).items():
+        path = package / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
     (native / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.20)\n"
         f"project({module} VERSION {version} LANGUAGES CXX)\n"
@@ -77,15 +79,6 @@ def generate(
         f"install(EXPORT {module}Targets NAMESPACE {module}:: DESTINATION lib/cmake/{module})\n"
         f"install(FILES {module}Config.cmake DESTINATION lib/cmake/{module})\n"
         f"install(DIRECTORY ../schemas DESTINATION share/{module})\n"
-        'option(DIMOS_BUILD_PYTHON "Build Python bindings" ON)\n'
-        "if(DIMOS_BUILD_PYTHON)\n"
-        "find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)\n"
-        'execute_process(COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir OUTPUT_VARIABLE pybind11_DIR OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)\n'
-        "find_package(pybind11 3.0.1 EXACT REQUIRED)\n"
-        f"pybind11_add_module({module} NO_EXTRAS {sources})\n"
-        f"target_compile_features({module} PRIVATE cxx_std_17)\n"
-        f"target_link_libraries({module} PRIVATE fastcdr)\n"
-        "endif()\n"
     )
     (native / f"{module}Config.cmake").write_text(
         "include(CMakeFindDependencyMacro)\nfind_dependency(fastcdr 2.4.0 EXACT)\n"
