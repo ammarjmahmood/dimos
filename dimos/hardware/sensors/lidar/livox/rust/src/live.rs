@@ -64,8 +64,6 @@ const HANDSHAKE_ATTEMPTS: u32 =
 const RECV_POLL: Duration = Duration::from_millis(200);
 /// Clock queries at startup; the one with the fastest round trip sets the offset.
 const CLOCK_QUERIES: u32 = 5;
-/// No offset measured: packets keep the device's own stamps.
-const NO_OFFSET: i64 = i64::MIN;
 /// About two seconds of Mid-360 data. A stalled consumer drops packets at
 /// this bound instead of growing memory without limit.
 const QUEUE_DEPTH: usize = 4096;
@@ -132,7 +130,7 @@ impl LiveSource {
             threads.push(spawn_reader("imu", imu, lidar_ip, tx, failure.clone()));
         }
         let handshake_failure = failure.clone();
-        let host_offset_ns = Arc::new(AtomicI64::new(NO_OFFSET));
+        let host_offset_ns = Arc::new(AtomicI64::new(0));
         let handshake_offset = host_offset_ns.clone();
         threads.push(std::thread::spawn(move || {
             run_handshake(&config, &cmd, &handshake_failure, &handshake_offset)
@@ -159,9 +157,7 @@ impl PacketSource for LiveSource {
                     let len = packet.len().min(buf.len());
                     buf[..len].copy_from_slice(&packet[..len]);
                     let offset = self.host_offset_ns.load(Ordering::Relaxed);
-                    if let (Some(device_ns), true) =
-                        (wire::read_timestamp_ns(&buf[..len]), offset != NO_OFFSET)
-                    {
+                    if let Some(device_ns) = wire::read_timestamp_ns(&buf[..len]) {
                         wire::write_timestamp_ns(
                             &mut buf[..len],
                             device_ns.wrapping_add_signed(offset),
