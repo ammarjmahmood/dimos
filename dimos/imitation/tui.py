@@ -109,7 +109,7 @@ class CollectionApp(App[None]):
             yield Static(id="message")
             with Horizontal(id="actions"):
                 yield Button("Start recording", id="toggle", variant="success")
-                yield Button("Discard", id="discard", variant="error", disabled=True)
+                yield Button("Discard", id="discard", variant="error")
                 yield Button("Detach", id="stop")
         yield Footer()
 
@@ -164,7 +164,7 @@ class CollectionApp(App[None]):
         toggle.label = "Save episode" if recording else "Start recording"
         toggle.variant = "error" if recording else "success"
         toggle.disabled = self._disconnected
-        self.query_one("#discard", Button).disabled = self._disconnected or not recording
+        self.query_one("#discard", Button).disabled = self._disconnected
 
     def _poll(self) -> None:
         if self._disconnected:
@@ -182,12 +182,15 @@ class CollectionApp(App[None]):
         if self._disconnected:
             return
         try:
+            discarded = self._status.episodes_discarded
             self._set_status(self._session.command(event))
             self._message = {
                 "start": "Recording.",
                 "save": "Episode saved. Reset the scene for the next take.",
                 "discard": "Episode discarded. Reset the scene and try again.",
             }.get(self._status.last_event, self._status.last_event)
+            if event == "discard" and self._status.episodes_discarded == discarded:
+                self._message = "No active episode to discard."
             self._quit_armed = False
             self._refresh()
         except Exception as exc:
@@ -198,8 +201,7 @@ class CollectionApp(App[None]):
         self._episode_command("toggle")
 
     def action_discard(self) -> None:
-        if self._status.state == "recording":
-            self._episode_command("discard")
+        self._episode_command("discard")
 
     def action_quit(self) -> None:  # type: ignore[override]
         if self._status.state == "recording" and not self._quit_armed:
