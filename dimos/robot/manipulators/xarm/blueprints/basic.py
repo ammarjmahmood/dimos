@@ -59,7 +59,6 @@ if global_config.simulation:
     from dimos.robot.manipulators.xarm.config import make_xarm7_sim_robot_config
     from dimos.robot.manipulators.xarm.sim2 import XARM7
     from dimos.sim2.blueprint import simulation
-    from dimos.sim2.module import SimulationModule
     from dimos.sim2.scene import scene_path, scene_robot
 
     if global_config.simulation != "mujoco":
@@ -77,9 +76,7 @@ if global_config.simulation:
     )
     _simulation = simulation(scene=_scene, robots={"arm": _arm}, sim_id="xarm7")
     _xarm7_hw = _simulation.hardware["arm"]
-    _xarm7_devices = [
-        _simulation.blueprint.lifetime_dependencies([(ControlCoordinator, SimulationModule)])
-    ]
+    _xarm7_devices = [_simulation.blueprint]
 else:
     _xarm7_hw = xarm7_hardware("arm", gripper=True, mock_without_address=True)
     _xarm7_model = make_xarm7_model_config(add_gripper=True, gripper_hardware_id="arm")

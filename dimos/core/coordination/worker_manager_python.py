@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from dimos.core.coordination.python_worker import PythonWorker
 from dimos.core.global_config import GlobalConfig
@@ -113,7 +113,7 @@ class WorkerManagerPython:
         actor = worker.deploy_module(module_class, global_config, kwargs=kwargs)
         return RPCClient(actor, module_class, kwargs.get("instance_name"))
 
-    def undeploy(self, proxy: ModuleProxyProtocol, *, timeout: float | None = None) -> None:
+    def undeploy(self, proxy: ModuleProxyProtocol) -> None:
         """Undeploy a module and shut down its worker if it is now empty."""
         actor = getattr(proxy, "actor_instance", None)
         if actor is None:
@@ -128,10 +128,7 @@ class WorkerManagerPython:
         if target is None:
             raise ValueError(f"No worker holds module_id={module_id}")
 
-        try:
-            target.undeploy_module(module_id, timeout=timeout)
-        finally:
-            cast("RPCClient", proxy).stop_rpc_client()
+        target.undeploy_module(module_id)
 
         if not target._modules:
             target.shutdown()

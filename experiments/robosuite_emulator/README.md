@@ -64,23 +64,26 @@ environment/draft grading tests, six registry tests. After the mount correction,
 11 robot/module/model-import tests passed. Selected mypy (eight production files)
 and Ruff passed. These overlapping counts are not a complete-repository test run.
 
-### Follow-Up: Lifetime Ordering And Saved Task Results
+### Follow-Up: Saved Task Results And Lifecycle Scope
 
-Pim approved both corrections below. They remain separate changes in the spike:
+On October 1, Pim requested removing the shared coordination changes from this
+spike. Both `23516cd3d` and `e9a3f056c` were undone, including their lifetime
+declarations, tests and public API. `dimos/core/coordination` now matches main.
+The live run below predates that removal; it is historical evidence, not a
+claim that shutdown ordering is guaranteed on the current branch.
 
-- `e9a3f056c`: `Blueprint.lifetime_dependencies([(consumer, provider)])` adds
-  resource ownership to the existing shutdown graph without a fake RPC or
-  simulator-specific ControlCoordinator branch. Sim2 connections and the G1/xArm
-  coordinators declare their dependency on the physics owner. Composition,
-  namespaces, consumer restart, disabled modules and individual provider unload
-  are covered by the 102 passing coordination/blueprint/registry checks.
-- `dimos/evals/suites/robosuite_lift.py`: one original Lift eval using the normal
-  agent, blueprint, recording and runner. `LiftEnvironment.prepare_recording`
-  registers a final snapshot callback on the existing resource stack. The
-  callback saves `lift-result.json` beside `memory.db` before either the store
-  or simulator closes. Grading reads this saved `task_result` after shutdown.
-  No `sim_truth` stream or recorder change is needed. Missing or invalid oracle
-  data is an eval error, not a fabricated zero or success.
+The separate mapping prerequisite, `1949f9ce8`, remains: it reconstructs the
+existing concrete costmap settings after blueprint serialization. Removing it
+makes main's parser reject G1's height-clearance and step-height settings.
+No mapping algorithm changes are included.
+
+`dimos/evals/suites/robosuite_lift.py` remains one original Lift eval using the
+normal agent, blueprint, recording and runner. `LiftEnvironment.prepare_recording`
+registers a final snapshot callback on the existing resource stack. The callback
+saves `lift-result.json` beside `memory.db` before either the store or simulator
+closes. Grading reads this saved `task_result` after shutdown. No `sim_truth`
+stream or recorder change is needed. Missing or invalid oracle data is an eval
+error, not a fabricated zero or success.
 
 The original Lift oracle tests cube-center height above the tabletop by 4 cm.
 The instruction asks the agent to hold it 10 cm above the table; the score is

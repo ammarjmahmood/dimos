@@ -20,7 +20,7 @@ from pathlib import Path
 
 from robosuite.environments.manipulation.lift import Lift
 
-from dimos.control.coordinator import ControlCoordinator, TaskConfig
+from dimos.control.coordinator import TaskConfig
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
@@ -36,7 +36,6 @@ from dimos.robot.manipulators.xarm.config import (
 )
 from dimos.robot.manipulators.xarm.sim2 import XARM7, XArm7Model
 from dimos.sim2.blueprint import Simulation, simulation
-from dimos.sim2.module import SimulationModule
 from dimos.sim2.spec import RobosuiteTask, RobotInstance
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
@@ -73,7 +72,7 @@ def _perception_stack(devices: Simulation, base_pose: PoseStamped) -> Blueprint:
             ],
         ),
         RerunBridgeModule.blueprint(),
-    ).lifetime_dependencies([(ControlCoordinator, SimulationModule)])
+    )
 
 
 _simulation = simulation(

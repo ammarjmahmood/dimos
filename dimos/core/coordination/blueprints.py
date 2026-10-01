@@ -196,7 +196,6 @@ class Blueprint:
 
     requirement_checks: tuple[Callable[[], str | None], ...] = field(default_factory=tuple)
     configurator_checks: "tuple[SystemConfigurator, ...]" = field(default_factory=tuple)
-    lifetime_edges: tuple[tuple[str, str], ...] = ()
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -250,18 +249,6 @@ class Blueprint:
                 f"({', '.join(sorted(names))}). Pass the instance name instead of the class."
             )
         return names[0] if names else module.name
-
-    def lifetime_dependencies(
-        self, dependencies: Sequence[tuple[type[ModuleBase] | str, type[ModuleBase] | str]]
-    ) -> "Blueprint":
-        """Keep each provider alive until its consumer stops.
-
-        Pairs are (consumer, provider), for resources such as shared memory
-        that do not create an RPC reference. This does not schedule startup.
-        Names are checked when the complete blueprint is deployed.
-        """
-        edges = ((self._instance_key(c), self._instance_key(p)) for c, p in dependencies)
-        return replace(self, lifetime_edges=tuple(dict.fromkeys((*self.lifetime_edges, *edges))))
 
     def namespace(self, prefix: str, *, expose: Iterable[str] = ()) -> "Blueprint":
         """Isolate this blueprint under a name prefix so several copies can coexist.
@@ -342,16 +329,11 @@ class Blueprint:
             else:
                 new_transports[f"{prefix}/{name}", type_] = _reprefix_transport(transport, prefix)
 
-        local_names = {atom.name: f"{prefix}/{atom.name}" for atom in self.blueprints}
         return replace(
             self,
             blueprints=tuple(new_atoms),
             remapping_map=MappingProxyType(new_remap),
             transport_map=MappingProxyType(new_transports),
-            lifetime_edges=tuple(
-                (local_names.get(consumer, consumer), local_names.get(provider, provider))
-                for consumer, provider in self.lifetime_edges
-            ),
         )
 
     def requirements(self, *checks: Callable[[], str | None]) -> "Blueprint":
@@ -396,9 +378,6 @@ def autoconnect(*blueprints: Blueprint) -> Blueprint:
         remapping_map=MappingProxyType(all_remappings),
         requirement_checks=all_requirement_checks,
         configurator_checks=all_configurator_checks,
-        lifetime_edges=tuple(
-            dict.fromkeys(edge for bs in blueprints for edge in bs.lifetime_edges)
-        ),
     )
 
 

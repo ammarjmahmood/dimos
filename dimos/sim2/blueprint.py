@@ -102,9 +102,7 @@ def simulation(
             connection = connection.remappings(
                 [(f"{robot_id}_connection", port, f"{robot_id}/{port}") for port in ports]
             )
-        modules.append(
-            connection.lifetime_dependencies([(f"{robot_id}_connection", SimulationModule)])
-        )
+        modules.append(connection)
         for sensor in config.sensors:
             kwargs = dict(
                 instance_name=f"{robot_id}_{sensor.name}",

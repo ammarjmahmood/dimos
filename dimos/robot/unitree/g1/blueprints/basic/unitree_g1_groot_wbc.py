@@ -119,7 +119,6 @@ if global_config.simulation == "mujoco":
     from dimos.mapping.voxels.module import VoxelGridMapper
     from dimos.robot.unitree.g1.sim2 import G1_GROOT
     from dimos.sim2.blueprint import simulation
-    from dimos.sim2.module import SimulationModule
     from dimos.sim2.scene import scene_path, scene_robot
 
     _scene = scene_path(global_config.scene_package, "logistics.xml")
@@ -407,9 +406,7 @@ _coordinator = _G1GrootCoordinator.blueprint(
     ],
 )
 if global_config.simulation:
-    _coordinator = _coordinator.remappings(
-        [(_G1GrootCoordinator, "g1_joints", "g1/joints")]
-    ).lifetime_dependencies([(_G1GrootCoordinator, SimulationModule)])
+    _coordinator = _coordinator.remappings([(_G1GrootCoordinator, "g1_joints", "g1/joints")])
 else:
     _coordinator = _coordinator.transports(
         {

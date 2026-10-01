@@ -18,7 +18,6 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 import dataclasses
-from graphlib import CycleError, TopologicalSorter
 import importlib
 import inspect
 import shutil
@@ -86,7 +85,6 @@ class ModuleCoordinator(Resource):
         self._instance_classes: dict[str, type[ModuleBase]] = {}
         self._deployed_atoms: dict[str, BlueprintAtom] = {}
         self._resolved_module_refs: dict[tuple[str, str], str] = {}
-        self._lifetime_edges: set[tuple[str, str]] = set()
         self._transport_registry: dict[tuple[str, type], Transport[Any]] = {}
         self._class_aliases: dict[type[ModuleBase], type[ModuleBase]] = {}
         self._module_transports: dict[str, dict[str, Transport[Any]]] = {}
@@ -110,13 +108,13 @@ class ModuleCoordinator(Resource):
                 self._coordinator_rpc.stop()
                 self._coordinator_rpc = None
 
-        with self._modules_lock:
-            for name in self._shutdown_order():
-                logger.info("Stopping module...", module=name)
-                try:
-                    self._unload_module(name, timeout=5.0)
-                except Exception:
-                    logger.error("Error stopping module", module=name, exc_info=True)
+        for name, module in reversed(self._deployed_modules.items()):
+            logger.info("Stopping module...", module=module.remote_name)
+            try:
+                module.stop()
+            except Exception:
+                logger.error("Error stopping module", module=name, exc_info=True)
+            logger.info("Module stopped.", module=module.remote_name)
 
         def _stop_manager(m: WorkerManager) -> None:
             try:
@@ -125,43 +123,6 @@ class ModuleCoordinator(Resource):
                 logger.error("Error stopping manager", manager=type(m).__name__, exc_info=True)
 
         safe_thread_map(tuple(self._managers.values()), _stop_manager)
-        self._started = False
-
-    def _shutdown_dependencies(self) -> dict[str, set[str]]:
-        # Providers outlive both RPC callers and explicitly declared resource users.
-        consumers: dict[str, set[str]] = {name: set() for name in reversed(self._deployed_modules)}
-        edges = self._lifetime_edges | {
-            (consumer, provider) for (consumer, _), provider in self._resolved_module_refs.items()
-        }
-        for consumer, provider in edges:
-            if consumer in consumers and provider in consumers and consumer != provider:
-                consumers[provider].add(consumer)
-        return consumers
-
-    def _validate_lifetime_order(self) -> None:
-        if self._lifetime_edges:
-            try:
-                tuple(TopologicalSorter(self._shutdown_dependencies()).static_order())
-            except CycleError as error:
-                raise ValueError(
-                    f"Lifetime dependencies conflict with module references: {error}"
-                ) from error
-
-    def _shutdown_order(self) -> list[str]:
-        consumers = self._shutdown_dependencies()
-        sorter = TopologicalSorter(consumers)
-        try:
-            sorter.prepare()
-        except CycleError:
-            logger.error("Cyclic module references prevent fully ordered shutdown")
-        ordered: list[str] = []
-        while sorter.is_active():
-            ready = sorter.get_ready()
-            ordered.extend(ready)
-            sorter.done(*ready)
-        # A cycle has no safe dependency order. Still tear down every remaining worker.
-        ordered.extend(name for name in consumers if name not in ordered)
-        return ordered
 
     def start_rpc_service(self) -> None:
         """Expose the coordinator's API as @rpc methods over LCM."""
@@ -425,11 +386,9 @@ class ModuleCoordinator(Resource):
         _run_configurators(blueprint)
         _check_requirements(blueprint)
         _verify_no_name_conflicts(blueprint)
-        lifetime_edges = _resolve_lifetime_edges(blueprint)
 
         logger.info("Starting the modules")
         coordinator = cls(g=global_config)
-        coordinator._lifetime_edges = lifetime_edges
         coordinator.start()
 
         try:
@@ -438,7 +397,6 @@ class ModuleCoordinator(Resource):
             t1 = time.perf_counter()
             coordinator._connect_streams(blueprint, transports)
             _connect_module_refs(blueprint, coordinator)
-            coordinator._validate_lifetime_order()
             t2 = time.perf_counter()
             coordinator.build_all_modules()
             t3 = time.perf_counter()
@@ -487,10 +445,6 @@ class ModuleCoordinator(Resource):
         blueprint: Blueprint,
         parsed_config: ParsedBlueprintConfig | None = None,
     ) -> None:
-        lifetime_edges = self._lifetime_edges | _resolve_lifetime_edges(
-            blueprint, existing_names=set(self._deployed_modules)
-        )
-        _check_lifetime_cycles(lifetime_edges)
         global_values, module_kwargs, transport_overrides = _resolve_blueprint_config(
             blueprint, parsed_config, sparse_globals=True
         )
@@ -523,7 +477,6 @@ class ModuleCoordinator(Resource):
         )
         existing_classes = {self._instance_classes[name] for name in before}
 
-        self._lifetime_edges = lifetime_edges
         _deploy_all_modules(blueprint, self, self._global_config, module_kwargs)
         self._connect_streams(blueprint, transports)
         _connect_module_refs(
@@ -532,7 +485,6 @@ class ModuleCoordinator(Resource):
             existing_atoms=existing_atoms,
             existing_modules=existing_classes,
         )
-        self._validate_lifetime_order()
 
         new_modules = [
             proxy for name, proxy in self._deployed_modules.items() if name not in before
@@ -558,21 +510,9 @@ class ModuleCoordinator(Resource):
         ``restart_module``) are responsible for rewiring.
         """
         with self._modules_lock:
-            name = self._resolve_instance_key(module)
-            consumers = sorted(
-                consumer
-                for consumer, provider in self._lifetime_edges
-                if provider == name and consumer in self._deployed_modules
-            )
-            if consumers:
-                raise ValueError(
-                    f"Cannot unload {name!r}; stop its lifetime consumers first: {', '.join(consumers)}"
-                )
-            self._unload_module(name)
+            self._unload_module(module)
 
-    def _unload_module(
-        self, module: type[ModuleBase] | str, *, timeout: float | None = None
-    ) -> None:
+    def _unload_module(self, module: type[ModuleBase] | str) -> None:
         name = self._resolve_instance_key(module)
         module_class = self._instance_classes[name]
         if module_class.deployment != "python":
@@ -582,10 +522,18 @@ class ModuleCoordinator(Resource):
 
         proxy = self._deployed_modules[name]
 
+        try:
+            proxy.stop()
+        except Exception:
+            logger.error(
+                "Error stopping module during unload",
+                module=name,
+                exc_info=True,
+            )
+
         python_wm = cast("WorkerManagerPython", self._managers["python"])
         try:
-            python_wm.undeploy(proxy, timeout=timeout)
-            logger.info("Module stopped.", module=name)
+            python_wm.undeploy(proxy)
         except Exception:
             logger.error(
                 "Error undeploying module from worker",
@@ -606,7 +554,6 @@ class ModuleCoordinator(Resource):
             for key, target in self._resolved_module_refs.items()
             if key[0] != name and target != name
         }
-        self._lifetime_edges = {edge for edge in self._lifetime_edges if name not in edge}
 
     def restart_module_by_class_name(
         self,
@@ -669,7 +616,6 @@ class ModuleCoordinator(Resource):
         old_atom = self._deployed_atoms[name]
         kwargs = dict(old_atom.kwargs)
         saved_transports = dict(self._module_transports.get(name, {}))
-        lifetime_edges = {edge for edge in self._lifetime_edges if edge[0] == name}
         inbound_refs = [
             (consumer, ref_name)
             for (consumer, ref_name), target in self._resolved_module_refs.items()
@@ -702,7 +648,6 @@ class ModuleCoordinator(Resource):
         new_proxy = python_wm.deploy_fresh(new_class, self._global_config, kwargs)
         self._deployed_modules[name] = new_proxy
         self._instance_classes[name] = new_class
-        self._lifetime_edges.update(lifetime_edges)
 
         new_bp = new_class.blueprint(**kwargs)
         new_atom = new_bp.active_blueprints[0]
@@ -756,36 +701,6 @@ class ModuleCoordinator(Resource):
             return
         finally:
             self.stop()
-
-
-def _resolve_lifetime_edges(
-    blueprint: Blueprint, *, existing_names: set[str] | None = None
-) -> set[tuple[str, str]]:
-    active = {atom.name for atom in blueprint.active_blueprints}
-    disabled = {atom.name for atom in blueprint.blueprints} - active
-    available = active | (existing_names or set())
-    edges = set()
-    for consumer, provider in blueprint.lifetime_edges:
-        if consumer in disabled:
-            continue
-        for name in (consumer, provider):
-            if name not in available:
-                raise ValueError(
-                    f"Lifetime dependency {consumer!r} -> {provider!r}: no active module {name!r}"
-                )
-        edges.add((consumer, provider))
-    _check_lifetime_cycles(edges)
-    return edges
-
-
-def _check_lifetime_cycles(edges: set[tuple[str, str]]) -> None:
-    graph: dict[str, set[str]] = defaultdict(set)
-    for consumer, provider in edges:
-        graph[provider].add(consumer)
-    try:
-        tuple(TopologicalSorter(graph).static_order())
-    except CycleError as error:
-        raise ValueError(f"Cyclic lifetime dependencies: {error}") from error
 
 
 def _rpc_name(instance_key: str, cls: type[ModuleBase]) -> str:

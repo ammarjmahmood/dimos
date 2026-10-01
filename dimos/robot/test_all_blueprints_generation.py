@@ -40,7 +40,6 @@ BLUEPRINT_METHODS = {
     "transports",
     "global_config",
     "remappings",
-    "lifetime_dependencies",
     "requirements",
     "configurators",
 }

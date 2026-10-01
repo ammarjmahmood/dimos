@@ -70,15 +70,14 @@ September 30 local-router headless checks, with assets already downloaded:
 | G1 GR00T | 3.26 s | 0.9997 | 0.210 s | Walking, RGB-D and lidar |
 | xArm7 planner | 13.20 s | 0.9996 | 0.058 s | Reached joint command and RGB-D |
 
-These are short local smoke measurements, not sustained or cross-machine
-performance guarantees. Both publish 640x480 RGB-D. The earlier xArm shutdown
-timeout was a module lifecycle race: fire-and-forget stops could stop the
-controller before manipulation cancelled its trajectory, and worker teardown
-could call stop again. The coordinator now orders known RPC consumers before
-providers and awaits the existing worker undeploy operation once per module.
-It retains a bounded timeout for genuinely unresponsive workers. Verification:
-57 coordinator/worker tests passed, with 13 existing macOS skips, plus both
-live runs. Startup TF and macOS renderer warnings are not claimed resolved.
+These are historical short local smoke measurements, not sustained or
+cross-machine performance guarantees. Both publish 640x480 RGB-D. The runs
+included experimental coordinator shutdown changes that were removed from
+this branch on October 1 to keep shared lifecycle changes out of the simulator
+review. Coordination now matches main, with no explicit lifetime API or
+dependency-ordered shutdown. Those shutdown timings are not acceptance
+evidence for the current branch; the earlier xArm shutdown race remains an
+open issue. Startup TF and macOS renderer warnings are not claimed resolved.
 
 ## Included Scenes
 
