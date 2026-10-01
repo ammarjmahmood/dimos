@@ -414,3 +414,18 @@ by digest. Future reports capture both prepared and dispatched command payloads,
 their numeric diff, and start errors. The failed trial did not record the full
 pending trajectory; its CPU reconstruction uses saved feedback and an explicitly
 synthetic endpoint, rather than claiming recovery of that missing payload.
+
+One bounded development trial with the corrected guard completed the official
+`turning_on_radio` instance-0 goal in `house_double_floor_lower`. This used the
+explicit custom robot base `[3.6, 4.15, 0.005]`, yaw pi/2, an oracle-assisted
+finger-tip target, and arm/torso motion through the Python SDK. Four generated
+and dispatched trajectory payloads matched exactly. The radio stayed in place
+through clearance and precontact, then displaced approximately 6.9 mm during
+contact. The runtime recorded five consecutive finger-contact steps, changed
+`ToggledOn` from false to true, and independently terminated with BDDL success
+at step 402. No object freezing, physics parameter change, or symbolic toggle
+was used. The episode ended during the hold, so retraction and the complete
+motion sequence were not reported as completed. This is a single development
+baseline, not autonomous agent or fair-evaluation performance. The recorded
+head-camera stream is genuine, but its framing does not directly show the
+button interaction; contact/pose logs provide that trial's diagnostic evidence.
