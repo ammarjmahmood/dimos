@@ -178,6 +178,9 @@ class ControlCoordinator(Module):
         self._tasks: dict[TaskName, ControlTask] = {}
         self._task_lock = threading.Lock()
         self._trajectory_task: JointTrajectoryTask | None = None
+        # Cancellation epoch, guarded by _task_lock. A rollout captures it
+        # before inference so cancellation also rejects its delayed submissions.
+        # Callers that omit expected_generation are not fenced by this token.
         self._trajectory_generation = 0
 
         # Card-declared stream routes, keyed by the port stream_bind resolved to:
@@ -448,7 +451,13 @@ class ControlCoordinator(Module):
     def execute_trajectory(
         self, trajectory: JointTrajectory, expected_generation: int | None = None
     ) -> TrajectoryExecutionResult:
-        """Execute a trajectory through the coordinator's sole trajectory task."""
+        """Execute a trajectory through the coordinator's sole trajectory task.
+
+        Capture ``get_trajectory_generation()`` before computing an action and
+        pass it here to reject a submission delayed past cancellation. Checking
+        the token and accepting the trajectory both hold ``_task_lock``.
+        Omitting ``expected_generation`` preserves unfenced, unversioned calls.
+        """
         current_positions = self.get_joint_positions()
         with self._task_lock:
             if (
@@ -470,7 +479,13 @@ class ControlCoordinator(Module):
     def cancel_trajectory(
         self, expected_generation: int | None = None
     ) -> TrajectoryCancellationResult:
-        """Cancel execution and invalidate versioned submissions already in flight."""
+        """Cancel execution and invalidate versioned submissions already in flight.
+
+        A matching token advances the epoch even when no trajectory is active,
+        rejecting delayed submissions from that rollout. An old token leaves a
+        newer rollout untouched, including during the old rollout's cleanup.
+        Omitting the token cancels unconditionally and advances the current epoch.
+        """
         with self._task_lock:
             if (
                 expected_generation is not None
