@@ -16,8 +16,8 @@
 
 from collections import defaultdict
 
-from dimos.message_codegen import cpp
-from dimos.message_codegen.definitions import FieldType, Message
+from . import cpp
+from .definitions import FieldType, Message
 
 NUMPY_TYPES = {
     "byte": "uint8",

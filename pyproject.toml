@@ -102,6 +102,8 @@ classifiers = [
 ]
 
 dependencies = [
+    "dimos-generated==0.1.0",
+    "dimos-message-build==0.1.0",
     # Transport Protocols
     "lcm-dimos-fork>=1.5.2.post1", # Raw LCM transport; generated messages use CDR.
     "eclipse-zenoh>=1.10.1,<2.0",
@@ -165,9 +167,6 @@ dependencies = [
     "websocket-client>=1.8",
 ]
 
-
-[project.entry-points."dimos.messages"]
-builtin = "dimos.message_codegen.builtin_provider"
 
 [project.scripts]
 lcmspy = "dimos.cli.spy.run_spy:lcm_main"
@@ -551,6 +550,8 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
+dimos-generated = { path = "packages/dimos-generated" }
+dimos-message-build = { path = "dimos/message_codegen" }
 # CUDA builds are not published for macOS or non-x86_64 Linux. Those platforms
 # fall back to PyPI.
 torch = [

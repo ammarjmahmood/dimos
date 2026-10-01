@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import json
 
-from dimos.message_codegen import cpp
-from dimos.message_codegen.definitions import Definitions, Message
-from dimos.message_codegen.ownership import ABI
+from . import cpp
+from .definitions import Definitions, Message
+from .ownership import ABI
 
 
 def string_literal(value: str) -> str:

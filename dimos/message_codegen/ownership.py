@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 import re
 
-from dimos.message_codegen.definitions import Definitions, Message
+from .definitions import Definitions, Message
 
 ABI = "dimos-cdr-pybind11-3.0.1-fastcdr-2.4.0-v1"
 
@@ -34,6 +34,7 @@ class Dependency:
     root: Path
     owned: tuple[str, ...]
     schemas: dict[str, str]
+    codec_owner: str = ""
 
     @property
     def crate(self) -> str:
@@ -49,7 +50,14 @@ class Dependency:
             raise ValueError(f"Invalid dependency module: {module}")
         if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
             raise ValueError(f"Invalid dependency version: {version}")
-        return cls(module, version, root.resolve(), tuple(data["owned"]), data["schemas"])
+        return cls(
+            module,
+            version,
+            root.resolve(),
+            tuple(data["owned"]),
+            data["schemas"],
+            data.get("codec_owner", module),
+        )
 
 
 def schema_hash(schema: str) -> str:
@@ -69,6 +77,11 @@ def resolve_owners(
             if name in owners:
                 raise ValueError(f"Multiple owners for message {name}")
             owners[name] = dependency
+    codec_owners = {dep.codec_owner or dep.module for dep in dependencies}
+    if len(codec_owners) > 1:
+        raise ValueError(f"Incompatible Rust codec owners: {sorted(codec_owners)}")
+    if codec_owners - modules.keys():
+        raise ValueError(f"Missing codec owner package: {sorted(codec_owners - modules.keys())}")
     for dependency in dependencies:
         missing = set(dependency.schemas) - owners.keys()
         if missing:

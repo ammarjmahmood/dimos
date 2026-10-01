@@ -125,7 +125,7 @@ fn main() {
  let mut msg = Reading::decode(&std::fs::read("cpp.cdr").unwrap()).unwrap();
  let header: Header = msg.header; msg.header = header;
  msg.value += 1.0;
- std::fs::write("rust.cdr", msg.encode().unwrap()).unwrap();
+ std::fs::write("rust.cdr", ownership_base_messages::codec::Message::encode(&msg).unwrap()).unwrap();
 }
 """)
     subprocess.run(

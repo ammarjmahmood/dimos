@@ -19,14 +19,15 @@ from __future__ import annotations
 import argparse
 import json
 import keyword
+import os
 from pathlib import Path
 import re
 import shutil
 
-from dimos.message_codegen import cpp, python, rust, stubs
-from dimos.message_codegen.definitions import Definitions
-from dimos.message_codegen.distribution import write_distribution
-from dimos.message_codegen.ownership import ABI, Dependency, resolve_owners, schema_hash
+from . import cpp, python, rust, stubs
+from .definitions import Definitions
+from .distribution import write_distribution
+from .ownership import ABI, Dependency, resolve_owners, schema_hash
 
 TEMPLATES = Path(__file__).with_name("templates")
 
@@ -141,7 +142,13 @@ def generate(
     (crate / "src" / "lib.rs").write_text(
         rust.generate(owned, definitions, {name: owner.crate for name, owner in owners.items()})
     )
-    shutil.copyfile(TEMPLATES / "codec.rs", crate / "src" / "codec.rs")
+    codec_owner = (
+        (dependencies[0].codec_owner or dependencies[0].module) if dependencies else module
+    )
+    if dependencies:
+        (crate / "src" / "codec.rs").write_text(f"pub use {codec_owner}_messages::codec::*;\n")
+    else:
+        shutil.copyfile(TEMPLATES / "codec.rs", crate / "src" / "codec.rs")
     (crate / "Cargo.toml").write_text(
         f'[package]\nname = "{module.replace("_", "-")}-messages"\nversion = "{version}"\nedition = "2024"\n'
         'license = "Apache-2.0"\ndescription = "Native CDR messages generated from ROS2 definitions"\n'
@@ -149,7 +156,7 @@ def generate(
         '[workspace]\n[dependencies]\nserde = { version = "1.0", features = ["derive"] }\n'
         'serde-big-array = "=0.5.1"\nre_cdr = "=0.1.0"\n'
         + "".join(
-            f'{dep.module.replace("_", "-")}-messages = {{ version = "={dep.version}", path = {json.dumps(str(dep.root / "rust"))} }}\n'
+            f'{dep.module.replace("_", "-")}-messages = {{ version = "={dep.version}", path = {json.dumps(os.path.relpath(dep.root / "rust", crate))} }}\n'
             for dep in dependencies
         )
     )
@@ -178,6 +185,8 @@ def generate(
                 "module": module,
                 "version": version,
                 "shared": shared,
+                "codec_owner": codec_owner,
+                "dependencies": {dep.module: dep.version for dep in dependencies},
                 "owned": [message.name for message in owned],
                 "schemas": {name: schema_hash(schema) for name, schema in metadata.items()},
             },
@@ -185,6 +194,26 @@ def generate(
             sort_keys=True,
         )
         + "\n"
+    )
+    # A relocatable header-only CMake package also travels inside message wheels.
+    include = output / "include" / module
+    include.mkdir(parents=True, exist_ok=True)
+    for filename in ("messages.hpp", "dimos_cdr.hpp"):
+        shutil.copyfile(native / filename, include / filename)
+    config = output / "lib" / "cmake" / module
+    config.mkdir(parents=True, exist_ok=True)
+    (config / f"{module}Config.cmake").write_text(
+        "include(CMakeFindDependencyMacro)\nfind_dependency(fastcdr 2.4.0 EXACT)\n"
+        + "".join(
+            f"find_dependency({dep.module} {dep.version} EXACT CONFIG)\n" for dep in dependencies
+        )
+        + f"if(NOT TARGET {module}::messages)\nadd_library({module}::messages INTERFACE IMPORTED)\n"
+        + f'set_target_properties({module}::messages PROPERTIES INTERFACE_COMPILE_FEATURES "cxx_std_17" INTERFACE_INCLUDE_DIRECTORIES "${{CMAKE_CURRENT_LIST_DIR}}/../../../include" INTERFACE_LINK_LIBRARIES "fastcdr;{";".join(f"{name}::messages" for name in imports)}")\nendif()\n'
+    )
+    (config / f"{module}ConfigVersion.cmake").write_text(
+        f'set(PACKAGE_VERSION "{version}")\n'
+        "if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)\n"
+        "set(PACKAGE_VERSION_EXACT TRUE)\nset(PACKAGE_VERSION_COMPATIBLE TRUE)\nendif()\n"
     )
     return tuple(message.name for message in messages)
 

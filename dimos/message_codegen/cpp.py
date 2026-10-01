@@ -22,7 +22,7 @@ import json
 import math
 from typing import Any
 
-from dimos.message_codegen.definitions import FieldType, Message
+from .definitions import FieldType, Message
 
 PRIMITIVES = {
     "bool": "bool",
