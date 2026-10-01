@@ -84,7 +84,6 @@ def main() -> None:
         subprocess.run(
             ["rustup", "run", "1.92.0", "rustfmt", "--edition", "2024", str(library)],
             check=True,
-            capture_output=True,
         )
         expected = {
             str(path.relative_to(source)): path.read_bytes()
