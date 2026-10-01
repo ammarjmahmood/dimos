@@ -33,11 +33,12 @@ from reactivex.disposable import Disposable
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.msgs.imitation_msgs.EpisodeStatus import (
+from dimos.imitation.collection.episode import (
     EpisodeEvent,
     EpisodeStatus,
     RecordingState,
 )
+from dimos.msgs.std_msgs.String import String
 from dimos.spec.utils import Spec
 from dimos.teleop.webxr.controller_types import BUTTON_ALIASES, Buttons
 from dimos.utils.logging_config import setup_logger
@@ -92,7 +93,7 @@ class EpisodeMonitorModule(Module):
     config: EpisodeMonitorModuleConfig
 
     button_pressed: In[Buttons]
-    status: Out[EpisodeStatus]
+    status: Out[String]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -203,7 +204,7 @@ class EpisodeMonitorModule(Module):
 
     def _emit(self, status: EpisodeStatus) -> EpisodeStatus:
         """Publish + log a snapshot. Must run outside the lock (does I/O)."""
-        self.status.publish(status)
+        self.status.publish(String(status.to_json()))
         self._log_status(status)
         return status
 

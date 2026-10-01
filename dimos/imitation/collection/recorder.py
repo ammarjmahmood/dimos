@@ -39,10 +39,11 @@ from dimos.experimental.memory.rust_recorder import (
     RustSqliteStoreConfig,
     RustStreamSpec,
 )
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.memory.module import OnExisting
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
+from dimos.msgs.std_msgs.String import String
 
 PortTypes = tuple[tuple[str, type[Any]], ...]
 
@@ -126,6 +127,11 @@ class CollectionRecorder(RustRecorder):
         missing = sorted(name for name, _ in self.recording_inputs if name not in connected)
         if missing:
             raise ValueError(f"Missing required collection inputs: {missing}")
+        for spec in specs:
+            if spec.port == "status":
+                spec.codec = "json"
+                spec.timestamp_field = "ts"
+                spec.json_schema = EpisodeStatus.json_schema()
         return specs
 
 
@@ -212,7 +218,7 @@ def collection_recorder(
             getattr(kind, "lcm_decode", None)
         ):
             raise TypeError(f"Message type {kind!r} does not support native recording")
-    inputs["status"] = EpisodeStatus
+    inputs["status"] = String
     recorder = _recorder_class(tuple(sorted(inputs.items())))
     return recorder.blueprint(
         recording_schema=profile.to_schema(),

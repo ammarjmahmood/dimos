@@ -48,20 +48,22 @@ Usage:
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE, STATE_DIR
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.global_config import global_config
 from dimos.core.stream import In
 from dimos.core.transport import pSHMTransport
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.episode_monitor import EpisodeMonitorModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.visualization.viser.config import ViserVisualizationConfig
 from dimos.memory.module import Recorder
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_groot_wbc import (
     _G1GrootCoordinator,
     _unitree_g1_groot_wbc_core,
@@ -84,9 +86,14 @@ class G1CollectionRecorder(Recorder):
 
     color_image: In[Image]
     coordinator_joint_state: In[JointState]
-    status: In[EpisodeStatus]
+    status: In[String]
     left_cartesian_command: In[PoseStamped]
     right_cartesian_command: In[PoseStamped]
+
+    def _resolve_ts(self, name: str, msg: Any) -> float:
+        if name == "status":
+            return EpisodeStatus.from_json(msg.data).ts
+        return super()._resolve_ts(name, msg)
 
 
 def _session_db() -> str:
@@ -128,6 +135,7 @@ unitree_g1_teleop = (
         EpisodeMonitorModule.blueprint(),  # default button_map: toggle=B, discard=Y
         G1CollectionRecorder.blueprint(
             db_path=_session_db(),
+            stream_codecs={"status": "json"},
             record_tf=False,
             # Collection observations/actions are synchronized by timestamp,
             # not localized in the world frame. Declaring them poseless also

@@ -40,6 +40,8 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dimos.constants import STATE_DIR
+from dimos.imitation.collection.episode import EpisodeStatus
+from dimos.memory.store.mcap import McapStore
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.protocol.service.spec import BaseConfig
 
@@ -318,16 +320,18 @@ def inspect_episodes(store: Store, cfg: EpisodeExtractor) -> EpisodeReport:
         pending_label = None
 
     for obs in events:
-        ev = obs.data
+        ev = EpisodeStatus.from_json(obs.data.data)
         last_event = getattr(ev, "last_event", None)
-        ts = obs.ts
+        # MCAP stores all source timestamps as integer nanoseconds. Compare
+        # episode boundaries at that same precision, including the final frame.
+        ts = round(ev.ts * 1e9) / 1e9 if isinstance(store, McapStore) else ev.ts
         label = getattr(ev, "task_label", None)
 
         if last_event == "start":
             # Auto-commit any prior pending episode (success=True per state-machine spec).
             _commit(ts, success=True, label=pending_label)
-            # obs.ts is the press time — the recorder stamps EpisodeStatus from
-            # its own `.ts` field (set at the button press, not at record time).
+            # The JSON document carries the button press time; reception time
+            # must never shift an episode boundary.
             pending_start_ts = ts
             pending_label = label
         elif last_event == "save":
