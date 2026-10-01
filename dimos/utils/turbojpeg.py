@@ -24,3 +24,13 @@ from turbojpeg import TurboJPEG
 def get_turbojpeg() -> TurboJPEG:
     """Return the shared TurboJPEG codec handle."""
     return TurboJPEG()
+
+
+@functools.cache
+def turbojpeg_available() -> bool:
+    """Whether the libturbojpeg shared library can be loaded on this machine."""
+    try:
+        get_turbojpeg()
+    except RuntimeError:
+        return False
+    return True

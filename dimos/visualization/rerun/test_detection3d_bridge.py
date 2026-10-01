@@ -16,11 +16,14 @@ from dataclasses import dataclass
 from unittest.mock import patch
 
 from dimos_lcm.vision_msgs import BoundingBox3D, ObjectHypothesis, ObjectHypothesisWithPose
+import numpy as np
+import pytest
 import rerun as rr
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.vision_msgs.Detection3D import Detection3D
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
@@ -75,5 +78,36 @@ def test_detection3darray_bridge_attaches_topic_entity_to_message_frame() -> Non
     assert mock_log.call_args_list[1].args[0] == "world/marker_detection/detections"
 
     transform = mock_log.call_args_list[1].args[1]
-    assert isinstance(transform, rr.Transform3D)
+    assert isinstance(transform, rr.Transform3D) and transform.parent_frame is not None
     assert transform.parent_frame.as_arrow_array().to_pylist() == ["tf#/world"]
+
+
+def test_color_image_without_turbojpeg_is_logged_uncompressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A machine without libturbojpeg still gets every colour frame, as a raw image."""
+    monkeypatch.setattr("dimos.msgs.sensor_msgs.Image.turbojpeg_available", lambda: False)
+    image = Image(
+        data=np.zeros((4, 6, 3), dtype=np.uint8),
+        format=ImageFormat.BGR,
+        frame_id="arm/wrist_camera_optical",
+        ts=10.0,
+    )
+    bridge = RerunBridgeModule()
+    bridge._min_intervals = {}
+    # start() creates these; the test drives _on_message without a viewer.
+    bridge._image_entities = set()
+    bridge._frame_attached = {}
+    bridge._camera_infos = {}
+
+    try:
+        with patch("rerun.log") as mock_log:
+            bridge._on_message(image, Topic("/color_image"))
+    finally:
+        bridge.stop()
+
+    assert mock_log.call_args_list[0].args[0] == "world/color_image"
+    assert isinstance(mock_log.call_args_list[0].args[1], rr.Image)
+    transform = mock_log.call_args_list[1].args[1]
+    assert isinstance(transform, rr.Transform3D) and transform.parent_frame is not None
+    assert transform.parent_frame.as_arrow_array().to_pylist() == ["tf#/arm/wrist_camera_optical"]

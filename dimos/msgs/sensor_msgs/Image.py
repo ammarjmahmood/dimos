@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 from enum import Enum
+import functools
 import time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 import warnings
@@ -29,8 +30,9 @@ from reactivex import operators as ops
 from turbojpeg import TJPF_RGB
 
 from dimos.types.timestamped import Timestamped, TimestampedBufferCollection, to_human_readable
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.reactive import quality_barrier
-from dimos.utils.turbojpeg import get_turbojpeg
+from dimos.utils.turbojpeg import get_turbojpeg, turbojpeg_available
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,6 +40,17 @@ if TYPE_CHECKING:
 
     from reactivex.abc import SchedulerBase
     from reactivex.observable import Observable
+
+
+logger = setup_logger()
+
+
+@functools.cache
+def _warn_uncompressed_color() -> None:
+    logger.warning(
+        "libturbojpeg not found: color images go to Rerun uncompressed. "
+        "Install libjpeg-turbo (libturbojpeg.so.0) to send JPEG."
+    )
 
 
 class ImageFormat(Enum):
@@ -319,7 +332,11 @@ class Image(Timestamped):
         raise ValueError(f"Unsupported format: {self.format}")
 
     def to_rerun(self) -> Any:
-        """Convert to a Rerun archetype: JPEG-encoded for color images, raw for depth."""
+        """Convert to a Rerun archetype: JPEG-encoded for color images, raw for depth.
+
+        Without libturbojpeg on the machine, color images go out uncompressed, with
+        one warning for the whole process.
+        """
         import rerun as rr
 
         match self.format:
@@ -328,6 +345,9 @@ class Image(Timestamped):
             case ImageFormat.GRAY16:
                 return rr.Image(self.data, color_model="L")
             case _:
+                if not turbojpeg_available():
+                    _warn_uncompressed_color()
+                    return rr.Image(self.to_rgb().data, color_model="RGB")
                 return rr.EncodedImage(contents=self.to_jpeg_bytes(), media_type="image/jpeg")
 
     def resize(self, width: int, height: int, interpolation: int | None = None) -> Image:
