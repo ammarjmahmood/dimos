@@ -75,3 +75,9 @@ def test_quest_composition_retains_manual_tasks_above_policy_priority():
     assert sum(task.type == "trajectory" for task in tasks) == 1
     assert policy.joint_names == list(DUAL_OPENYAM_JOINTS)
     assert all(task.priority > policy.priority for task in tasks if task.name != policy.name)
+
+
+def test_rollout_uses_one_backend_for_native_and_python_camera_streams() -> None:
+    for blueprint in (dual_openyam_policy_rollout, dual_openyam_policy_quest_rollout):
+        assert blueprint.global_config_overrides["transport"] == "zenoh"
+        assert not blueprint.transport_map
