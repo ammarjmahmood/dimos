@@ -259,6 +259,7 @@ mod tests {
             region_percentile: 95.0,
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
+            tf_wait_timeout_s: 0.05,
             worker_threads: 4,
         }
     }
