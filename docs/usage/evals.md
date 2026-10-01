@@ -525,6 +525,24 @@ dimos evals run dimos.evals.suites.sim2_xarm --agent dimos.evals.agents.pi --tag
 dimos evals run dimos.evals.suites.sim2_xarm --agent dimos.evals.agents.pi --tags perception
 ```
 
+`dimos.evals.suites.scenereplica` is the SceneReplica tabletop benchmark (arXiv 2306.15620)
+on sim2: the 20 scenes in `data/scenereplica`, five YCB objects each, one trial per object,
+100 in all. Each trial asks the perception stack to pick one object and set it down in the
+drop-off square, and is graded with `weighted`: half for `lifted_by` (the object rose 5 cm at
+some point, SceneReplica's grasp success) and half for `resting_in_region` (it ended still,
+on the table, inside the square, the pick-and-place success). Every check's score lands in the
+results row's `details`, next to `unmoved` (the share of the other objects left where they
+were) and, for a failed trial, `cause`: `perception` when no scan ever named the target,
+`planning` when a motion skill returned a planning error, `execution` otherwise. Tags select
+a scene (`scene-01`), an object (`cracker_box`) or the pick order within a scene
+(`order-1`, nearest to the arm first); scene-11's cracker box is tagged `unreachable`. The
+summary script prints both success counts over the trials actually run:
+
+```bash skip
+dimos evals run dimos.evals.suites.scenereplica --agent dimos.evals.agents.pi --tags scene-01
+python -m dimos.evals.suites.lib.scenereplica_summary ~/.local/state/dimos/evals/run-*
+```
+
 ## Running
 
 - **CLI**: `dimos evals run <dotted.suite> --agent <agent-module> [--set model=gpt-4o] [--tags nav] [--limit 5]`

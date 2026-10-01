@@ -26,11 +26,16 @@ subclass): factories return evaluators called with
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import math
 from typing import TypeVar
 
+from dimos.evals.types import Graded, Outcome
+
 T = TypeVar("T")
+
+# One graded check on a finished trial, scored 0..1.
+Check = Callable[[Outcome], float]
 
 
 def exact(expected: T, got: T) -> float:
@@ -165,6 +170,29 @@ def judge(rubric: str, *, model: str = "openai:gpt-5.6-luna") -> Callable[[str, 
         return float(result["score"])
 
     return _score
+
+
+def weighted(checks: Mapping[str, tuple[float, Check]]) -> Callable[[Outcome], Graded]:
+    """Grade a trial with several named checks and combine them into one score.
+
+    ``checks`` maps a name to ``(weight, check)``. Each check scores the finished trial
+    0..1; the combined score is their weighted average, so it is 0..1 whatever the
+    weights add up to. Every check's own score is kept under its name in the result's
+    ``details``, so a results row shows which part passed. A check that raises makes
+    the case an error, like any grader.
+    """
+    if not checks:
+        raise ValueError("weighted needs at least one check")
+    if any(weight <= 0 or not math.isfinite(weight) for weight, _ in checks.values()):
+        raise ValueError("weights must be positive and finite")
+    total = sum(weight for weight, _ in checks.values())
+
+    def grade(outcome: Outcome) -> Graded:
+        scores = {name: min(max(check(outcome), 0.0), 1.0) for name, (_, check) in checks.items()}
+        score = sum(checks[name][0] * value for name, value in scores.items()) / total
+        return Graded(score=score, details=dict(scores))
+
+    return grade
 
 
 # -- reducers over a series (e.g. a score per recorded pose) --------------------------

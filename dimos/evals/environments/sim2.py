@@ -96,10 +96,22 @@ class Sim2Environment(Sim):
             proc.extra_env.setdefault("MUJOCO_GL", os.environ.get("MUJOCO_GL", "egl"))
 
     def setup_scene(self) -> None:
-        """Switch on the privileged ``sim_truth`` stream; sim2 keeps it off by default."""
+        """Switch on the privileged ``sim_truth`` stream; sim2 keeps it off by default.
+
+        MCP answers before the coordinator is on the bus, so connecting is retried until
+        the launch timeout.
+        """
         from dimos.porcelain.dimos import Dimos
 
-        app = Dimos.connect()
+        deadline = time.monotonic() + self.config.launch_timeout_s
+        while True:
+            try:
+                app = Dimos.connect()
+                break
+            except RuntimeError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(1.0)
         try:
             simulation: Any = app.get_module("SimulationModule")  # handle type depends on imports
             simulation.set_truth_enabled(True)

@@ -32,12 +32,15 @@ import tempfile
 import time
 from typing import Any
 
+from pydantic import JsonValue
+
 from dimos.constants import DIMOS_PROJECT_ROOT, STATE_DIR
 from dimos.evals.agents.base import Agent
 from dimos.evals.constants import DENIED
 from dimos.evals.types import (
     EvalCase,
     EvalResult,
+    Graded,
     Outcome,
     Suite,
     Trajectory,
@@ -196,9 +199,16 @@ class EvalRunner(Configurable):
                     agent_duration_s=agent_duration_s,
                     error=f"missing artifacts: {missing}",
                 )
-            score = case.grade(Outcome(trajectory=trajectory, artifacts=env.artifacts))
+            graded = case.grade(Outcome(trajectory=trajectory, artifacts=env.artifacts))
+            if not isinstance(graded, Graded):
+                graded = Graded(score=graded, details={})
             return self._result(
-                case, t0, trajectory, agent_duration_s=agent_duration_s, score=score
+                case,
+                t0,
+                trajectory,
+                agent_duration_s=agent_duration_s,
+                score=graded.score,
+                details=graded.details,
             )
         except Exception as e:
             return self._result(
@@ -214,6 +224,7 @@ class EvalRunner(Configurable):
         agent_duration_s: float = 0.0,
         score: float = 0.0,
         error: str = "",
+        details: dict[str, JsonValue] | None = None,
     ) -> EvalResult:
         result = EvalResult(
             case_id=case.id,
@@ -222,6 +233,7 @@ class EvalRunner(Configurable):
             duration_s=time.monotonic() - t0,
             agent_duration_s=agent_duration_s,
             error=error,
+            details=details or {},
         )
         if trajectory is None:
             return result
