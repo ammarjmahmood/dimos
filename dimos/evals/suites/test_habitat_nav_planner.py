@@ -75,3 +75,14 @@ def test_missing_stats_read_as_no_world_state() -> None:
     with pytest.raises(RuntimeError, match="no world state"):
         world_state_check({"ticks": 0, "errors": 0, "last_error": "no stats file"})
     world_state_check({})  # arms without a bridge have no counters to check
+
+
+def test_module_env_names_the_navigation_agent() -> None:
+    """The lidar band reaches the agent only through a key spelled from its class name; the
+    default band includes the floor and leaves the robot nothing to steer by."""
+    from dimos.agents.typesafe.navigation import TypeSafeNavigationAgent
+    from dimos.evals.suites.habitat_nav import MODULE_ENV
+    from dimos.robot.raw_robot_bridge import RawRobotBridge
+
+    assert f"{TypeSafeNavigationAgent.__name__.upper()}__LIDAR_BAND" in MODULE_ENV
+    assert f"{RawRobotBridge.__name__.upper()}__LIDAR_Z_MIN" in MODULE_ENV

@@ -74,7 +74,8 @@ TIMEOUT_S = float(os.environ.get("DIMOS_EVAL_TIMEOUT_S", 1800))
 RECORD_TOPICS = ("odom", "cmd_vel", "goal", "path", "goal_reached", "stop_movement", "finished")
 # The depth scan is in base_link with the floor at z = 0; keep the floor out of the sectors.
 MODULE_ENV = {
-    "TYPESAFEAGENT__LIDAR_BAND": "[0.1, 0.8, 5.0]",
+    # Keys are <module class name>__<field>; test_module_env_names_the_navigation_agent pins the class.
+    "TYPESAFENAVIGATIONAGENT__LIDAR_BAND": "[0.1, 0.8, 5.0]",
     "RAWROBOTBRIDGE__LIDAR_Z_MIN": "0.1",
 }
 
