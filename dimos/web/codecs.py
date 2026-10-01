@@ -387,12 +387,6 @@ def decode_json_v1(value: Any) -> Any:
     return value
 
 
-def decode_lcm_v1(value: str) -> bytes:
-    """Generic *.lcm.v1 publish decoder: the JSON value is the message's LCM bytes
-    as base64, passed through untouched (the LCM encoders send bytes as-is)."""
-    return base64.b64decode(value, validate=True)
-
-
 def resolve_decoder(encoding: str, message_type: type[Any]) -> DecoderDef:
     """The decoder a publish channel (encoding, message type) compiles to;
     ValueError when the pair is unsupported. Runs in the parent at blueprint
@@ -413,7 +407,8 @@ def resolve_decoder(encoding: str, message_type: type[Any]) -> DecoderDef:
             )
         return definition
     if encoding.endswith(LCM_V1_SUFFIX):
-        return DecoderDef(encoding, message_type, decode_lcm_v1, takes_context=False)
+        # the JSON value is the message's LCM bytes as base64, passed through untouched
+        return DecoderDef(encoding, message_type, base64.b64decode, takes_context=False)
     if encoding == "json.v1":
         # Narrower than the encoder side on purpose: reconstructing a
         # dataclass from untrusted browser JSON needs an explicit decoder.
