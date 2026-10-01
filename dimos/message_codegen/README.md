@@ -61,8 +61,8 @@ Rust crate remain source resources compiled by their native consumers.
 Built-in source is checked into `packages/dimos-generated/src`. Maintainers run:
 
 ```sh
-python scripts/generate_builtin_messages.py
-python scripts/generate_builtin_messages.py --check
+python -m scripts.generate_builtin_messages
+python -m scripts.generate_builtin_messages --check
 ```
 
 This explicit authoring command needs Ruff 0.14.3 and rustfmt for deterministic

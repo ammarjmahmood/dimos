@@ -39,8 +39,8 @@ just to add an application-specific field.
 Generate source explicitly after editing `.msg`, then build/install the independent package:
 
 ```sh skip
-python scripts/generate_builtin_messages.py
-python scripts/generate_builtin_messages.py --check
+python -m scripts.generate_builtin_messages
+python -m scripts.generate_builtin_messages --check
 uv build packages/dimos-generated --python .venv/bin/python \
   --out-dir build/message-codegen/ux-wheelhouse
 uv pip install --python .venv/bin/python --reinstall --no-deps \

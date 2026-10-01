@@ -56,10 +56,10 @@ def test_builtin_tutorial_builds_new_definition_without_runtime(tmp_path):
     )
     shutil.copyfile(root / "pyproject.toml", checkout / "pyproject.toml")
     subprocess.run(
-        [sys.executable, str(checkout / "scripts/generate_builtin_messages.py")],
+        [sys.executable, "-m", "scripts.generate_builtin_messages"],
         check=True,
         cwd=checkout,
-        env={**environment, "PYTHONPATH": str(checkout)},
+        env=environment,
     )
     venv = tmp_path / "venv"
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
