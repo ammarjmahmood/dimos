@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 import math
 import threading
+from threading import Event, Thread
 import time
 from typing import Any
 from unittest.mock import MagicMock
@@ -555,6 +556,77 @@ class TestControlCoordinatorTrajectoryExecution:
         assert result.status is TrajectoryExecutionStatus.START_STATE_MISMATCH
         assert "arm/joint1" in result.message
         assert not trajectory_task.is_active()
+
+    def test_cancel_fences_submission_delayed_during_hardware_read(
+        self, make_coordinator, trajectory_task, simple_trajectory, mocker
+    ):
+        coordinator = make_coordinator()
+        coordinator.add_task(trajectory_task, task_type="trajectory")
+        generation = coordinator.get_trajectory_generation()
+        reading = Event()
+        release = Event()
+        results = []
+
+        def delayed_positions():
+            reading.set()
+            assert release.wait(timeout=2)
+            return trajectory_start_positions(simple_trajectory)
+
+        mocker.patch.object(coordinator, "get_joint_positions", side_effect=delayed_positions)
+        worker = Thread(
+            target=lambda: results.append(
+                coordinator.execute_trajectory(simple_trajectory, expected_generation=generation)
+            )
+        )
+        worker.start()
+        try:
+            assert reading.wait(timeout=2)
+            cancellation = coordinator.cancel_trajectory()
+            assert cancellation.safe
+        finally:
+            release.set()
+            worker.join(timeout=2)
+
+        assert not worker.is_alive()
+        assert results[0].status is TrajectoryExecutionStatus.STALE_REQUEST
+        assert not trajectory_task.is_active()
+
+    def test_new_generation_accepts_submission_after_cancellation(
+        self, make_coordinator, trajectory_task, simple_trajectory, mocker
+    ):
+        coordinator = make_coordinator()
+        coordinator.add_task(trajectory_task, task_type="trajectory")
+        mocker.patch.object(
+            coordinator,
+            "get_joint_positions",
+            return_value=trajectory_start_positions(simple_trajectory),
+        )
+        coordinator.cancel_trajectory()
+
+        result = coordinator.execute_trajectory(
+            simple_trajectory, expected_generation=coordinator.get_trajectory_generation()
+        )
+
+        assert result.status is TrajectoryExecutionStatus.ACCEPTED
+
+    def test_old_generation_cleanup_leaves_new_trajectory_alone(
+        self, make_coordinator, trajectory_task, simple_trajectory, mocker
+    ):
+        coordinator = make_coordinator()
+        coordinator.add_task(trajectory_task, task_type="trajectory")
+        mocker.patch.object(
+            coordinator,
+            "get_joint_positions",
+            return_value=trajectory_start_positions(simple_trajectory),
+        )
+        old_generation = coordinator.get_trajectory_generation()
+        coordinator.cancel_trajectory(expected_generation=old_generation)
+        coordinator.execute_trajectory(simple_trajectory)
+
+        result = coordinator.cancel_trajectory(expected_generation=old_generation)
+
+        assert result.status is TrajectoryCancellationStatus.ALREADY_STOPPED
+        assert trajectory_task.is_active()
 
 
 class TestJointTrajectoryTask:
