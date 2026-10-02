@@ -163,3 +163,15 @@ exported episode boundaries/task labels, output format and metadata.
 LeRobot output uses the [isolated runtime](/dimos/imitation/dataprep/lerobot.md), with
 `run_lerobot_dataprep(config)` as its host entry point. Choosing an exporter
 does not change the source feature or alignment contract.
+
+Unlabeled explicit ranges use `output.metadata.default_task_label` (default
+`"task"`) for dataset task metadata. Saved episode labels take precedence.
+Fill-mode exports retain `complementary_info.is_filled` as a boolean feature.
+SQLite recording inspection and HDF5 builds do not require the optional MCAP
+package; MCAP inputs require the `learning` extra.
+
+Alignment keeps timestamps, validation results and numeric command history in
+memory. It decodes video values as selected frames are emitted instead of
+retaining every decoded image in the episode. Format writers have their own
+buffering behavior; the HDF5 writer currently buffers an episode before writing
+its datasets.
