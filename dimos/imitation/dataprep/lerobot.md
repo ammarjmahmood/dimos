@@ -60,7 +60,9 @@ LeRobot output requires:
   rate for both so the exported timeline matches alignment.
 - An explicit feature schema. `run_dataprep` supplies it from the configured
   features, including `complementary_info.is_filled`.
-- A nonempty task label on every frame. Labels come from the saved episode.
+- A nonempty task label on every frame. Saved episode labels take precedence.
+  Explicit ranges have no recorded label, so they use
+  `output.metadata.default_task_label` (default `"task"`).
 - Stable feature keys, dimensions and dtypes throughout each episode, and
   contiguous frames for each episode.
 
@@ -68,6 +70,16 @@ Use standard LeRobot feature names such as `observation.state`,
 `observation.images.wrist` and `action` when preparing data for a policy with
 that contract. The generic sample config's names are not a promise of
 compatibility with every checkpoint.
+
+`output.metadata.robot_type` names the robot in LeRobot metadata; the existing
+`output.metadata.robot` key remains supported when `robot_type` is absent.
+
+Exports are built in a temporary sibling directory and published only after all
+episodes and finalization succeed. A failed export leaves no dataset at a new
+output path and preserves a previous dataset during a rebuild. Rebuilding a
+recognized LeRobot dataset or an empty directory replaces it after success;
+unrelated directories, files and symbolic links are rejected. Use an output
+path reserved for this export, and avoid concurrent builds to the same path.
 
 Episode boundaries are committed through `save_episode` with synchronous video
 encoding, followed by dataset finalization. The official dataset APIs own the
@@ -92,3 +104,25 @@ replacement and removes the old registration together.
 Only prepare trusted recordings. The isolated reader needs the Python classes
 for custom typed MCAP channels. Copying a dataset does not copy its source
 recording or install those classes.
+
+## Testing this layer
+
+Host protocol and dispatch tests run without installing LeRobot on the host:
+
+```bash skip
+uv run pytest dimos/imitation/dataprep/test_lerobot.py
+```
+
+The native writer and recording-to-dataset round trip require the isolated
+project. Run both explicitly; the root `dimos` test discovery does not collect
+these files:
+
+```bash skip
+cd native/python/lerobot
+env -u VIRTUAL_ENV -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT UV_NO_SYNC=0 \
+  uv run --frozen --group tests --with-editable ../../.. pytest \
+  dimos_lerobot/dataprep_tests.py dimos_lerobot/collection_dataprep_tests.py
+```
+
+CI runs these two native test files in `isolated-lerobot-tests`, which is included
+in the aggregate `ci-complete` check.
