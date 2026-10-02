@@ -23,8 +23,6 @@ from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
@@ -36,9 +34,7 @@ from dimos.robot.manipulators.xarm.config import (
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
-_xarm7_sim_model = make_xarm7_sim_robot_config(
-    base_pose=PoseStamped(frame_id="world", position=Vector3(z=global_config.xarm7_sim_base_height))
-)
+_xarm7_sim_model = make_xarm7_sim_robot_config()
 _xarm7_sim_scene = global_config.mujoco_scene or XARM7_SIM_PATH
 _xarm7_sim_hw = make_xarm7_sim_hardware(_xarm7_sim_scene)
 

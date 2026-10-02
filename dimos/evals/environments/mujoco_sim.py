@@ -59,9 +59,11 @@ class MujocoEnvironment(Sim):
         proc.global_args = ["--record-topics", ",".join(self.config.recorded_topics)]
         if self.config.scene is not None:
             proc.global_args += ["--mujoco-scene", str(self.config.scene.resolve())]
-        if self.config.base_height is not None:
-            proc.global_args += ["--xarm7-sim-base-height", str(self.config.base_height)]
         proc.extra_env.update(self.config.module_env)
+        if self.config.base_height is not None:
+            proc.extra_env["MANIPULATIONMODULE__MODEL__BASE_POSE"] = json.dumps(
+                {"frame_id": "world", "position": [0.0, 0.0, self.config.base_height]}
+            )
         proc.extra_env.setdefault(
             "MUJOCOSIMMODULE__HEADLESS", os.environ.get("MUJOCOSIMMODULE__HEADLESS", "true")
         )
