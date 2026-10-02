@@ -20,6 +20,35 @@ from pydantic import ValidationError
 import pytest
 
 from dimos.imitation.dataprep.schema import FeatureSpec
+from dimos.msgs.sensor_msgs.JointState import JointState
+
+
+def test_live_feature_round_trips_as_a_portable_offline_declaration():
+    feature = FeatureSpec(
+        stream="joint_state",
+        message_type=JointState,
+        field="position",
+        dtype="float32",
+        shape=(1,),
+        names=["arm/joint1"],
+        source_kind="joint_position_updates",
+    )
+
+    restored = FeatureSpec.model_validate_json(feature.model_dump_json())
+
+    assert feature.message_type is JointState
+    assert "message_type" not in json.loads(feature.model_dump_json())
+    assert restored.message_type is None
+    assert restored.model_dump() == feature.model_dump()
+    assert restored.source_kind == "joint_position_updates"
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_feature_json_schema_omits_the_runtime_message_class(mode):
+    fields = FeatureSpec.model_json_schema(mode=mode)["properties"]
+
+    assert "message_type" not in fields
+    assert "message_type" not in FeatureSpec.model_json_schema(mode=mode).get("required", [])
 
 
 @pytest.mark.parametrize(

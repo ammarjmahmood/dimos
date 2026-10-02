@@ -10,14 +10,19 @@ a profile does not construct them or select a policy backend.
 
 | Type | Responsibility |
 | --- | --- |
-| `FeatureSpec` | Dataset projection: stream/field, dtype, shape, names and source semantics. |
-| `CollectionFeature` | A `FeatureSpec` plus the raw Python `message_type` for a typed recorder input. |
+| `FeatureSpec` | Dataset projection plus an optional live-capture `message_type`. |
 | `CollectionProfile` | Robot contract: name, robot_type, observations, actions, sync and quality. |
 | `RecordingSchema` | Portable JSON snapshot of the contract, without Python message classes. |
 
 See [profile.py](/dimos/imitation/collection/profile.py),
 [recording.py](/dimos/imitation/collection/recording.py), and
-[dataprep/core.py](/dimos/imitation/dataprep/core.py).
+[dataprep/schema.py](/dimos/imitation/dataprep/schema.py).
+
+Collection and offline preparation use the same feature class. A live profile
+requires `message_type` on every feature; the recorder also requires each class
+to be importable at module level and implement the native codec. Offline
+features need no message class. `message_type` is omitted from feature JSON and
+JSON Schema, and `to_schema()` clears it when saving the portable contract.
 
 ## A minimal custom arm
 
@@ -26,18 +31,19 @@ targets as actions. It runs without hardware. Put the declaration in your robot
 package; joint names must match what its producers publish.
 
 ```python session=profile no-result
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.imitation.dataprep.core import SyncConfig
 from dimos.msgs.sensor_msgs.JointState import JointState
 
 joints = ["arm/joint1", "arm/gripper"]
 profile = CollectionProfile(
     name="custom-arm", robot_type="custom-arm-2dof",
-    observations={"observation.state": CollectionFeature(
+    observations={"observation.state": FeatureSpec(
         stream="measured", message_type=JointState, field="position",
         dtype="float32", shape=(2,), names=joints,
     )},
-    actions={"action": CollectionFeature(
+    actions={"action": FeatureSpec(
         stream="accepted", message_type=JointState, field="position",
         dtype="float32", shape=(2,), names=joints,
         source_kind="joint_position_updates",
@@ -103,7 +109,7 @@ from dimos.msgs.sensor_msgs.Image import Image
 
 profile = CollectionProfile(
     name=profile.name, robot_type=profile.robot_type,
-    observations={**profile.observations, "observation.images.wrist": CollectionFeature(
+    observations={**profile.observations, "observation.images.wrist": FeatureSpec(
         stream="wrist_rgb", message_type=Image, field="data",
         dtype="video", shape=(64, 64, 3), names=["height", "width", "channels"],
     )},
