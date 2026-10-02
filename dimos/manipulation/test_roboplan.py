@@ -398,6 +398,30 @@ class FakePathShortcutter:
         return path
 
 
+class FakeSceneContext:
+    def __init__(self, scene: FakeScene) -> None:
+        self.scene = scene
+        self.current_positions = scene.current_positions.copy()
+
+    def getScene(self) -> FakeScene:
+        return self.scene
+
+    def isGeometryCurrent(self) -> bool:
+        return True
+
+    def toFullJointPositions(self, group_name: str, q: np.ndarray) -> np.ndarray:
+        full = self.current_positions.copy()
+        for name, value in zip(self.scene.groups[group_name], q, strict=True):
+            full[self.scene.native_joint_names.index(name)] = value
+        return full
+
+    def forwardKinematics(self, q: np.ndarray, frame_name: str, base_frame: str = "") -> np.ndarray:
+        return self.scene.forwardKinematics(q, frame_name, base_frame)
+
+    def hasCollisions(self, q: np.ndarray) -> bool:
+        return self.scene.hasCollisions(q)
+
+
 def _install_fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeCartesianPathPlanner.instances.clear()
     FakePathShortcutter.instances.clear()
@@ -406,6 +430,7 @@ def _install_fake_roboplan(monkeypatch: pytest.MonkeyPatch) -> None:
     core = ModuleType("roboplan.core")
     core.loadUrdfSceneDescriptionFromXml = lambda urdf, paths: (urdf, paths)  # type: ignore[attr-defined]
     core.loadJointLimitsConfig = lambda path: Path(path).read_text()  # type: ignore[attr-defined]
+    core.SceneContext = FakeSceneContext  # type: ignore[attr-defined]
     core.Scene = FakeScene  # type: ignore[attr-defined]
     core.JointConfiguration = FakeJointConfiguration  # type: ignore[attr-defined]
     core.JointPath = FakeJointPath  # type: ignore[attr-defined]
