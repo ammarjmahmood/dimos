@@ -370,7 +370,7 @@ def _episode_features(
                     error = str(exc)
                 series.timestamps.append(timestamp)
                 series.errors.append(error)
-                if retain_values:
+                if retain_values and spec.dtype != "video":
                     series.values.append(value)
     return result
 
@@ -417,14 +417,27 @@ def iter_episode_samples(
 
     features = _episode_features(store, episode, streams, retain_values=True)
     plan = _alignment_plan(features, sync, quality)
+    video_streams = {spec.stream for spec in streams.values() if spec.dtype == "video"}
+    videos = {
+        stream: _source_messages(store, episode, stream, "snapshot") for stream in video_streams
+    }
+    video_indices = dict.fromkeys(video_streams, -1)
+    video_messages: dict[str, Any] = {}
     for frame in plan.frames:
         if _frame_errors(frame, features):
             continue
         obs_dict: dict[str, NDArray[Any]] = {}
         act_dict: dict[str, NDArray[Any]] = {}
-        for key in streams:
-            arr = features[key].values[frame.indices[key]]
-            assert arr is not None
+        for key, spec in streams.items():
+            arr: NDArray[Any] | None
+            if spec.dtype == "video":
+                while video_indices[spec.stream] < frame.indices[key]:
+                    _, video_messages[spec.stream] = next(videos[spec.stream])
+                    video_indices[spec.stream] += 1
+                arr = _feature_value(video_messages[spec.stream], key, spec)
+            else:
+                arr = features[key].values[frame.indices[key]]
+                assert arr is not None
             if key in action_keys:
                 act_dict[key] = arr
             elif key in obs_keys:
