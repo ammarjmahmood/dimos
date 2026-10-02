@@ -26,6 +26,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.sim2.sensors.camera.renderers.mujoco import MujocoCamera
 from dimos.sim2.sensors.module import SensorModule, SensorModuleConfig
@@ -104,3 +105,61 @@ class SimRGBDCameraModule(SimCameraModule):
             Image(data=depth, format=ImageFormat.DEPTH, frame_id=self._frame, ts=ts)
         )
         self.depth_camera_info.publish(info)
+
+
+class SimRGBDPointCloudCameraModule(SimRGBDCameraModule):
+    """An RGB-D camera that also publishes each depth frame as a point cloud.
+
+    The cloud is in the camera's optical frame and carries the depth frame's
+    timestamp, so a ``world -> optical`` lookup at the cloud's stamp places it.
+    """
+
+    pointcloud: Out[PointCloud2]
+
+    def publish_depth(self, depth: NDArray[np.float32] | None, info: CameraInfo, ts: float) -> None:
+        super().publish_depth(depth, info, ts)
+        assert depth is not None
+        sensor = self.config.sensor
+        points = depth_to_points(
+            depth,
+            info,
+            decimation=sensor.pointcloud_decimation,
+            max_range=sensor.pointcloud_max_range,
+        )
+        self.pointcloud.publish(PointCloud2.from_numpy(points, frame_id=self._frame, timestamp=ts))
+
+
+def depth_to_points(
+    depth: NDArray[np.float32],
+    info: CameraInfo,
+    *,
+    decimation: int = 1,
+    max_range: float = math.inf,
+) -> NDArray[np.float32]:
+    """Turn a depth image into 3D points in the camera's optical frame.
+
+    Args:
+        depth: One value per pixel, shape (height, width): the distance from the
+            camera plane along the optical axis, in metres. A value of zero, NaN or
+            infinity means the pixel saw nothing and is left out.
+        info: The camera's pinhole intrinsics (focal lengths and principal point in
+            pixels). Its width and height must match ``depth``.
+        decimation: Keep every n-th row and column. 1 keeps every pixel.
+        max_range: Leave out points farther than this along the optical axis, in
+            metres. Pixels that see nothing come back at the renderer's far plane, so
+            an infinite value here lets that background into the cloud.
+
+    Returns:
+        An (N, 3) float32 array of x, y, z in the optical frame: x right, y down,
+        z forward, in metres.
+    """
+    k = info.get_K_matrix()
+    fx, fy, cx, cy = k[0, 0], k[1, 1], k[0, 2], k[1, 2]
+    z = np.asarray(depth, dtype=np.float32)[::decimation, ::decimation]
+    rows, cols = np.indices(z.shape)
+    keep = np.isfinite(z) & (z > 0) & (z <= max_range)
+    z = z[keep]
+    # Pinhole model: a pixel (u, v) at depth z sits at ((u - cx) / fx * z, (v - cy) / fy * z, z).
+    x = (cols[keep] * decimation - cx) / fx * z
+    y = (rows[keep] * decimation - cy) / fy * z
+    return np.stack([x, y, z], axis=1).astype(np.float32)

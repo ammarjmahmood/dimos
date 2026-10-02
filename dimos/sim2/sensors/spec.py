@@ -53,10 +53,24 @@ class Camera:
     fovy: float | None = None
     rate_hz: float = 10.0
     depth: bool = True
+    # Also publish the depth image as a point cloud in the camera's optical
+    # frame, on a ``pointcloud`` port. Needs depth. Off, nothing is computed.
+    pointcloud: bool = False
+    # Keep every n-th pixel row and column in that cloud; 1 keeps them all.
+    pointcloud_decimation: int = 2
+    # Drop cloud points farther than this along the optical axis (metres).
+    # Pixels that see nothing come back at the renderer's far plane.
+    pointcloud_max_range: float = 5.0
 
     def __post_init__(self) -> None:
         if isinstance(self.camera, str) and self.fovy is not None:
             raise ValueError("set named camera calibration in the MJCF asset, not RobotConfig")
+        if self.pointcloud and not self.depth:
+            raise ValueError("a camera point cloud needs depth=True")
+        if self.pointcloud_decimation < 1:
+            raise ValueError("pointcloud_decimation must be 1 or more")
+        if not self.pointcloud_max_range > 0:
+            raise ValueError("pointcloud_max_range must be positive")
 
     @property
     def model_name(self) -> str:

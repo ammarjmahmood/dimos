@@ -25,7 +25,11 @@ from dimos.hardware.whole_body.spec import WholeBodyConfig
 from dimos.sim2.connections.manipulator import ManipulatorConnection
 from dimos.sim2.connections.whole_body import WholeBodyConnection
 from dimos.sim2.module import SimulationModule
-from dimos.sim2.sensors.camera.module import SimCameraModule, SimRGBDCameraModule
+from dimos.sim2.sensors.camera.module import (
+    SimCameraModule,
+    SimRGBDCameraModule,
+    SimRGBDPointCloudCameraModule,
+)
 from dimos.sim2.sensors.lidar.module import LidarModule
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
 from dimos.sim2.spec import ControlInterface, RobotInstance, WorldConfig
@@ -104,11 +108,19 @@ def simulation(
                 rate_hz=sensor.rate_hz,
             )
             if isinstance(sensor, Camera):
-                module = SimRGBDCameraModule if sensor.depth else SimCameraModule
+                module: type[SimCameraModule]
+                if sensor.pointcloud:
+                    module = SimRGBDPointCloudCameraModule
+                elif sensor.depth:
+                    module = SimRGBDCameraModule
+                else:
+                    module = SimCameraModule
                 blueprint = module.blueprint(**kwargs)
                 ports = ("color_image", "camera_info")
                 if sensor.depth:
                     ports += ("depth_image", "depth_camera_info")
+                if sensor.pointcloud:
+                    ports += ("pointcloud",)
             elif isinstance(sensor, Lidar):
                 blueprint = LidarModule.blueprint(**kwargs, root_body=config.root_body)
                 ports = ("pointcloud",)
