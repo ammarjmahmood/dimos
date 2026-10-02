@@ -98,9 +98,10 @@ class _Hdf5Writer:
                 self.cur_idx += 1
             self.cur_id = sample.episode_id
             self.cur_start_ts = float(sample.ts)
-            if not sample.task_label:
+            task_label = sample.task_label or self.output.metadata.get("default_task_label", "task")
+            if not isinstance(task_label, str) or not task_label.strip():
                 raise ValueError("every HDF5 frame requires an episode task label")
-            self.cur_task = sample.task_label
+            self.cur_task = task_label
             if self.cur_task not in self.tasks_index:
                 self.tasks_index[self.cur_task] = len(self.tasks_index)
 
