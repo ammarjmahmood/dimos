@@ -24,7 +24,9 @@ import pytest
 from pytest_mock import MockerFixture
 
 from dimos.imitation.dataprep import cli
-from dimos.imitation.dataprep.core import DataPrepConfig
+from dimos.imitation.dataprep.schema import (
+    DataPrepConfig,
+)
 
 
 @pytest.mark.parametrize("format_name", [None, "hdf5", "lerobot"])
