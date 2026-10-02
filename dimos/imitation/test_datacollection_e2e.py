@@ -28,7 +28,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from dimos.core.stream import Stream, Transport
-from dimos.imitation.collection.episode_monitor import (
+from dimos.imitation.collection.episode import (
     EpisodeEvent,
     EpisodeStatus,
     RecordingState,
