@@ -27,13 +27,14 @@ import numpy as np
 import pytest
 
 from dimos.imitation.collection.episode import EpisodeStatus
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.build import run_dataprep
 from dimos.imitation.dataprep.core import (
     OutputConfig,
     SyncConfig,
 )
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.memory.codecs.jpeg import JpegCodec
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -166,7 +167,7 @@ def test_mcap_converts_to_lerobot_dataset(tmp_path: Path, camera_count: int) -> 
         robot_type="dual_openyam",
         observations={
             **{
-                f"observation.images.view_{i}": CollectionFeature(
+                f"observation.images.view_{i}": FeatureSpec(
                     stream=f"view_{i}",
                     message_type=Image,
                     field="data",
@@ -176,7 +177,7 @@ def test_mcap_converts_to_lerobot_dataset(tmp_path: Path, camera_count: int) -> 
                 )
                 for i in range(camera_count)
             },
-            "observation.state": CollectionFeature(
+            "observation.state": FeatureSpec(
                 stream="measured",
                 message_type=JointState,
                 field="position",
@@ -184,7 +185,7 @@ def test_mcap_converts_to_lerobot_dataset(tmp_path: Path, camera_count: int) -> 
                 shape=(len(JOINTS),),
                 names=JOINTS,
             ),
-            "observation.velocity": CollectionFeature(
+            "observation.velocity": FeatureSpec(
                 stream="measured",
                 message_type=JointState,
                 field="velocity",
@@ -194,7 +195,7 @@ def test_mcap_converts_to_lerobot_dataset(tmp_path: Path, camera_count: int) -> 
             ),
         },
         actions={
-            "action": CollectionFeature(
+            "action": FeatureSpec(
                 stream="commanded",
                 message_type=JointState,
                 field="position",
