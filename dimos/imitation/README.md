@@ -1,5 +1,8 @@
 # Imitation Learning
 
+See [Collection profiles](/dimos/imitation/collection/README.md) for the recording contract,
+feature fields, joint ordering and an executable custom-robot example.
+
 Collect demonstrations, build training datasets, and run trained policies in
 DimOS. Teleoperation records episodes to a session DB, and DataPrep converts
 that DB into a LeRobot or HDF5 dataset for imitation learning.
@@ -68,7 +71,7 @@ The exact path is printed when the recorder starts — note it for the next step
 
 DataPrep is an offline batch step that reads a session DB and writes a dataset.
 The obs/action stream mapping is nested, so it comes from a JSON config — start
-from [`dataprep/example_config.json`](dataprep/example_config.json) and edit the
+from [`dataprep/example_config.json`](/dimos/imitation/dataprep/example_config.json) and edit the
 `source`/`output` to taste.
 
 ```bash
@@ -100,7 +103,7 @@ Each dataset gets a `dimos_meta.json` sidecar recording exactly how it was built
 
 ## 3. Config reference
 
-See [`dataprep/example_config.json`](dataprep/example_config.json) for a full,
+See [`dataprep/example_config.json`](/dimos/imitation/dataprep/example_config.json) for a full,
 working example. The fields that matter:
 
 - **`source`** — the session `.db`.
