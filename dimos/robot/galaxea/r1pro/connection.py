@@ -54,7 +54,6 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.CompressedImage import CompressedImage
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.Imu import Imu
@@ -97,11 +96,6 @@ _WRIST_DEPTH_CAMERAS: dict[str, str] = {
     "wrist_right_depth": "/hdas/camera_wrist_right/aligned_depth_to_color/image_raw",
 }
 _HEAD_DEPTH_TOPIC = "/hdas/camera_head/depth/depth_registered"
-# The head cameras' intrinsics, one per eye.
-_HEAD_STEREO_INFO: dict[str, str] = {
-    "head_left_info": "/calib/head_left/camera_info",
-    "head_right_info": "/calib/head_right/camera_info",
-}
 _LIDAR_TOPIC = "/hdas/lidar_chassis_left"
 # base_link -> lidar_chassis_left_link, the fixed joint origin in the vendor URDF.
 _LIDAR_MOUNT_XYZ = (0.15711, 0.21215, 0.29465)
@@ -262,8 +256,6 @@ class R1ProConnection(Module):
     head_left_color: Out[CompressedImage]
     head_right_color: Out[CompressedImage]
     head_depth: Out[Image]
-    head_left_info: Out[CameraInfo]
-    head_right_info: Out[CameraInfo]
     lidar: Out[PointCloud2]
     wrist_left_color: Out[CompressedImage]
     wrist_left_depth: Out[Image]
@@ -463,7 +455,6 @@ class R1ProConnection(Module):
     def _setup_sensor_streams(self) -> None:
         try:
             from sensor_msgs.msg import (
-                CameraInfo as RosCameraInfo,
                 CompressedImage as RosCompressedImage,
                 Image as RosImage,
                 Imu as RosImu,
@@ -514,9 +505,6 @@ class R1ProConnection(Module):
             PointCloud2,
             self.config.lidar_frame_id,
         )
-
-        for stream, topic in _HEAD_STEREO_INFO.items():
-            add_stream(stream, topic, RosCameraInfo, self._convert_loop, CameraInfo)
 
         if self.config.enable_wrist_depth:
             for stream, topic in _WRIST_DEPTH_CAMERAS.items():
