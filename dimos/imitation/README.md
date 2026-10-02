@@ -98,3 +98,5 @@ Use `openyam-lerobot-quest-rollout` for optional Quest takeover. The Blueprint
 uses the existing single-arm, single-camera LeRobot contract. Configure devices
 through standard module options. Python clients discover `RolloutControlSpec`
 and explicitly call preflight/start/stop; disconnecting is not a stop request.
+
+See the [offline alignment guide](/dimos/imitation/dataprep/README.md) and [isolated LeRobot exporter](/dimos/imitation/dataprep/lerobot.md) for the dataset contract.
