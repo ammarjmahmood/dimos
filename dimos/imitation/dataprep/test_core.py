@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import numpy as np
@@ -988,3 +990,25 @@ def test_episode_boundaries_use_document_time_instead_of_reception_time():
     store = _FakeStore({"status": [_Obs(ts=99.0, data=v.data) for v in values]})
     episodes = extract_episodes(store, EpisodeExtractor())
     assert [(e.start_ts, e.end_ts, e.task_label) for e in episodes] == [(12.0, 13.0, "pick")]
+
+
+def test_sqlite_inspection_does_not_require_optional_mcap(tmp_path):
+    source = tmp_path / "recording.db"
+    script = """
+import json
+import sys
+sys.modules["mcap"] = None
+sys.modules["mcap.reader"] = None
+from dimos.imitation.dataprep.build import inspect_recording
+from dimos.memory.store.sqlite import SqliteStore
+with SqliteStore(path=sys.argv[1]):
+    pass
+print(json.dumps(inspect_recording(sys.argv[1])))
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(source)], capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1])["format"] == "recording"
