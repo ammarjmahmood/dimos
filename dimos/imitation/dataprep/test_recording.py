@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 from dimos.imitation.collection.episode import EpisodeStatus
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.build import inspect_recording, run_dataprep
 from dimos.imitation.dataprep.core import FeatureSpec, OutputConfig, SyncConfig
@@ -84,7 +84,7 @@ def _raw_writer(path, types):
 @pytest.mark.parametrize("camera_count", [1, 2, 4])
 def test_moved_recording_directory_prepares_saved_episodes(format, camera_count, tmp_path):
     cameras = {
-        f"camera_{index}": CollectionFeature(
+        f"camera_{index}": FeatureSpec(
             stream=f"view_{index}",
             message_type=Image,
             field="data",
@@ -94,7 +94,7 @@ def test_moved_recording_directory_prepares_saved_episodes(format, camera_count,
         )
         for index in range(camera_count)
     }
-    joints = CollectionFeature(
+    joints = FeatureSpec(
         stream="measured",
         message_type=JointState,
         field="position",
