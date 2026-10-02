@@ -22,6 +22,7 @@ assistance. No competing planners command the same robot.
 """
 
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 import math
 import threading
@@ -39,6 +40,8 @@ from dimos.manipulation.manipulation_spec import (
     PlanResult,
     PlanStatus,
 )
+from dimos.manipulation.planning.groups.models import PlanningGroupSelection
+from dimos.manipulation.planning.spec.models import PlanningGroupID
 from dimos.manipulation.sdk import Arm
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -55,6 +58,29 @@ class BimanualRadioManipulationModule(RadioManipulationModule):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._radio_checkpoint: Any = None
+        self._radio_start_targets: ContextVar[dict[str, tuple[PoseStamped, PoseStamped]] | None] = (
+            ContextVar("radio_start_targets", default=None)
+        )
+
+    def _resolve_group_plan_start(
+        self, group_ids: tuple[PlanningGroupID, ...], planning_epoch: int
+    ) -> tuple[PlanningGroupSelection, JointState] | None:
+        resolved = super()._resolve_group_plan_start(group_ids, planning_epoch)
+        targets = self._radio_start_targets.get()
+        if resolved is not None and targets is not None:
+            assert self._world_monitor is not None
+            world = self._world_monitor.world
+            with world.scratch_context() as ctx:
+                # Same selected state and frozen scene as the Cartesian planner.
+                full = world.get_joint_state(ctx)
+                positions = dict(zip(full.name, full.position, strict=True))
+                positions.update(zip(resolved[1].name, resolved[1].position, strict=True))
+                world.set_joint_state(
+                    ctx, JointState(name=full.name, position=[positions[n] for n in full.name])
+                )
+                for group, (_, goal) in tuple(targets.items()):
+                    targets[group] = (world.get_group_ee_pose(ctx, group), goal)
+        return resolved
 
     @rpc
     def configure_radio_checkpoint(self, description: Mapping[str, Any]) -> str:
@@ -99,6 +125,12 @@ class BimanualRadioManipulationModule(RadioManipulationModule):
             "reposition",
             "press_approach",
             "press_contact",
+            "reorient",
+            "lower",
+            "place",
+            "retract",
+            "table_approach",
+            "table_press",
         ):
             raise ValueError("Use a world-frame checkpoint target")
         dual = request["phase"] in ("reposition", "press_approach", "press_contact")
@@ -116,7 +148,7 @@ class BimanualRadioManipulationModule(RadioManipulationModule):
             [*groups, "torso"] if auxiliary_torso else groups
         )
         with checkpoint.context(request):
-            if request["phase"] in ("pregrasp", "reposition"):
+            if request["phase"] in ("pregrasp", "reposition", "reorient", "table_approach"):
                 pose_targets = {"right_arm": target}
                 if request["phase"] == "reposition":
                     assert left_target is not None
@@ -129,11 +161,13 @@ class BimanualRadioManipulationModule(RadioManipulationModule):
                     pose_targets["left_arm"] = left_target
                 result = super().plan_to_poses(
                     pose_targets,
-                    speed_scale=0.05 if request["phase"] == "reposition" else 0.15,
+                    speed_scale=0.05
+                    if request["phase"] in ("reposition", "reorient", "table_approach")
+                    else 0.15,
                     auxiliary_groups=["torso"] if auxiliary_torso else [],
                 )
             else:
-                current = self._world_monitor.get_group_ee_pose("right_arm")
+                current = self._world_monitor.get_group_ee_pose("right_arm", measured)
                 targets = {"right_arm": (current, target)}
                 if dual:
                     if not np.allclose(
@@ -143,7 +177,7 @@ class BimanualRadioManipulationModule(RadioManipulationModule):
                     checkpoint.holding_sample(measured, request)
                     assert left_target is not None
                     targets["left_arm"] = (
-                        self._world_monitor.get_group_ee_pose("left_arm"),
+                        self._world_monitor.get_group_ee_pose("left_arm", measured),
                         left_target,
                     )
                 if (
@@ -153,18 +187,22 @@ class BimanualRadioManipulationModule(RadioManipulationModule):
                     raise ValueError(
                         "Checkpoint linear stages must preserve measured wrist orientation"
                     )
-                plan = self.generate_cartesian_plan(
-                    targets,
-                    CartesianPathConfig(
-                        speed_mode="bounded",
-                        max_linear_speed=0.04 if request["phase"] == "press_approach" else 0.01,
-                        max_position_error=0.002,
-                        max_orientation_error=0.005,
-                    ),
-                    auxiliary_groups=["torso"] if auxiliary_torso else [],
-                    speed_scale=1.0,
-                    check_collision=True,
-                )
+                token = self._radio_start_targets.set(targets)
+                try:
+                    plan = self.generate_cartesian_plan(
+                        targets,
+                        CartesianPathConfig(
+                            speed_mode="bounded",
+                            max_linear_speed=0.04 if request["phase"] == "press_approach" else 0.01,
+                            max_position_error=0.002,
+                            max_orientation_error=0.005,
+                        ),
+                        auxiliary_groups=["torso"] if auxiliary_torso else [],
+                        speed_scale=1.0,
+                        check_collision=True,
+                    )
+                finally:
+                    self._radio_start_targets.reset(token)
                 result = (
                     PlanResult(PlanStatus.SUCCEEDED, plan.message, plan)
                     if plan

@@ -41,6 +41,7 @@ from dimos.simulation.behavior.radio_bimanual import (
     RadioPoseIntent,
 )
 from dimos.simulation.behavior.radio_motion import RadioCoordinator, RadioManipulationModule
+from dimos.simulation.behavior.radio_policy import RadioPolicyModule
 from dimos.simulation.behavior.types import TaskSelection
 
 
@@ -337,7 +338,33 @@ def test_dual_blueprint_has_disjoint_grippers_and_no_base_trajectory():
     assert {g.name for g in model.planning_groups} == {"left_arm", "right_arm", "torso"}
     assert not any("base_" in n for n in tasks[0].joint_names)
     assert atoms[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is True
-    with pytest.raises(ValueError, match="no bimanual"):
-        radio_blueprint(
-            TaskSelection(activity="turning_on_radio"), bimanual=True, policy_supervisor=True
-        )
+
+
+def test_dual_blueprint_binds_policy_to_right_arm_with_explicit_torso():
+    bp = radio_blueprint(
+        TaskSelection(activity="turning_on_radio"),
+        arm="right_arm",
+        bimanual=True,
+        policy_supervisor=True,
+        policy_auxiliary_groups=("torso",),
+    )
+    atoms = {atom.module: atom for atom in bp.blueprints}
+    assert atoms[RadioPolicyModule].kwargs == {
+        "arm": "right_arm",
+        "auxiliary_groups": ("torso",),
+        "motion_contract": "checkpoint",
+    }
+    assert atoms[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is True
+    assert {
+        g.name for g in atoms[BimanualRadioManipulationModule].kwargs["model"].planning_groups
+    } == {
+        "left_arm",
+        "right_arm",
+        "torso",
+    }
+
+
+@pytest.mark.parametrize("groups", [("base",), ("left_arm",), ("torso", "torso")])
+def test_policy_auxiliary_selection_rejects_base_other_arm_and_duplicates(groups):
+    with pytest.raises(ValueError, match="base and other arm stay fixed"):
+        radio_blueprint(TaskSelection(activity="turning_on_radio"), policy_auxiliary_groups=groups)

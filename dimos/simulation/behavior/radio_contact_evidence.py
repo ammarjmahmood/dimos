@@ -14,9 +14,9 @@
 
 """Serialize evaluator-only rigid contact pairs for a development radio grasp."""
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 import math
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -56,6 +56,45 @@ def radio_stage_displacement(before: np.ndarray, current: np.ndarray) -> dict[st
     }
 
 
+def radio_stage_timeline(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Locate observed displacement and contacts without inferring causal forces.
+
+    Threshold crossings are diagnostic markers, not task success or failure.
+    Current contacts and sleep-aware cached pairs retain separate provenance.
+    """
+    if not samples:
+        return {"samples": 0, "timeline": []}
+    initial = np.asarray(samples[0]["radio_pose"], dtype=float)
+    timeline = []
+    first_motion = None
+    for value in samples:
+        displacement = radio_stage_displacement(initial, np.asarray(value["radio_pose"]))
+        marker = {
+            "step": value["step"],
+            "observed_at_monotonic": value["observed_at_monotonic"],
+            "radio_pose": value["radio_pose"],
+            "displacement": displacement,
+            "current_contacts": value.get("all_radio_contact_pairs"),
+            "sleep_aware_contacts": value.get("sleep_aware_radio_contact_pairs"),
+            "body": value.get("evaluator_radio_body"),
+            "assisted_grasp": value.get("evaluator_assisted_grasp"),
+            "press_geometry": value.get("candidate_press_geometry"),
+        }
+        timeline.append(marker)
+        if first_motion is None and (
+            cast("float", displacement["translation_norm_m"]) > 0.002
+            or cast("float", displacement["rotation_angle_rad"]) > 0.01
+        ):
+            first_motion = marker
+    return {
+        "samples": len(samples),
+        "first_observed_motion_over_2mm_or_0_01rad": first_motion,
+        "maximum_translation_m": max(v["displacement"]["translation_norm_m"] for v in timeline),
+        "maximum_rotation_rad": max(v["displacement"]["rotation_angle_rad"] for v in timeline),
+        "timeline": timeline,
+    }
+
+
 def radio_finger_contacts(pairs: Iterable[tuple[str, str]]) -> dict[str, bool]:
     fingers = {
         f"{side}_gripper_finger_link{i}": False for side in ("left", "right") for i in (1, 2)
@@ -86,9 +125,17 @@ def radio_interaction_evidence(
         result["physical_grasp_relative_displacement"] = radio_stage_displacement(
             initial_attachment, attachment
         )
-    if contact is not None and "evaluator_left_gripper_pose" in current:
-        pad = np.asarray(current["evaluator_left_gripper_pose"]) @ np.append(
-            contact["pad_in_left_gripper"], 1
+    hand = (
+        "evaluator_gripper_pose"
+        if contact is not None and "pad_in_gripper" in contact
+        else "evaluator_left_gripper_pose"
+    )
+    if contact is not None and hand in current:
+        pad = np.asarray(current[hand]) @ np.append(
+            contact["pad_in_gripper"]
+            if "pad_in_gripper" in contact
+            else contact["pad_in_left_gripper"],
+            1,
         )
         pad_in_radio = (np.linalg.inv(radio) @ pad)[:3]
         delta = pad_in_radio - np.asarray(contact["surface_in_radio"])

@@ -20,7 +20,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dimos.manipulation.manipulation_spec import ExecutionResult, ExecutionStatus
+from dimos.manipulation.manipulation_spec import (
+    CommandResult,
+    CommandStatus,
+    ExecutionResult,
+    ExecutionStatus,
+    PlanningGroupInfo,
+)
+from dimos.manipulation.sdk import Arm
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -28,12 +35,22 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.protocol.rpc.zenohrpc import ZenohRPC
 from dimos.simulation.behavior.radio_policy import (
+    RadioPolicy,
     RadioPolicyModule,
     RadioPolicySupervisor,
     camera_observation,
     ground_pixel,
 )
+
+
+@pytest.fixture
+def module_transport(mocker):
+    # Keep normal configuration/lifecycle while replacing the external transport.
+    mocker.patch.object(ZenohRPC, "start")
+    mocker.patch.object(ZenohRPC, "serve_module_rpc")
+    mocker.patch("dimos.core.module.get_loop", return_value=(None, None))
 
 
 @pytest.fixture
@@ -138,7 +155,9 @@ def test_pose_action_converts_base_target_and_dispatches_same_checked_id(supervi
     assert supervisor.service.status(action.id).state == "completed"
     supervisor.motion.move.assert_called_once()
     assert supervisor.motion.move.call_args.args[0] == pytest.approx([1.1, 2.2, 3.3])
-    supervisor.arm.rpc.execute.assert_called_once_with(blocking=False, plan_id="validated-plan-7")
+    supervisor.arm.rpc.execute.assert_called_once_with(
+        blocking=False, timeout=20, plan_id="validated-plan-7"
+    )
 
 
 def test_cancel_during_checking_prevents_later_dispatch(supervisor):
@@ -181,6 +200,89 @@ def test_press_rejects_large_or_nonfinite_displacement(supervisor):
         with pytest.raises(ValueError):
             supervisor.service.press(delta)
     supervisor.motion.move.assert_not_called()
+
+
+def test_gripper_facade_uses_selected_sdk_group_and_returns_acceptance_only(mocker):
+    proxy = mocker.Mock()
+    accepted = CommandResult(CommandStatus.SUCCEEDED)
+    proxy.set_gripper_position.return_value = accepted
+    arm = Arm(proxy, PlanningGroupInfo("right_arm", (), "world", "right_tip", True))
+    service = RadioPolicySupervisor(arm, mocker.Mock(), lambda: {}, Transform.identity)
+    try:
+        result = RadioPolicy(service).set_gripper_position(0.25)
+        assert result is accepted
+        proxy.set_gripper_position.assert_called_once_with(0.25, planning_group="right_arm")
+        assert service._action is None  # Acceptance is not a completed motion/grasp.
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, float("nan"), float("inf")])
+def test_policy_gripper_rejects_invalid_values_without_dispatch(supervisor, value):
+    with pytest.raises(ValueError, match="normalized gripper travel"):
+        supervisor.service.set_gripper_position(value)
+    supervisor.arm.set_gripper_position.assert_not_called()
+
+
+def test_gripper_cannot_race_motion_or_bypass_uncertain_stop(supervisor):
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed(*args, executor):
+        entered.set()
+        assert release.wait(timeout=1)
+        executor("validated-plan-7", args[2])
+
+    supervisor.motion.move.side_effect = delayed
+    supervisor.arm.rpc.cancel.return_value = ExecutionResult(ExecutionStatus.UNCERTAIN)
+    action = supervisor.service.move_pose([0.1, 0, 0], [0, 0, 0, 1])
+    assert entered.wait(timeout=1)
+    try:
+        with pytest.raises(RuntimeError, match="busy"):
+            supervisor.service.set_gripper_position(0.5)
+        assert not supervisor.service.cancel(action.id).stop_confirmed
+    finally:
+        release.set()
+        supervisor.service._worker.join(timeout=1)
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        supervisor.service.set_gripper_position(0.5)
+    supervisor.arm.set_gripper_position.assert_not_called()
+
+
+def test_lost_gripper_reply_latches_further_commands_and_hides_internal_error(supervisor):
+    supervisor.arm.set_gripper_position.side_effect = TimeoutError("private actuator diagnostic")
+    with pytest.raises(RuntimeError, match="^gripper_command_unconfirmed$"):
+        supervisor.service.set_gripper_position(0.5)
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        supervisor.service.set_gripper_position(0.25)
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        supervisor.service.move_pose([0.1, 0, 0], [0, 0, 0, 1])
+    supervisor.arm.set_gripper_position.assert_called_once_with(0.5)
+
+
+@pytest.mark.parametrize("groups", [("torso",), ()])
+def test_owner_binds_right_arm_and_exact_auxiliary_groups(
+    mocker, tmp_path, groups, module_transport
+):
+    app = mocker.Mock()
+    sim = mocker.Mock()
+    sim.describe.return_value = {
+        "policy_visuals": {"toggle_markers_hidden": True, "hidden_count": 1}
+    }
+    app.get_module.side_effect = lambda name: sim if name == "BehaviorConnection" else mocker.Mock()
+    mocker.patch("dimos.porcelain.dimos.Dimos.connect", return_value=app)
+    selected = mocker.patch("dimos.simulation.behavior.radio_policy.Arm.from_app")
+    factory = mocker.patch("dimos.simulation.behavior.radio_motion.make_development_motion")
+    module = RadioPolicyModule(arm="right_arm", auxiliary_groups=groups)
+    try:
+        module.initialize_development_scene(
+            {"physical_to_sdk_fk_translation": [0, 0, 0]}, str(tmp_path)
+        )
+        selected.assert_called_once_with(app, group="right_arm", instance_name="ManipulationModule")
+        assert factory.call_args.args[2] is selected.return_value
+        assert factory.call_args.args[5] == groups
+    finally:
+        module.stop()
+    app.stop.assert_called_once()
 
 
 def test_watchdog_cancels_execution_and_late_completion_does_not_overwrite(supervisor, mocker):
@@ -243,7 +345,7 @@ def test_grounding_rejects_replaced_observation_id_and_expired_frames(raw_camera
     service.close()
 
 
-def test_owner_initialization_rejects_unhidden_toggle_visuals(mocker, tmp_path):
+def test_owner_initialization_rejects_unhidden_toggle_visuals(mocker, tmp_path, module_transport):
     app = mocker.Mock()
     app.get_module.return_value.describe.return_value = {
         "policy_visuals": {"toggle_markers_hidden": False}
@@ -256,5 +358,31 @@ def test_owner_initialization_rejects_unhidden_toggle_visuals(mocker, tmp_path):
         app.stop.assert_called_once()
         with pytest.raises(RuntimeError, match="not initialized"):
             module.observe()
+    finally:
+        module.stop()
+
+
+def test_checkpoint_owner_uses_verified_factory_instead_of_legacy_guard(
+    mocker, tmp_path, module_transport
+):
+    app = mocker.Mock()
+    sim = mocker.Mock()
+    sim.describe.return_value = {
+        "policy_visuals": {"toggle_markers_hidden": True, "hidden_count": 1}
+    }
+    app.get_module.side_effect = lambda name: sim if name == "BehaviorConnection" else mocker.Mock()
+    mocker.patch("dimos.porcelain.dimos.Dimos.connect", return_value=app)
+    mocker.patch("dimos.simulation.behavior.radio_policy.Arm.from_app")
+    checkpoint = mocker.patch("dimos.simulation.behavior.radio_policy.make_radio_grasp_checkpoint")
+    legacy = mocker.patch("dimos.simulation.behavior.radio_motion.make_development_motion")
+    scene = {"physical_to_sdk_fk_translation": [0, 0, 0]}
+    module = RadioPolicyModule(
+        arm="right_arm", auxiliary_groups=("torso",), motion_contract="checkpoint"
+    )
+    try:
+        module.initialize_development_scene(scene, str(tmp_path))
+        checkpoint.assert_called_once_with(app, sim, scene, module._development_evidence)
+        legacy.assert_not_called()
+        assert module._supervisor._motion.checkpoint is checkpoint.return_value
     finally:
         module.stop()

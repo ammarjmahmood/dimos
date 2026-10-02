@@ -256,6 +256,55 @@ def test_dispatch_uses_same_stored_plan_id_after_effective_validation(client):
     assert runner.evidence[-1]["planning_result"]["status"] == "SUCCEEDED"
 
 
+def test_checkpoint_dispatch_hook_keeps_same_validated_id_and_default_execution_off(client, mocker):
+    runner, proxy, _, _, target = client
+    hook = mocker.Mock(return_value=ExecutionResult(ExecutionStatus.ACCEPTED))
+    runner.move(target, "pregrasp", dispatch=hook, cancelled=lambda: False)
+    assert hook.call_args.args[0] == "same-stored-id"
+    assert hook.call_args.args[1] > 0
+    proxy.execute.assert_not_called()
+
+
+def test_cancelled_checkpoint_never_plans_or_dispatches(client):
+    runner, proxy, _, _, target = client
+    with pytest.raises(RuntimeError, match="Cancelled before checkpoint planning"):
+        runner.move(target, "pregrasp", cancelled=lambda: True)
+    proxy.plan_radio_checkpoint.assert_not_called()
+    proxy.execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "point,normal,accepted",
+    [
+        ([0.01, 0, 0], [1, 0, 0], True),
+        ([0, 0, 0], [1, 0, 0], False),
+        ([0.01, 0, 0], [-1, 0, 0], False),
+    ],
+)
+def test_sensor_contact_matches_physical_surface_without_marker_coordinate(
+    collision_scene, monkeypatch, point, normal, accepted
+):
+    scene, _, _, _ = collision_scene
+    vertices = np.array(
+        [[x, y, z] for x in (-0.01, 0.01) for y in (-0.01, 0.01) for z in (-0.01, 0.01)]
+    )
+    monkeypatch.setattr(scene, "vertices", vertices)
+    monkeypatch.setattr(scene, "part_vertices", [vertices])
+    request = {
+        "contact": {
+            "source": "caller_sensor_intent",
+            "surface_in_radio": point,
+            "outward_normal_in_radio": normal,
+            "pad_in_gripper": [0, 0, -0.078],
+        }
+    }
+    if accepted:
+        assert scene._contact_points(request)[0] == pytest.approx(point)
+    else:
+        with pytest.raises(ValueError, match="outward physical body surface"):
+            scene._contact_points(request)
+
+
 @pytest.fixture
 def terminal_goal_status():
     return {
@@ -406,6 +455,45 @@ def test_normal_motion_cancel_is_not_goal_success(client):
     with pytest.raises(RuntimeError):
         runner.move(target, "pregrasp")
     assert runner.evidence[-1]["outcome"] == "MOTION_CANCELLED"
+
+
+@pytest.mark.parametrize(
+    "values,allowed",
+    [
+        ([0.1, 0.05, 0], True),
+        ([0.1, 0.105, 0], False),
+        ([0.1, 0, -0.01], False),
+        ([0.1, 0.05, 0.01], False),
+    ],
+)
+def test_placement_requires_monotone_vertical_arrival_with_bounded_support(
+    collision_scene, values, allowed
+):
+    scene, request, _, _ = collision_scene
+    request["phase"] = "place"
+    path = JointTrajectory(
+        joint_names=[JOINT],
+        points=[TrajectoryPoint(positions=[q], time_from_start=i) for i, q in enumerate(values)],
+    )
+    state = JointState(name=[JOINT], position=[values[0]])
+    if allowed:
+        result = scene._support_placement(state, path, request)
+        assert result["final_height"] == pytest.approx(-0.0015)
+        assert result["support_pair_only"] == ["radio_part_0", "table"]
+    else:
+        with pytest.raises(RuntimeError, match="Placement"):
+            scene._support_placement(state, path, request)
+
+
+def test_tabletop_sequence_rejects_goal_before_intended_press(client, mocker, terminal_goal_status):
+    runner, _, _, observation, _ = client
+    runner.episode = "episode"
+    runner.episode_status = mocker.Mock(return_value=terminal_goal_status)
+    with pytest.raises(RadioEpisodeTerminalError) as caught:
+        runner._observation("reorient")
+    assert caught.value.outcome["kind"] == "RUNTIME_FAULT"
+    assert "Unintended" in caught.value.outcome["reason"]
+    observation.assert_not_called()
 
 
 def test_effective_collision_failure_prevents_authorization_and_execution(client):
@@ -695,3 +783,96 @@ def test_dual_phase_requires_left_target_before_planning(client):
     with pytest.raises(ValueError, match="left target"):
         runner.move(target, "press_approach")
     proxy.plan_radio_checkpoint.assert_not_called()
+
+
+def test_table_press_allows_only_calibrated_right_finger_two_contact(collision_scene):
+    scene, request, native, _ = collision_scene
+    request.update(
+        phase="table_press",
+        contact={
+            "surface_in_radio": [0.0446848528, 0.0420822057, -0.0124619396],
+            "pad_in_gripper": [0, 0, -0.078],
+        },
+    )
+    with scene.context(request):
+        native.setCollisions.assert_any_call("right_gripper_finger_link2", "radio_part_0", False)
+        assert not any(
+            call.args == ("right_gripper_finger_link1", "radio_part_0", False)
+            for call in native.setCollisions.call_args_list
+        )
+    native.setCollisions.assert_any_call("right_gripper_finger_link2", "radio_part_0", True)
+
+
+def test_unintended_toggle_preserves_first_rejected_observation(client):
+    runner, _, _, observation, _ = client
+    value = observation.side_effect()
+    value["evaluator_toggle_region"] = {"finger_contact_steps": 1}
+    observation.side_effect = None
+    observation.return_value = value
+    runner.evidence.append({"phase": "reorient", "before": value, "request": {}})
+    with pytest.raises(RuntimeError, match="trigger activated"):
+        runner._observation("reorient")
+    assert (
+        runner.evidence[-1]["rejected_observation"]["evaluator_toggle_region"][
+            "finger_contact_steps"
+        ]
+        == 1
+    )
+
+
+def test_planning_time_reduces_dispatch_budget_and_prevents_partial_motion(client, mocker):
+    runner, proxy, coordinator, _, target = client
+    clock = [100.0]
+    mocker.patch(
+        "dimos.simulation.behavior.radio_checkpoint.time.monotonic", side_effect=lambda: clock[0]
+    )
+    prepared = trajectory()
+    prepared.points[-1].time_from_start = 18.0
+
+    def prepare(_):
+        clock[0] += 3.0
+        return prepared
+
+    coordinator.prepare_development_trajectory.side_effect = prepare
+    with pytest.raises(TimeoutError, match="exceeds remaining"):
+        runner.move(target, "pregrasp", timeout=20)
+    proxy.execute.assert_not_called()
+    coordinator.authorize_development_trajectory.assert_not_called()
+    assert runner.evidence[-1]["dispatch_budget"] == {
+        "effective_duration_s": 18.0,
+        "remaining_s": 17.0,
+    }
+
+
+def test_linear_checkpoint_resolves_start_in_planner_snapshot_and_preserves_goal(
+    sdk_module, mocker
+):
+    module, state = sdk_module
+    goal = PoseStamped(frame_id="world", position=[0, 0, 0.05])
+    fresh_pose = PoseStamped(frame_id="world", position=[0.00001, 0, 0])
+    world = module._world_monitor.world
+    world.scratch_context.return_value = __import__("contextlib").nullcontext("context")
+    world.get_group_ee_pose.return_value = fresh_pose
+    world.get_joint_state.return_value = JointState(
+        name=["r1pro/base_x", JOINT], position=[3.6, -0.001]
+    )
+    selection = SimpleNamespace(joint_names=(JOINT,))
+    mocker.patch.object(
+        ManipulationModule, "_resolve_group_plan_start", return_value=(selection, state)
+    )
+    plan = SimpleNamespace(trajectory=trajectory(), message="stored", plan_id="id")
+    captured = {}
+
+    def generate(targets, *args, **kwargs):
+        module._resolve_group_plan_start(("right_arm", "torso"), 1)
+        captured.update(targets)
+        return plan
+
+    mocker.patch.object(module, "generate_cartesian_plan", side_effect=generate)
+    module.plan_radio_checkpoint(goal, {"phase": "lift"}, state, True)
+    assert captured["right_arm"] == (fresh_pose, goal)
+    ctx, full = world.set_joint_state.call_args.args
+    assert ctx == "context"
+    assert full.name == ["r1pro/base_x", JOINT]
+    assert full.position == [3.6, 0.0]
+    assert module._radio_start_targets.get() is None

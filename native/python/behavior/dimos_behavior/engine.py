@@ -498,6 +498,22 @@ class OmniEngine:
                         RigidContactAPI.get_contact_pairs(self.env.scene.idx, {obj}, None, True)
                     )
                 ]
+                # Official sleep-aware cache is separate from current force pairs.
+                objects[key]["development_sleep_aware_contact_pairs"] = [
+                    {"radio_link": a, "other_link": b}
+                    for a, b in sorted(
+                        RigidContactAPI.get_contact_pairs(self.env.scene.idx, {obj}, None, False)
+                    )
+                ]
+                body = obj.root_link
+                objects[key]["development_body_diagnostics"] = {
+                    "is_asleep": bool(body.is_asleep),
+                    "rigid_body_enabled": body.get_attribute("physics:rigidBodyEnabled"),
+                    "kinematic_enabled": body.get_attribute("physics:kinematicEnabled"),
+                    "gravity_disabled": body.get_attribute("physxRigidBody:disableGravity"),
+                    "linear_velocity": plain(body.get_linear_velocity()),
+                    "angular_velocity": plain(body.get_angular_velocity()),
+                }
                 # Passive inspection of the official assisted-grasp lifecycle.
                 # These internals are pinned-runtime diagnostics, not SDK/agent APIs.
                 objects[key]["development_assisted_grasp"] = {

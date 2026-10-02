@@ -57,13 +57,18 @@ def radio_blueprint(
     spawn_yaw: float = 0.0,
     policy_supervisor: bool = False,
     bimanual: bool = False,
+    policy_auxiliary_groups: tuple[str, ...] = ("torso",),
 ) -> Blueprint:
     if arm not in ("left_arm", "right_arm"):
         raise ValueError("Choose left_arm or right_arm")
-    if policy_supervisor and arm != "left_arm":
-        raise ValueError("The first policy supervisor supports left_arm only")
-    if bimanual and policy_supervisor:
-        raise ValueError("The first policy supervisor has no bimanual observation/action contract")
+    if bimanual and policy_supervisor and arm != "right_arm":
+        raise ValueError("The verified checkpoint policy selects right_arm")
+    if len(set(policy_auxiliary_groups)) != len(policy_auxiliary_groups) or any(
+        group != "torso" for group in policy_auxiliary_groups
+    ):
+        raise ValueError(
+            "Policy auxiliary groups may select torso once; base and other arm stay fixed"
+        )
     model = simulation_model_config()
     groups = ("left_arm", "right_arm", "torso") if bimanual else (arm, "torso")
     model.planning_groups = [g for g in model.planning_groups if g.name in groups]
@@ -132,7 +137,17 @@ def radio_blueprint(
                     (manipulation, "tf", "planning_tf"),
                 ]
             ),
-            *([RadioPolicyModule.blueprint()] if policy_supervisor else []),
+            *(
+                [
+                    RadioPolicyModule.blueprint(
+                        arm=arm,
+                        auxiliary_groups=policy_auxiliary_groups,
+                        motion_contract="checkpoint" if bimanual else "legacy",
+                    )
+                ]
+                if policy_supervisor
+                else []
+            ),
         )
         .transports(
             {

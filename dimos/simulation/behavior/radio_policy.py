@@ -32,18 +32,26 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from dimos.core.core import rpc
-from dimos.core.module import Module
-from dimos.manipulation.manipulation_spec import ExecutionResult, ExecutionStatus
+from dimos.core.module import Module, ModuleConfig
+from dimos.manipulation.manipulation_spec import CommandResult, ExecutionResult, ExecutionStatus
 from dimos.manipulation.sdk import Arm
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.simulation.behavior.radio_checkpoint import (
+    RadioEpisodeTerminalError,
+    make_radio_grasp_checkpoint,
+)
 from dimos.simulation.behavior.radio_evidence import (
     CAMERA_STREAMS,
     observation_fingerprint,
     persist_grounding,
     persist_observation,
+)
+from dimos.simulation.behavior.radio_policy_checkpoint import (
+    SINGLE_HAND_PHASES,
+    RadioCheckpointPolicyMotion,
 )
 
 
@@ -264,6 +272,24 @@ class RadioPolicySupervisor:
             raise ValueError("Nonzero quaternion required")
         return self._start(xyz, q, timeout, False)
 
+    def set_gripper_position(self, position: float) -> CommandResult:
+        """SDK command acceptance only; read state for actual travel/blocked closure.
+
+        Gripper commands cannot race an owned motion or bypass an uncertain stop.
+        This does not verify a grasp, release assistance, or declare task success.
+        """
+        if not math.isfinite(position) or not 0 <= position <= 1:
+            raise ValueError("Use finite normalized gripper travel between zero and one")
+        with self._lock:
+            if self._closed or self._latched or (self._worker and self._worker.is_alive()):
+                raise RuntimeError("Supervisor closed, busy, or stop unconfirmed")
+            try:
+                return self._arm.set_gripper_position(position)
+            except Exception:
+                # A lost command reply does not establish that actuation stopped.
+                self._latched = True
+                raise RuntimeError("gripper_command_unconfirmed") from None
+
     def press(self, delta: Sequence[float], timeout: float = 10) -> PolicyAction:
         """Bounded straight EE displacement; no symbolic toggle or success setter."""
         d = vector(delta, 3)
@@ -273,11 +299,55 @@ class RadioPolicySupervisor:
         target = tuple(a + b for a, b in zip(current.position.to_tuple(), d, strict=True))
         return self._start(target, current.orientation.to_tuple(), timeout, True)
 
+    def move_checkpoint_pose(
+        self,
+        position: Sequence[float],
+        orientation: Sequence[float],
+        phase: str,
+        timeout: float = 20,
+        contact_position: Sequence[float] | None = None,
+        contact_normal: Sequence[float] | None = None,
+    ) -> PolicyAction:
+        """Caller-chosen base-frame intent; no task-derived target correction.
+
+        Contact point/normal are declared sensor results, not attested perception.
+        """
+        if not isinstance(self._motion, RadioCheckpointPolicyMotion):
+            raise RuntimeError("Checkpoint owner is not initialized")
+        has_contact = contact_position is not None and contact_normal is not None
+        if (
+            phase not in SINGLE_HAND_PHASES
+            or (phase == "table_press") != has_contact
+            or ((contact_position is None) != (contact_normal is None))
+        ):
+            raise ValueError("Declare contact point/normal only for table_press")
+        xyz, q = vector(position, 3), vector(orientation, 4)
+        if math.hypot(*q) < 1e-12:
+            raise ValueError("Nonzero quaternion required")
+        intent: dict[str, Any] = {"phase": phase}
+        if has_contact:
+            assert contact_position is not None and contact_normal is not None
+            intent["surface_base"] = vector(contact_position, 3)
+            normal = vector(contact_normal, 3)
+            if not math.isclose(math.hypot(*normal), 1, abs_tol=1e-6):
+                raise ValueError("Contact normal must be a unit vector")
+            intent["normal_base"] = normal
+        return self._start(xyz, q, timeout, phase == "table_press", intent)
+
     def _start(
-        self, xyz: Sequence[float], q: Sequence[float], timeout: float, contact: bool
+        self,
+        xyz: Sequence[float],
+        q: Sequence[float],
+        timeout: float,
+        contact: bool,
+        intent: Mapping[str, Any] | None = None,
     ) -> PolicyAction:
         if not math.isfinite(timeout) or not 0 < timeout <= 30:
             raise ValueError("Use a timeout between zero and 30 seconds")
+        if isinstance(self._motion, RadioCheckpointPolicyMotion) and intent is None:
+            if contact:
+                raise ValueError("Declare a sensor contact intent for checkpoint press")
+            intent = {"phase": "table_approach"}
         with self._lock:
             if self._closed or self._latched or (self._worker and self._worker.is_alive()):
                 raise RuntimeError("Supervisor closed, busy, or stop unconfirmed")
@@ -285,12 +355,20 @@ class RadioPolicySupervisor:
             rotation = Rotation.from_quat(base.rotation.to_tuple())
             world = rotation.apply(xyz) + np.asarray(base.translation.to_tuple())
             orientation = (rotation * Rotation.from_quat(q)).as_quat()
+            if intent is not None:
+                intent = dict(intent)
+                if "surface_base" in intent:
+                    intent["surface_world"] = (
+                        rotation.apply(intent.pop("surface_base"))
+                        + np.asarray(base.translation.to_tuple())
+                    ).tolist()
+                    intent["normal_world"] = rotation.apply(intent.pop("normal_base")).tolist()
             self._cancel.clear()
             self._action = PolicyAction(uuid4().hex)
             action = self._action
             self._worker = threading.Thread(
                 target=self._run,
-                args=(action.id, world.tolist(), orientation.tolist(), timeout, contact),
+                args=(action.id, world.tolist(), orientation.tolist(), timeout, contact, intent),
                 daemon=True,
                 name="radio-policy-action",
             )
@@ -304,15 +382,33 @@ class RadioPolicySupervisor:
         q: Sequence[float],
         timeout: float,
         contact: bool,
+        intent: Mapping[str, Any] | None = None,
     ) -> None:
         timer = threading.Timer(timeout, self.cancel, args=(action_id,))
         timer.daemon = True
         timer.start()
         try:
-            self._motion.move(xyz, q, timeout, contact, executor=self._execute)
+            if intent is None:
+                self._motion.move(xyz, q, timeout, contact, executor=self._execute)
+            else:
+                self._motion.move_intent(
+                    xyz, q, timeout, intent, dispatch=self._dispatch, cancelled=self._cancel.is_set
+                )
             with self._lock:
                 if self._action and not self._cancel.is_set():
                     self._action = replace(self._action, state="completed", stop_confirmed=True)
+        except RadioEpisodeTerminalError as error:
+            # Evaluator truth stays private; policy gets only confirmed stop feedback.
+            with self._lock:
+                confirmed = error.outcome.get("stop_confirmed") is True
+                self._latched = not confirmed
+                if self._action and not self._cancel.is_set():
+                    self._action = replace(
+                        self._action,
+                        state="cancelled" if confirmed else "uncertain",
+                        error="episode_ended" if confirmed else "stop_unconfirmed",
+                        stop_confirmed=confirmed,
+                    )
         except Exception:
             # Do not forward collision geometry/plan/debug exception text to policy.
             with self._lock:
@@ -323,14 +419,16 @@ class RadioPolicySupervisor:
             timer.cancel()
 
     def _execute(self, plan_id: str, timeout: float) -> ExecutionResult:
+        result = self._dispatch(plan_id, timeout)
+        if result.status is not ExecutionStatus.ACCEPTED:
+            return result
+        return self._arm.rpc.wait_for_execution(timeout=timeout)
+
+    def _dispatch(self, plan_id: str, timeout: float) -> ExecutionResult:
         with self._lock:
             if self._cancel.is_set() or self._closed:
                 raise RuntimeError("Cancelled before dispatch")
-            result = self._arm.rpc.execute(blocking=False, plan_id=plan_id)
-        if result.status is not ExecutionStatus.ACCEPTED:
-            return result
-        # Existing wait preserves execution on timeout; supervisor watchdog cancels.
-        return self._arm.rpc.wait_for_execution(timeout=timeout)
+            return self._arm.rpc.execute(blocking=False, timeout=timeout, plan_id=plan_id)
 
     def status(self, action_id: str) -> PolicyAction:
         with self._lock:
@@ -373,7 +471,16 @@ class RadioPolicySupervisor:
 
 # The owner initializes this task-local module after the existing radio blueprint
 # is running. Its Python facade below never exposes initialization or truth RPCs.
+class RadioPolicyConfig(ModuleConfig):
+    arm: Literal["left_arm", "right_arm"] = "left_arm"
+    auxiliary_groups: tuple[Literal["torso"], ...] = ("torso",)
+    motion_contract: Literal["legacy", "checkpoint"] = "legacy"
+
+
 class RadioPolicyModule(Module):
+    default_config = RadioPolicyConfig
+    config: RadioPolicyConfig
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._supervisor: RadioPolicySupervisor | None = None
@@ -392,22 +499,35 @@ class RadioPolicyModule(Module):
             raise RuntimeError("Supervisor already initialized")
         if evidence_directory is None or not Path(evidence_directory).is_absolute():
             raise ValueError("Development policy owner must choose an absolute evidence directory")
+        if len(set(self.config.auxiliary_groups)) != len(self.config.auxiliary_groups):
+            raise ValueError("Auxiliary groups must be unique")
+        if self.config.motion_contract == "checkpoint" and self.config.arm != "right_arm":
+            raise ValueError("The verified checkpoint contract selects right_arm")
         app = Dimos.connect(timeout=5)
         try:
             sim: Any = app.get_module("BehaviorConnection")
             visuals = sim.describe().get("policy_visuals", {})
             if not visuals.get("toggle_markers_hidden") or visuals.get("hidden_count", 0) < 1:
                 raise RuntimeError("Policy RGB requires hidden diagnostic toggle markers")
-            arm = Arm.from_app(app, group="left_arm", instance_name="ManipulationModule")
+            arm = Arm.from_app(app, group=self.config.arm, instance_name="ManipulationModule")
             probe: Any = app.get_module("BehaviorProbe")
-            motion = make_development_motion(
-                app,
-                sim,
-                arm,
-                {"collision_scene": collision_scene},
-                self._development_evidence,
-                ("torso",),
-            )
+            motion: Any
+            if self.config.motion_contract == "checkpoint":
+                motion = RadioCheckpointPolicyMotion(
+                    make_radio_grasp_checkpoint(
+                        app, sim, collision_scene, self._development_evidence
+                    ),
+                    self.config.auxiliary_groups,
+                )
+            else:
+                motion = make_development_motion(
+                    app,
+                    sim,
+                    arm,
+                    {"collision_scene": collision_scene},
+                    self._development_evidence,
+                    self.config.auxiliary_groups,
+                )
             calibration = np.asarray(vector(collision_scene["physical_to_sdk_fk_translation"], 3))
 
             def base_to_world() -> Transform:
@@ -457,6 +577,24 @@ class RadioPolicyModule(Module):
         return self._ready().state()
 
     @rpc
+    def set_gripper_position(self, position: float) -> CommandResult:
+        return self._ready().set_gripper_position(position)
+
+    @rpc
+    def move_checkpoint_pose(
+        self,
+        position: Sequence[float],
+        orientation: Sequence[float],
+        phase: str,
+        timeout: float = 20,
+        contact_position: Sequence[float] | None = None,
+        contact_normal: Sequence[float] | None = None,
+    ) -> PolicyAction:
+        return self._ready().move_checkpoint_pose(
+            position, orientation, phase, timeout, contact_position, contact_normal
+        )
+
+    @rpc
     def move_pose(
         self, position: Sequence[float], orientation: Sequence[float], timeout: float = 20
     ) -> PolicyAction:
@@ -504,6 +642,25 @@ class RadioPolicy:
 
     def state(self) -> dict[str, Any]:
         return cast("dict[str, Any]", self._rpc.state())
+
+    def set_gripper_position(self, position: float) -> CommandResult:
+        return cast("CommandResult", self._rpc.set_gripper_position(position))
+
+    def move_checkpoint_pose(
+        self,
+        position: Sequence[float],
+        orientation: Sequence[float],
+        phase: str,
+        timeout: float = 20,
+        contact_position: Sequence[float] | None = None,
+        contact_normal: Sequence[float] | None = None,
+    ) -> PolicyAction:
+        return cast(
+            "PolicyAction",
+            self._rpc.move_checkpoint_pose(
+                position, orientation, phase, timeout, contact_position, contact_normal
+            ),
+        )
 
     def move_pose(
         self, position: Sequence[float], orientation: Sequence[float], timeout: float = 20

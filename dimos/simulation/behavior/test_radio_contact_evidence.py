@@ -27,7 +27,47 @@ from dimos.simulation.behavior.radio_contact_evidence import (
     radio_interaction_evidence,
     radio_overlap_finger_hits,
     radio_stage_displacement,
+    radio_stage_timeline,
 )
+
+
+def test_stage_timeline_preserves_contact_provenance_at_first_displacement():
+    pose = np.eye(4)
+    moved = pose.copy()
+    moved[0, 3] = 0.003
+    samples = [
+        {"step": 12, "observed_at_monotonic": 1.0, "radio_pose": pose.tolist()},
+        {
+            "step": 13,
+            "observed_at_monotonic": 1.1,
+            "radio_pose": moved.tolist(),
+            "all_radio_contact_pairs": [],
+            "sleep_aware_radio_contact_pairs": [{"other_link": "/table/base"}],
+            "evaluator_radio_body": {"is_asleep": True},
+        },
+    ]
+    original = copy.deepcopy(samples)
+    result = radio_stage_timeline(samples)
+    marker = result["first_observed_motion_over_2mm_or_0_01rad"]
+    assert marker["step"] == 13
+    assert marker["current_contacts"] == []
+    assert marker["sleep_aware_contacts"] == [{"other_link": "/table/base"}]
+    assert result["maximum_translation_m"] == pytest.approx(0.003)
+    assert samples == original
+
+
+def test_stage_timeline_detects_rotation_without_translation_and_empty_input():
+    initial = np.eye(4)
+    rotated = initial.copy()
+    rotated[:3, :3] = Rotation.from_euler("z", 0.02).as_matrix()
+    values = [
+        {"step": i, "observed_at_monotonic": float(i), "radio_pose": p.tolist()}
+        for i, p in enumerate((initial, rotated))
+    ]
+    result = radio_stage_timeline(values)
+    assert result["first_observed_motion_over_2mm_or_0_01rad"]["step"] == 1
+    assert result["maximum_rotation_rad"] == pytest.approx(0.02)
+    assert radio_stage_timeline([]) == {"samples": 0, "timeline": []}
 
 
 def test_passive_overlap_query_keeps_all_finger_hits_and_never_stops_after_first():

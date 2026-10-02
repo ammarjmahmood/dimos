@@ -30,9 +30,10 @@ import time
 from typing import Any
 
 import numpy as np
+from scipy.spatial import ConvexHull
 from scipy.spatial.transform import Rotation
 
-from dimos.manipulation.manipulation_spec import ExecutionStatus, PlanResult
+from dimos.manipulation.manipulation_spec import ExecutionResult, ExecutionStatus, PlanResult
 from dimos.manipulation.planning.spec.enums import ObstacleType
 from dimos.manipulation.planning.spec.models import Obstacle
 from dimos.manipulation.sdk import Arm, MotionError
@@ -53,8 +54,9 @@ from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 DUAL_PHASES = {"press_approach", "press_contact"}
 COORDINATED_PHASES = {"reposition", *DUAL_PHASES}
-HELD_PHASES = {"departure", "lift", *COORDINATED_PHASES}
-PHASES = {"pregrasp", "grasp", *HELD_PHASES}
+TABLETOP_BEFORE_PRESS = {"reorient", "lower", "place", "retract", "table_approach"}
+HELD_PHASES = {"departure", "lift", "reorient", "lower", "place", *COORDINATED_PHASES}
+PHASES = {"pregrasp", "grasp", "retract", "table_approach", "table_press", *HELD_PHASES}
 
 
 class RadioEpisodeTerminalError(RuntimeError):
@@ -145,6 +147,7 @@ class RadioCheckpointScene:
                 raise ValueError("Invalid radio collision vertices")
             vertices_list.append(vertices)
         self.vertices = np.vstack(vertices_list)
+        self.part_vertices = vertices_list
         self.signature = hashlib.sha256(
             json.dumps(self.description, sort_keys=True).encode()
         ).hexdigest()
@@ -203,11 +206,19 @@ class RadioCheckpointScene:
         if phase not in PHASES or request["signature"] != self.signature:
             raise ValueError("Checkpoint phase/geometry identity changed")
         radio = rigid(request["radio_pose"])
+        if phase in ("retract", "table_approach", "table_press"):
+            table_radio = np.linalg.inv(self.table) @ radio
+            vertices = self.vertices @ table_radio[:3, :3].T + table_radio[:3, 3]
+            height = float(vertices[:, 2].min() - self.table_extent[2] / 2)
+            if not -0.002 <= height <= 0.005 or np.any(
+                np.max(np.abs(vertices[:, :2]), axis=0) > self.table_extent[:2] / 2
+            ):
+                raise RuntimeError("Tabletop radio is outside bounded stationary support")
         held = phase in HELD_PHASES
         local = rigid(request["gripper_from_radio"]) if held else None
         if phase in DUAL_PHASES:
             rigid(request["holding_pose"])
-        if phase == "press_contact":
+        if phase in ("press_contact", "table_press"):
             self._contact_points(request)
         native = self.world._require_scene()
         with self.world._lock:
@@ -216,7 +227,18 @@ class RadioCheckpointScene:
                     raise RuntimeError("Checkpoint collision part disappeared")
             try:
                 native.setCollisions(
-                    "radio_part_0", "table", phase not in ("pregrasp", "grasp", "departure")
+                    "radio_part_0",
+                    "table",
+                    phase
+                    not in (
+                        "pregrasp",
+                        "grasp",
+                        "departure",
+                        "place",
+                        "retract",
+                        "table_approach",
+                        "table_press",
+                    ),
                 )
                 for finger in (1, 2):
                     native.setCollisions(
@@ -226,6 +248,8 @@ class RadioCheckpointScene:
                         native.setCollisions(
                             f"left_gripper_finger_link{finger}", "radio_part_0", False
                         )
+                    if phase == "table_press" and finger == 2:
+                        native.setCollisions("right_gripper_finger_link2", "radio_part_0", False)
                 attachment: Any = nullcontext()
                 if held:
                     assert local is not None
@@ -246,6 +270,8 @@ class RadioCheckpointScene:
                             native.setCollisions(
                                 f"left_gripper_finger_link{finger}", "radio_part_0", True
                             )
+                        if phase == "table_press" and finger == 2:
+                            native.setCollisions("right_gripper_finger_link2", "radio_part_0", True)
                 except Exception:
                     self.world._usable = False
                     raise
@@ -262,6 +288,12 @@ class RadioCheckpointScene:
             result = validate_development_trajectory(self.world, state, trajectory, selected)
             if request["phase"] == "departure":
                 result["support_departure"] = self._support_departure(state, trajectory, request)
+            if request["phase"] == "place":
+                result["support_placement"] = self._support_placement(state, trajectory, request)
+            if request["phase"] in ("reorient", "lower", "place", "retract", "table_approach"):
+                result["trigger_avoidance"] = self._tabletop_path(state, trajectory, request)
+            if request["phase"] == "table_press":
+                result["single_press"] = self._tabletop_path(state, trajectory, request)
             if request["phase"] in DUAL_PHASES:
                 result["holding_constraint"] = self._holding_path(state, trajectory, request)
             if request["phase"] == "reposition":
@@ -272,6 +304,141 @@ class RadioCheckpointScene:
                 end = JointState(name=state.name, position=[values[n] for n in state.name])
                 result["endpoint_tcp_errors"] = self.reposition_endpoint(end, request)
         return {**result, "geometry_signature": self.signature, "phase": request["phase"]}
+
+    def _tabletop_path(
+        self, state: JointState, trajectory: Any, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Conservative finger envelope before pressing; explicit contact corridor after."""
+        values = dict(zip(state.name, state.position, strict=True))
+        previous = np.asarray([values[n] for n in trajectory.joint_names])
+        minimum_gap = math.inf
+        samples = 0
+        held = request["phase"] in HELD_PHASES
+        for point in trajectory.points:
+            target = np.asarray(point.positions)
+            count = max(1, math.ceil(float(np.max(np.abs(target - previous))) / 0.01))
+            for fraction in np.linspace(0, 1, count + 1):
+                candidate = dict(values)
+                candidate.update(
+                    zip(
+                        trajectory.joint_names,
+                        previous + fraction * (target - previous),
+                        strict=True,
+                    )
+                )
+                q = JointState(name=state.name, position=[candidate[n] for n in state.name])
+                with self.world.scratch_context() as ctx:
+                    self.world.set_joint_state(ctx, q)
+                    right = self.world.get_link_pose(ctx, "right_gripper_link")
+                radio = (
+                    right @ rigid(request["gripper_from_radio"])
+                    if held
+                    else rigid(request["radio_pose"])
+                )
+                marker = (radio @ np.array([0.0446848528, 0.0420822057, -0.0124619396, 1]))[:3]
+                if request["phase"] == "table_press":
+                    surface, pad = self._contact_points(request)
+                    gap = (np.linalg.inv(radio) @ right @ np.append(pad, 1))[:3] - surface
+                    normal = np.asarray(
+                        request["contact"].get("outward_normal_in_radio", [1, 0, 0])
+                    )
+                    signed = float(gap @ normal)
+                    if (
+                        not -0.002 <= signed <= 0.060
+                        or np.linalg.norm(gap - signed * normal) > 0.015
+                    ):
+                        raise RuntimeError("Single tabletop press exceeded its contact corridor")
+                else:
+                    if request["phase"] != "table_approach":
+                        bounds = self.description.get("finger_bounds")
+                        if not bounds or not self.description.get("finger_geometry_provenance"):
+                            raise RuntimeError(
+                                "Certify actual finger collision bounds before turning/placing"
+                            )
+                        if set(bounds) != {
+                            f"{side}_gripper_finger_link{i}"
+                            for side in ("left", "right")
+                            for i in (1, 2)
+                        }:
+                            raise ValueError("Certify all four finger collision bounds")
+                        with self.world.scratch_context() as ctx:
+                            self.world.set_joint_state(ctx, q)
+                            for name, bound in bounds.items():
+                                lo, hi = np.asarray(bound["minimum"]), np.asarray(bound["maximum"])
+                                if (
+                                    lo.shape != (3,)
+                                    or hi.shape != (3,)
+                                    or not np.isfinite([lo, hi]).all()
+                                    or np.any(hi <= lo)
+                                ):
+                                    raise ValueError("Use finite positive finger collision bounds")
+                                finger = self.world.get_link_pose(ctx, name)
+                                local_marker = (np.linalg.inv(finger) @ np.append(marker, 1))[:3]
+                                gap = float(
+                                    np.linalg.norm(local_marker - np.clip(local_marker, lo, hi))
+                                    - 0.02235804685
+                                )
+                                minimum_gap = min(minimum_gap, gap)
+                                if gap <= 0:
+                                    raise RuntimeError(
+                                        "Tabletop path may unintentionally enter radio trigger"
+                                    )
+                samples += 1
+            previous = target
+        return {
+            "samples": samples,
+            "minimum_conservative_gap_m": minimum_gap if math.isfinite(minimum_gap) else None,
+        }
+
+    def _support_placement(
+        self, state: JointState, trajectory: Any, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        values = dict(zip(state.name, state.position, strict=True))
+        previous = np.asarray([values[n] for n in trajectory.joint_names])
+        heights = []
+        centers = []
+        table_inverse = np.linalg.inv(self.table)
+        for point in trajectory.points:
+            target = np.asarray(point.positions)
+            count = max(1, math.ceil(float(np.max(np.abs(target - previous))) / 0.01))
+            for fraction in np.linspace(0, 1, count + 1):
+                candidate = dict(values)
+                candidate.update(
+                    zip(
+                        trajectory.joint_names,
+                        previous + fraction * (target - previous),
+                        strict=True,
+                    )
+                )
+                q = JointState(name=state.name, position=[candidate[n] for n in state.name])
+                with self.world.scratch_context() as ctx:
+                    self.world.set_joint_state(ctx, q)
+                    transform = (
+                        table_inverse
+                        @ self.world.get_link_pose(ctx, "right_gripper_link")
+                        @ rigid(request["gripper_from_radio"])
+                    )
+                vertices = self.vertices @ transform[:3, :3].T + transform[:3, 3]
+                if np.any(np.max(np.abs(vertices[:, :2]), axis=0) > self.table_extent[:2] / 2):
+                    raise RuntimeError("Placement left table support footprint")
+                heights.append(float(vertices[:, 2].min() - self.table_extent[2] / 2))
+                centers.append(transform[:3, 3])
+            previous = target
+        if (
+            not heights
+            or heights[0] < 0.005
+            or min(heights) < -0.002
+            or not -0.002 <= heights[-1] <= 0.003
+            or any(b > a + 0.0002 for a, b in itertools.pairwise(heights))
+            or max(np.linalg.norm(c[:2] - centers[0][:2]) for c in centers) > 0.002
+        ):
+            raise RuntimeError("Placement violates bounded vertical support contact")
+        return {
+            "samples": len(heights),
+            "initial_height": heights[0],
+            "final_height": heights[-1],
+            "support_pair_only": ["radio_part_0", "table"],
+        }
 
     def reposition_endpoint(self, state: JointState, request: Mapping[str, Any]) -> dict[str, Any]:
         """Reposition moves both TCPs; its endpoint retains the strict pose contract."""
@@ -289,20 +456,39 @@ class RadioCheckpointScene:
                 errors[side] = {"position_m": position, "rotation_rad": rotation}
         return errors
 
-    @staticmethod
-    def _contact_points(request: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    def _contact_points(self, request: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
         contact = request["contact"]
         surface = np.asarray(contact["surface_in_radio"], dtype=float)
-        pad = np.asarray(contact["pad_in_left_gripper"], dtype=float)
+        pad = np.asarray(
+            contact.get("pad_in_gripper", contact.get("pad_in_left_gripper")), dtype=float
+        )
         if (
             surface.shape != (3,)
             or pad.shape != (3,)
             or not np.isfinite(surface).all()
             or not np.isfinite(pad).all()
-            or np.linalg.norm(surface - [0.0446848528, 0.0420822057, -0.0124619396]) > 0.003
             or not 0.03 <= np.linalg.norm(pad) <= 0.12
         ):
-            raise ValueError("Declare calibrated wxnicr press surface and left fingertip")
+            raise ValueError("Declare calibrated wxnicr press surface and fingertip")
+        if contact.get("source") == "caller_sensor_intent":
+            normal = np.asarray(contact.get("outward_normal_in_radio"), dtype=float)
+            if (
+                normal.shape != (3,)
+                or not np.isfinite(normal).all()
+                or not np.isclose(np.linalg.norm(normal), 1, atol=1e-6)
+                or np.any(surface < self.vertices.min(axis=0) - 0.005)
+                or np.any(surface > self.vertices.max(axis=0) + 0.005)
+            ):
+                raise ValueError("Sensor contact intent is outside physical radio geometry")
+            # Match a real face of the only radio part admitted for finger-two
+            # contact. An arbitrary plane through the object's interior is unsafe.
+            hull = ConvexHull(self.part_vertices[0])
+            distances = hull.equations[:, :3] @ surface + hull.equations[:, 3]
+            nearest = int(np.argmax(distances))
+            if abs(distances[nearest]) > 0.005 or hull.equations[nearest, :3] @ normal < 0.9:
+                raise ValueError("Sensor contact must match an outward physical body surface")
+        elif np.linalg.norm(surface - [0.0446848528, 0.0420822057, -0.0124619396]) > 0.003:
+            raise ValueError("Declare calibrated wxnicr press surface and fingertip")
         return surface, pad
 
     def holding_sample(self, state: JointState, request: Mapping[str, Any]) -> dict[str, float]:
@@ -441,6 +627,12 @@ class RadioGraspCheckpoint:
     def _observation(self, phase: str) -> Mapping[str, Any]:
         outcome = self._terminal_outcome()
         if outcome is not None:
+            if phase in TABLETOP_BEFORE_PRESS and outcome["kind"] == "TASK_GOAL_MET":
+                outcome = {
+                    **outcome,
+                    "kind": "RUNTIME_FAULT",
+                    "reason": "Unintended activation before ordered tabletop press",
+                }
             raise RadioEpisodeTerminalError(outcome)
         value = dict(self.observe())
         if self.evidence and self.evidence[-1]["phase"] == phase:
@@ -462,6 +654,11 @@ class RadioGraspCheckpoint:
         ):
             raise RuntimeError("Checkpoint supporting table changed")
         try:
+            if phase in TABLETOP_BEFORE_PRESS and (
+                (value.get("evaluator_toggle_region") or {}).get("finger_contact_steps", 0) > 0
+                or (value.get("goal_status") or {}).get("satisfied")
+            ):
+                raise RuntimeError("Radio trigger activated before ordered tabletop press")
             self.guard(phase, value)
         except RuntimeError as error:
             # Preserve the first contact-loss sample even when the guard stops motion.
@@ -480,14 +677,18 @@ class RadioGraspCheckpoint:
         auxiliary_torso: bool = False,
         left_target: PoseStamped | None = None,
         contact: Mapping[str, Any] | None = None,
+        dispatch: Callable[[str, float], ExecutionResult] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> None:
         if phase not in PHASES or not 0 < timeout <= 30:
             raise ValueError("Use a bounded checkpoint phase")
         dual = phase in COORDINATED_PHASES
-        if dual != (left_target is not None) or (
-            (phase == "press_contact") != (contact is not None)
-        ):
-            raise ValueError("Press phases require a left target and contact-phase geometry")
+        if dual != (left_target is not None):
+            raise ValueError("Dual phases require a left target; single-hand phases omit it")
+        if (phase in ("press_contact", "table_press")) != (contact is not None):
+            raise ValueError("Declare contact geometry only for press phases")
+        if cancelled is not None and cancelled():
+            raise RuntimeError("Cancelled before checkpoint planning")
         deadline = time.monotonic() + timeout
         observation = self._observation(phase)
         initial = self.state_from_observation(observation)
@@ -516,6 +717,8 @@ class RadioGraspCheckpoint:
                 request["holding_pose"] = pose_to_matrix(target).tolist()
             if contact is not None:
                 request["contact"] = copy.deepcopy(dict(contact))
+        elif contact is not None:
+            request["contact"] = copy.deepcopy(dict(contact))
         record: dict[str, Any] = {
             "phase": phase,
             "before": copy.deepcopy(dict(observation)),
@@ -565,20 +768,32 @@ class RadioGraspCheckpoint:
         if not np.allclose(rigid(current["radio_pose"]), radio, atol=0.002, rtol=0):
             raise RuntimeError("Checkpoint radio changed before dispatch")
         remaining = deadline - time.monotonic()
+        duration = effective.points[-1].time_from_start
+        record["dispatch_budget"] = {"remaining_s": remaining, "effective_duration_s": duration}
         if remaining <= 0:
             raise TimeoutError("Checkpoint planning/validation deadline elapsed")
+        if duration + 1.0 > remaining:
+            raise TimeoutError("Prepared trajectory exceeds remaining checkpoint deadline")
         self.coordinator.authorize_development_trajectory(
             trajectory_digest(plan.plan.trajectory), trajectory_digest(effective)
         )
         try:
-            result = self.arm.rpc.execute(
-                blocking=False, timeout=remaining, plan_id=plan.plan.plan_id
+            if cancelled is not None and cancelled():
+                raise RuntimeError("Cancelled before checkpoint dispatch")
+            result = (
+                dispatch(plan.plan.plan_id, remaining)
+                if dispatch is not None
+                else self.arm.rpc.execute(
+                    blocking=False, timeout=remaining, plan_id=plan.plan.plan_id
+                )
             )
             while result.status in (
                 ExecutionStatus.ACCEPTED,
                 ExecutionStatus.EXECUTING,
                 ExecutionStatus.TIMED_OUT,
             ):
+                if cancelled is not None and cancelled():
+                    raise RuntimeError("Checkpoint execution cancelled")
                 observed = dict(self._observation(phase))
                 observed["radio_stage_displacement"] = radio_stage_displacement(
                     radio, rigid(observed["radio_pose"])
@@ -614,6 +829,8 @@ class RadioGraspCheckpoint:
                 raise MotionError("execute_radio_checkpoint", result)
             # Command-clock completion is not measured arrival.
             while True:
+                if cancelled is not None and cancelled():
+                    raise RuntimeError("Checkpoint arrival wait cancelled")
                 observed = dict(self._observation(phase))
                 endstate = self.state_from_observation(observed)
                 record["arrival_selected_joint_margin"] = self._measured_joint_margin(
@@ -672,9 +889,9 @@ class RadioGraspCheckpoint:
             except Exception as capture_error:
                 record["dispatch_evidence_error"] = repr(capture_error)
             try:
-                cancelled = self.arm.rpc.cancel()
-                record["cancel_result"] = cancelled
-                record["cancel_stop_confirmed"] = cancelled.status in (
+                cancel_result = self.arm.rpc.cancel()
+                record["cancel_result"] = cancel_result
+                record["cancel_stop_confirmed"] = cancel_result.status in (
                     ExecutionStatus.ABORTED,
                     ExecutionStatus.NO_EXECUTION,
                     ExecutionStatus.COMPLETED,
@@ -863,6 +1080,10 @@ def make_radio_grasp_checkpoint(
             "finger_contacts": radio.get("development_finger_contacts"),
             "contact_pairs": copy.deepcopy(radio.get("development_contact_pairs")),
             "all_radio_contact_pairs": copy.deepcopy(radio.get("development_all_contact_pairs")),
+            "sleep_aware_radio_contact_pairs": copy.deepcopy(
+                radio.get("development_sleep_aware_contact_pairs")
+            ),
+            "evaluator_radio_body": copy.deepcopy(radio.get("development_body_diagnostics")),
             "evaluator_assisted_grasp": copy.deepcopy(radio.get("development_assisted_grasp")),
             "evaluator_toggle_region": copy.deepcopy(radio.get("toggle_region")),
             # Preserve full floating-base orientation to diagnose planar-FK
@@ -908,6 +1129,16 @@ def make_radio_grasp_checkpoint(
     def guard(phase: str, value: Mapping[str, Any]) -> None:
         if phase in HELD_PHASES:
             retention.check(value)
+        elif phase in ("retract", "table_approach", "table_press"):
+            assistance = (value.get("evaluator_assisted_grasp") or {}).get("right", {})
+            if (
+                assistance.get("candidate_in_hand") is not False
+                or assistance.get("constraint_valid") is not False
+                or assistance.get("release_counter") is not None
+            ):
+                raise RuntimeError("Release official assisted attachment before tabletop action")
+            if phase != "table_press" and any((value.get("finger_contacts") or {}).values()):
+                raise RuntimeError("Clear physical finger contact before tabletop approach")
 
     world.sync_from_joint_state(full_state())
     return RadioGraspCheckpoint(
