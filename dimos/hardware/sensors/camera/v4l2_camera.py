@@ -186,8 +186,6 @@ class V4L2CameraModule(Module):
             self._thread = None
         super().stop()
 
-    # ─── capture ────────────────────────────────────────────────────────
-
     def _run(self) -> None:
         import cv2
 
