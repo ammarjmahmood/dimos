@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
+# Re-issued queries that get a warning: the first after about a second of
+# retrying, then every so often while it goes on.
+RETRY_WARN_AFTER = 20
+RETRY_WARN_EVERY = 400
+
 EXCEPTION_ENCODING = zenoh.Encoding("dimos/rpc-exception")
 
 
@@ -125,7 +130,9 @@ class ZenohRPC(RPCSpec, ZenohService):
 
         return unsubscribe_callback
 
-    def _issue_query(self, call_id: int, key: str, payload: bytes, deadline: float) -> None:
+    def _issue_query(
+        self, call_id: int, key: str, payload: bytes, deadline: float, retries: int = 0
+    ) -> None:
         def on_reply(reply: zenoh.Reply) -> None:
             err = reply.err
             if err is None:
@@ -149,7 +156,18 @@ class ZenohRPC(RPCSpec, ZenohService):
                 return
             time.sleep(min(0.05, remaining))
             if call_id in self._pending:
-                self._issue_query(call_id, key, payload, deadline)
+                # A few retries bridge a callee that is still starting. Many in
+                # a row mean the callee runs the request each time and its
+                # answer never gets back, which repeats a non-idempotent call.
+                attempt = retries + 1
+                if attempt == RETRY_WARN_AFTER or attempt % RETRY_WARN_EVERY == 0:
+                    logger.warning(
+                        "RPC query ended without a reply; asking again",
+                        key=key,
+                        retries=attempt,
+                        remaining_s=round(remaining, 1),
+                    )
+                self._issue_query(call_id, key, payload, deadline, attempt)
 
         self.session.get(
             key,

@@ -22,6 +22,7 @@ import math
 import time
 from typing import Any, Literal
 
+import numpy as np
 from pydantic import Field
 
 from dimos.agents.annotation import skill
@@ -44,13 +45,23 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
 from dimos.perception.experimental.object_scene_registration_spec import ObjectSceneRegistrationSpec
+
+# The one box of mapped cells a pick asks the planner to ignore.
+VOXEL_MAP_EXCLUSION_ID = "pick-and-place/target"
 
 
 class PickAndPlaceModuleConfig(ModuleConfig):
     planning_frame: str = "base_link"
     pregrasp_offset: float = Field(default=0.10, gt=0.0)
+    # Margin (metres) added around the target's bounding box. Mapped cells in
+    # that box are not obstacles during the pick, and the same box rides with
+    # the gripper while the object is held. Too small, and a cell on the
+    # object's edge or the table under it stops the plan; too large, and a
+    # neighbour's cells are ignored too.
+    target_clearance: float = Field(default=0.03, gt=0.0)
     # A learned provider returns a ranked spread whose best-scoring pose is not
     # always kinematically reachable; a single-candidate provider is unaffected.
     max_grasp_attempts: int = Field(default=5, gt=0)
@@ -74,6 +85,14 @@ class ScannedObject:
     object_id: str
     name: str
     position: Vector3
+
+
+@dataclass(frozen=True)
+class TargetBox:
+    """Axis-aligned bounds of a target's point cloud, planning frame, metres."""
+
+    center: Vector3
+    size: Vector3
 
 
 @dataclass(frozen=True)
@@ -187,6 +206,24 @@ class PickAndPlaceModule(Module):
             )
         if not candidates.candidates:
             return SkillResult.fail("GRASP_GENERATION_FAILED", "No grasp candidates generated")
+        box = _target_box(pointcloud)
+        # The target is mapped geometry: with its cells as obstacles the planner
+        # refuses the approach into it, and the held object blocks every move after.
+        self._exclude_target(box)
+        try:
+            return self._pick_from(candidates, target, box, group)
+        finally:
+            if self._held is None:
+                self._manipulation.clear_voxel_map_exclusion(VOXEL_MAP_EXCLUSION_ID)
+
+    def _pick_from(
+        self,
+        candidates: GraspCandidateArray,
+        target: ScannedObject,
+        box: TargetBox | None,
+        group: PlanningGroupID,
+    ) -> SkillResult[ManipulationSkillError]:
+        object_id = target.object_id
         if failure := self._open_gripper(group, "pre-grasp open"):
             return failure
 
@@ -211,11 +248,16 @@ class PickAndPlaceModule(Module):
                 unreachable = failure
                 continue
             if failure := self._close_and_verify(group):
+                # Back out while the target's cells are still ignored: left at
+                # the grasp pose, the arm would stand inside the obstacle the
+                # target becomes again, and no later plan could start.
+                self._servo(grasp, pregrasp, group)
                 return failure
 
             # The jaws stopped on something; the camera has the last word after the lift.
             held = HeldObject(object_id, target.name, grasp, target.position)
             self._held = held
+            self._carry_target(box, grasp, group)
             if failure := self._servo(grasp, pregrasp, group):
                 return failure
             if failure := self._verify_lift(held, group):
@@ -278,6 +320,7 @@ class PickAndPlaceModule(Module):
             return failure
         self._held = None
         self._clear_proposals()
+        self._manipulation.clear_voxel_map_exclusion(VOXEL_MAP_EXCLUSION_ID)
         tip = self._tip_position(group)
         released_at = place.position if tip is None else tip
         if failure := self._servo(place, preplace, group):
@@ -332,6 +375,7 @@ class PickAndPlaceModule(Module):
             return None
         self._held = None
         self._clear_proposals()
+        self._manipulation.clear_voxel_map_exclusion(VOXEL_MAP_EXCLUSION_ID)
         if recovery := self._open_gripper(planning_group, "empty-gripper recovery"):
             return recovery
         return SkillResult.fail(
@@ -375,6 +419,30 @@ class PickAndPlaceModule(Module):
     def _clear_proposals(self) -> None:
         self._grasp_candidates = GraspCandidateArray()
         self._manipulation.show_grasp_proposals(GraspCandidateArray())
+
+    def _exclude_target(self, box: TargetBox | None) -> None:
+        """Keep the target's own cells, and the table right under it, out of the planner."""
+        if box is None:
+            return
+        self._manipulation.set_voxel_map_exclusion(
+            VOXEL_MAP_EXCLUSION_ID, box.center, self._padded(box.size)
+        )
+
+    def _carry_target(
+        self, box: TargetBox | None, grasp: PoseStamped, group: PlanningGroupID
+    ) -> None:
+        """Move the exclusion from the table to the gripper, where the object now is."""
+        if box is None:
+            return
+        # The box centre relative to the tool tip, in the tip's own frame.
+        offset = grasp.orientation.inverse().rotate_vector(box.center - grasp.position)
+        self._manipulation.set_voxel_map_exclusion(
+            VOXEL_MAP_EXCLUSION_ID, offset, self._padded(box.size), planning_group=group
+        )
+
+    def _padded(self, size: Vector3) -> Vector3:
+        margin = 2.0 * self.config.target_clearance
+        return Vector3(size.x + margin, size.y + margin, size.z + margin)
 
     def _await_group(
         self, planning_group: PlanningGroupID | None
@@ -546,6 +614,15 @@ class PickAndPlaceModule(Module):
         if state is None or state.end_effector_pose is None:
             return None
         return state.end_effector_pose.position
+
+
+def _target_box(pointcloud: PointCloud2) -> TargetBox | None:
+    """The axis-aligned bounds of an object's points, or None for an empty cloud."""
+    points = np.asarray(pointcloud.points_f32(), dtype=np.float64).reshape((-1, 3))
+    if not len(points) or not np.isfinite(points).all():
+        return None
+    low, high = points.min(axis=0), points.max(axis=0)
+    return TargetBox(Vector3(*((low + high) / 2.0)), Vector3(*(high - low)))
 
 
 def _center(detection: Any) -> Vector3:

@@ -18,11 +18,13 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from dimos_lcm.vision_msgs import BoundingBox3D, ObjectHypothesis, ObjectHypothesisWithPose
+import numpy as np
 import pytest
 
 from dimos.manipulation.grasp_verification import GripperSettle
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import (
+    VOXEL_MAP_EXCLUSION_ID,
     HeldObject,
     PickAndPlaceModule,
     ScannedObject,
@@ -34,6 +36,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidate import GraspCandidate
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Header import Header
 from dimos.msgs.vision_msgs.Detection3D import Detection3D
 from dimos.msgs.vision_msgs.Detection3DArray import Detection3DArray
@@ -100,7 +103,12 @@ def module() -> Iterator[PickAndPlaceModule]:
         succeeded=True, message=""
     )
     instance._objects = {"cup-1": ScannedObject("cup-1", "cup", CUP_AT)}
-    instance._scene.get_object_pointcloud_by_object_id.return_value = MagicMock()
+    # The cup's points: a 4 cm cube standing on the table at z=0.18.
+    instance._scene.get_object_pointcloud_by_object_id.return_value = PointCloud2.from_numpy(
+        np.asarray([[0.08, -0.02, 0.18], [0.12, 0.02, 0.22]], dtype=np.float32),
+        frame_id="world",
+        timestamp=1.0,
+    )
     # After a lift or a release the camera sees nothing where the cup was.
     instance._scene.scan_scene.return_value = _detections()
     instance._grasp_generator.propose_grasps.return_value = GraspCandidateArray(
@@ -602,3 +610,105 @@ def test_motion_skills_declare_movement_capability() -> None:
     ]
 
     assert all(skill.__skill_uses__ == ["movement"] for skill in skills)
+
+
+def _exclusions(manipulation: Any) -> list[tuple[Any, ...]]:
+    """Every set_voxel_map_exclusion call as (center, size, planning_group)."""
+    return [
+        (c.args[1], c.args[2], c.kwargs.get("planning_group"))
+        for c in manipulation.set_voxel_map_exclusion.call_args_list
+    ]
+
+
+def test_pick_hides_the_target_from_the_planner_then_carries_it(
+    module: PickAndPlaceModule,
+) -> None:
+    """The target is mapped geometry; the approach goes into it and the lift takes it along."""
+    manipulation: Any = module._manipulation
+
+    assert module.pick_object("cup-1").success
+
+    fixed, carried = _exclusions(manipulation)
+    # The cup's bounds plus the 3 cm clearance each way, fixed where it stood.
+    assert fixed[0].to_tuple() == pytest.approx((0.1, 0.0, 0.2))
+    assert fixed[1].to_tuple() == pytest.approx((0.1, 0.1, 0.1))
+    assert fixed[2] is None
+    # Then the same box rides with the gripper: the grasp was at the cup's
+    # centre, so the box centre is at the tip.
+    assert carried[0].to_tuple() == pytest.approx((0.0, 0.0, 0.0), abs=1e-6)
+    assert carried[1].to_tuple() == pytest.approx((0.1, 0.1, 0.1))
+    assert carried[2] == "arm/tool"
+    manipulation.clear_voxel_map_exclusion.assert_not_called()
+
+
+def test_a_failed_pick_makes_the_target_an_obstacle_again(module: PickAndPlaceModule) -> None:
+    manipulation: Any = module._manipulation
+    manipulation.plan_to_poses.return_value = SimpleNamespace(succeeded=False, message="no")
+
+    result = module.pick_object("cup-1")
+
+    assert result.error_code == "PLANNING_FAILED"
+    assert len(_exclusions(manipulation)) == 1
+    manipulation.clear_voxel_map_exclusion.assert_called_once_with(VOXEL_MAP_EXCLUSION_ID)
+
+
+def test_a_lift_that_left_the_object_behind_clears_the_box(module: PickAndPlaceModule) -> None:
+    manipulation: Any = module._manipulation
+    scene: Any = module._scene
+    scene.scan_scene.return_value = _detections(("cup-2", "cup", CUP_AT))
+
+    result = module.pick_object("cup-1")
+
+    assert result.error_code == "GRASP_FAILED"
+    manipulation.clear_voxel_map_exclusion.assert_called_once_with(VOXEL_MAP_EXCLUSION_ID)
+
+
+def test_release_makes_the_placed_object_an_obstacle_again(module: PickAndPlaceModule) -> None:
+    manipulation: Any = module._manipulation
+    module._held = _holding_cup()
+
+    assert module.place_at(0.4, 0.0, 0.2).success
+
+    manipulation.clear_voxel_map_exclusion.assert_called_once_with(VOXEL_MAP_EXCLUSION_ID)
+
+
+def test_an_empty_target_cloud_asks_for_no_exclusion(module: PickAndPlaceModule) -> None:
+    manipulation: Any = module._manipulation
+    scene: Any = module._scene
+    scene.get_object_pointcloud_by_object_id.return_value = PointCloud2.from_numpy(
+        np.zeros((0, 3), dtype=np.float32), frame_id="world", timestamp=1.0
+    )
+
+    assert module.pick_object("cup-1").success
+
+    manipulation.set_voxel_map_exclusion.assert_not_called()
+
+
+def test_an_empty_close_backs_out_before_the_target_is_an_obstacle_again(
+    module: PickAndPlaceModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manipulation: Any = module._manipulation
+    manipulation.grasp_verification = None
+    monkeypatch.setattr(
+        "dimos.manipulation.pick_and_place_module.await_gripper_settle",
+        lambda read, target, config, **_: GripperSettle(
+            True, 0.0 if target == 0.0 else 1.0, True, 0.1
+        ),
+    )
+    order: list[str] = []
+    manipulation.move_linear.side_effect = lambda *a, **k: (
+        order.append("servo"),
+        SimpleNamespace(
+            plan=SimpleNamespace(succeeded=True, message=""),
+            execution=SimpleNamespace(succeeded=True, message=""),
+        ),
+    )[1]
+    manipulation.clear_voxel_map_exclusion.side_effect = lambda name: order.append("clear")
+
+    result = module.pick_object("cup-1")
+
+    assert result.error_code == "GRASP_VERIFICATION_FAILED"
+    # Down to the grasp, back up to the pregrasp, and only then the box goes.
+    assert order == ["servo", "servo", "clear"]
+    dz = [c.args[2] for c in manipulation.move_linear.call_args_list]
+    assert dz[0] == pytest.approx(-dz[1])
