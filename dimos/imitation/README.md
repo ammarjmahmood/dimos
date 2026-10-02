@@ -85,3 +85,5 @@ reset or control-mode change.
 The [LeRobot module](policy/lerobot/README.md) provides isolated checkpoint
 loading, preflight, and controlled trajectory execution. Collection profiles
 do not define arbitrary policy-backend compatibility.
+
+See the [offline alignment guide](/dimos/imitation/dataprep/README.md) and [isolated LeRobot exporter](/dimos/imitation/dataprep/lerobot.md) for the dataset contract.
