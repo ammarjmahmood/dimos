@@ -212,6 +212,7 @@ def _voxel_mapping() -> tuple[Blueprint, ...]:
             # while scanning, so a transform a period old describes the same pose.
             tf_tolerance_s=0.1,
             tf_forward_tolerance_s=0.1,
+            state_tolerance_s=0.1,
         ),
         # Tabletop reach, not a room-scale lidar sweep.
         RayTracingVoxelMap.blueprint(

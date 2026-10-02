@@ -21,7 +21,9 @@ import sys
 from typing import Any, cast
 
 import numpy as np
+from open3d.core import Tensor
 import pytest
+import trimesh
 
 # The tests extra excludes yourdfpy on Linux ARM because embreex has no wheel.
 if sys.platform == "linux" and platform.machine() == "aarch64":
@@ -30,8 +32,10 @@ if sys.platform == "linux" and platform.machine() == "aarch64":
     )
 
 from dimos.manipulation.planning.utils.point_cloud_self_filter import PointCloudSelfFilter
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.protocol.tf.tf import MultiTBuffer
 from dimos.robot.assets.model import RobotModel
@@ -58,6 +62,7 @@ def make_filter(tmp_path: Path) -> Iterator[Callable[..., PointCloudSelfFilter]]
     modules: list[PointCloudSelfFilter] = []
 
     def make(**overrides: Any) -> PointCloudSelfFilter:
+        urdf.write_text(overrides.pop("urdf_xml", _URDF))
         settings: dict[str, Any] = {
             "model": RobotModel.from_file(urdf),
             "padding_m": 0.01,
@@ -78,13 +83,13 @@ def make_filter(tmp_path: Path) -> Iterator[Callable[..., PointCloudSelfFilter]]
 
 
 def _place_arm(module: PointCloudSelfFilter, at: tuple[float, float, float], ts: float) -> None:
-    """Put the arm at `at` in both the camera and world frames."""
+    """Move the rigid robot base at capture time in both frames."""
     for parent in ("camera", "world"):
         module.tfbuffer.receive_transform(
             Transform(
                 translation=Vector3(*at),
                 frame_id=parent,
-                child_frame_id="arm",
+                child_frame_id="base",
                 ts=ts,
             )
         )
@@ -167,3 +172,162 @@ def test_a_cloud_without_capture_time_tf_is_dropped_whole(
     module = make_filter()
 
     assert module.filter_cloud(_cloud([[2.0, 0.0, 0.0]])) is None
+
+
+def _joint_robot(kind: str) -> str:
+    return _URDF.replace('name="shoulder" type="fixed"', f'name="shoulder" type="{kind}"').replace(
+        '<parent link="base"/><child link="arm"/>',
+        '<parent link="base"/><child link="arm"/><axis xyz="1 0 0"/>'
+        '<limit lower="-3" upper="3" effort="1" velocity="1"/>',
+    )
+
+
+def test_capture_state_is_matched_by_timestamp_instead_of_latest(make_filter):
+    module = make_filter(urdf_xml=_joint_robot("prismatic"), state_tolerance_s=0.001)
+    _place_arm(module, (0, 0, 0), 1.0)
+    module.add_joint_state(JointState(ts=2.0, name=["shoulder"], position=[2.0]))
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.5]))
+
+    result = module.filter_cloud(_cloud([[0.5, 0, 0], [2, 0, 0]], ts=1.0))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[2, 0, 0]])
+    assert (10, 0, 0) in _keys(result[1], 0.05)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        None,
+        JointState(ts=2.0, name=["shoulder"], position=[0.5]),
+        JointState(ts=1.0, name=["wrong"], position=[0.5]),
+        JointState(ts=1.0, name=["shoulder"], position=[float("nan")]),
+        JointState(ts=1.0, name=["shoulder", "shoulder"], position=[0.5, 0.5]),
+    ],
+)
+def test_missing_late_or_invalid_state_drops_the_capture(make_filter, state):
+    module = make_filter(urdf_xml=_joint_robot("prismatic"), state_tolerance_s=0.001)
+    _place_arm(module, (0, 0, 0), 1.0)
+    if state is not None:
+        module.add_joint_state(state)
+
+    assert module.filter_cloud(_cloud([[0.5, 0, 0]])) is None
+
+
+def test_failed_capture_does_not_replace_previous_clear_volume(make_filter):
+    module = make_filter()
+    _place_arm(module, (1, 0, 0), 1.0)
+    assert module.filter_cloud(_cloud([], ts=1.0)) is not None
+    assert module.filter_cloud(_cloud([], ts=2.0)) is None
+    _place_arm(module, (2, 0, 0), 3.0)
+
+    result = module.filter_cloud(_cloud([], ts=3.0))
+
+    assert result is not None
+    assert {(20, 0, 0), (40, 0, 0)} <= _keys(result[1], 0.05)
+    assert module.filter_cloud(_cloud([], ts=1.0)) is None
+
+
+def test_continuous_joint_uses_cos_sin_configuration(make_filter):
+    urdf = _joint_robot("continuous").replace('<axis xyz="1 0 0"/>', '<axis xyz="0 0 1"/>')
+    urdf = urdf.replace("<collision><geometry>", '<collision><origin xyz="0.5 0 0"/><geometry>')
+    module = make_filter(urdf_xml=urdf)
+    _place_arm(module, (0, 0, 0), 1.0)
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[np.pi / 2]))
+
+    result = module.filter_cloud(_cloud([[0, 0.5, 0], [0.5, 0, 0]]))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[0.5, 0, 0]])
+
+
+def test_mimic_joint_is_derived_from_its_source(make_filter):
+    urdf = _joint_robot("prismatic").replace(
+        "</robot>",
+        '<link name="replica"><collision><geometry><sphere radius="0.05"/>'
+        "</geometry></collision></link>"
+        '<joint name="follower" type="prismatic"><parent link="arm"/><child link="replica"/>'
+        '<axis xyz="1 0 0"/><limit lower="-3" upper="3" effort="1" velocity="1"/>'
+        '<mimic joint="shoulder" multiplier="2" offset="0.1"/></joint></robot>',
+    )
+    module = make_filter(urdf_xml=urdf)
+    _place_arm(module, (0, 0, 0), 1.0)
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.2]))
+
+    result = module.filter_cloud(_cloud([[0.2, 0, 0], [0.7, 0, 0], [1, 0, 0]]))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[1, 0, 0]])
+
+
+@pytest.mark.parametrize("kind", ["planar", "floating"])
+def test_multidof_joints_use_capture_time_relative_tf(make_filter, kind):
+    module = make_filter(urdf_xml=_joint_robot(kind))
+    _place_arm(module, (0, 0, 0), 1.0)
+    assert module.filter_cloud(_cloud([[0.5, 0, 0]])) is None
+    module.tfbuffer.receive_transform(
+        Transform(translation=Vector3(0.5, 0, 0), frame_id="base", child_frame_id="arm", ts=1.0)
+    )
+
+    result = module.filter_cloud(_cloud([[0.5, 0, 0], [0, 0, 0]]))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[0, 0, 0]])
+
+
+def test_narrowphase_retains_sphere_corner_obstacles_and_ancillary_fields(make_filter):
+    urdf = _URDF.replace('<box size="0.2 0.2 0.2"/>', '<sphere radius="0.1"/>')
+    module = make_filter(urdf_xml=urdf, padding_m=0.05)
+    _place_arm(module, (0, 0, 0), 1.0)
+    cloud = PointCloud2.from_numpy(
+        np.array([[0.14, 0, 0], [0.12, 0.12, 0], [0.2, 0, 0]], dtype=np.float32),
+        frame_id="camera",
+        timestamp=1.0,
+        intensities=np.array([1, 2, 3], dtype=np.float32),
+    )
+    cloud.pointcloud_tensor.point["labels"] = Tensor(np.array([[10], [20], [30]], dtype=np.int32))
+
+    result = module.filter_cloud(cloud)
+
+    assert result is not None
+    filtered = result[0]
+    np.testing.assert_allclose(filtered.points_f32(), [[0.12, 0.12, 0], [0.2, 0, 0]])
+    np.testing.assert_array_equal(filtered.intensities_f32(), [2, 3])
+    np.testing.assert_array_equal(filtered.pointcloud_tensor.point["labels"].numpy(), [[20], [30]])
+    assert (filtered.frame_id, filtered.ts) == ("camera", 1.0)
+
+
+def test_rotated_base_aligns_camera_points_and_world_clear_cells(make_filter):
+    module = make_filter()
+    module.tfbuffer.receive_transform(Transform(frame_id="world", child_frame_id="camera", ts=1.0))
+    module.tfbuffer.receive_transform(
+        Transform(
+            translation=Vector3(-1, 0, 0),
+            rotation=Quaternion(0, 0, np.sin(np.pi / 4), np.cos(np.pi / 4)),
+            frame_id="world",
+            child_frame_id="base",
+            ts=1.0,
+        )
+    )
+
+    result = module.filter_cloud(_cloud([[-1, 0.05, 0], [-1, 1, 0]]))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[-1, 1, 0]])
+    assert (-20, 0, 0) in _keys(result[1], 0.05)
+    offsets = result[1].points_f32() / 0.05 - np.floor(result[1].points_f32() / 0.05)
+    np.testing.assert_allclose(offsets, 0.5, atol=1e-5)
+
+
+def test_real_mesh_surface_is_removed_and_its_interior_is_cleared(make_filter, tmp_path):
+    mesh_path = tmp_path / "cube.stl"
+    trimesh.creation.box(extents=[0.2, 0.2, 0.2]).export(mesh_path)
+    urdf = _URDF.replace('<box size="0.2 0.2 0.2"/>', f'<mesh filename="{mesh_path}"/>')
+    module = make_filter(urdf_xml=urdf)
+    _place_arm(module, (0, 0, 0), 1.0)
+
+    result = module.filter_cloud(_cloud([[0.1, 0, 0], [0.105, 0, 0], [0.2, 0, 0]]))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[0.2, 0, 0]])
+    assert (0, 0, 0) in _keys(result[1], 0.05)

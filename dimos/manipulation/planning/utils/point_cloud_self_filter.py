@@ -20,7 +20,9 @@ import asyncio
 from dataclasses import dataclass
 from functools import partial
 from io import BytesIO
+from threading import RLock
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import numpy as np
 from pydantic import Field
@@ -31,11 +33,14 @@ from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.tf.tf import TF
 from dimos.robot.assets.model import RobotModel
+from dimos.types.timestamped import TimestampedBufferCollection
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.transform_utils import matrix_to_pose
 
 logger = setup_logger()
 
@@ -44,9 +49,6 @@ logger = setup_logger()
 class _CollisionGeometry:
     link: str
     link_from_geometry: np.ndarray
-    mesh: trimesh.Trimesh
-    shape: str
-    dimensions: tuple[float, ...]
     clear_samples: np.ndarray
 
 
@@ -59,6 +61,8 @@ class PointCloudSelfFilterConfig(ModuleConfig):
     world_frame: str = "world"
     tf_tolerance_s: float = Field(default=0.02, ge=0.0)
     tf_forward_tolerance_s: float = Field(default=0.05, ge=0.0)
+    state_tolerance_s: float = Field(default=0.02, ge=0.0)
+    state_history_s: float = Field(default=5.0, gt=0.0)
 
 
 class PointCloudSelfFilter(Module):
@@ -75,15 +79,19 @@ class PointCloudSelfFilter(Module):
 
     pointcloud: In[PointCloud2]
     tf: In[TFMessage]
+    coordinator_joint_state: In[JointState]
     filtered_pointcloud: Out[PointCloud2]
     voxel_clear_mask: Out[PointCloud2]
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
+        self._filter_lock = RLock()
+        self._states = TimestampedBufferCollection[JointState](self.config.state_history_s)
         self._collision_geometry = self._load_collision_geometry()
         if not self._collision_geometry:
             raise ValueError("Robot model contains no collision geometry")
         self._previous_clear_keys: set[tuple[int, int, int]] = set()
+        self._last_capture: float | None = None
 
     @rpc
     def start(self) -> None:
@@ -100,40 +108,53 @@ class PointCloudSelfFilter(Module):
 
     def filter_cloud(self, cloud: PointCloud2) -> tuple[PointCloud2, PointCloud2] | None:
         """Filter one capture and build the matching world-frame clear mask."""
+        # One native filter owns mutable scratch; history must commit in the
+        # same critical section so callbacks cannot reorder the clear masks.
+        with self._filter_lock:
+            return self._filter_capture(cloud)
+
+    async def handle_coordinator_joint_state(self, state: JointState) -> None:
+        await asyncio.to_thread(self.add_joint_state, state)
+
+    def add_joint_state(self, state: JointState) -> None:
+        """Buffer full model state; out-of-order arrivals remain timestamped."""
+        with self._filter_lock:
+            if np.isfinite(state.ts):
+                self._states.add(JointState(state))
+
+    def _filter_capture(self, cloud: PointCloud2) -> tuple[PointCloud2, PointCloud2] | None:
         config = self.config
+        if not np.isfinite(cloud.ts) or (
+            self._last_capture is not None and cloud.ts < self._last_capture
+        ):
+            logger.warning("Dropping cloud: invalid or out-of-order capture timestamp")
+            return None
+        base_from_sensor = self._lookup(self._base_link, cloud.frame_id, cloud.ts)
+        world_from_base = self._lookup(config.world_frame, self._base_link, cloud.ts)
+        q = self._capture_configuration(cloud.ts)
+        if base_from_sensor is None or world_from_base is None or q is None:
+            logger.warning("Dropping cloud: capture-time robot state or TF unavailable")
+            return None
         points = cloud.points_f32()
-        keep = np.ones(len(points), dtype=bool)
-        current_clear_keys: set[tuple[int, int, int]] = set()
-
+        base_points = _transform_points(points, base_from_sensor.to_matrix())
+        keep = ~np.asarray(self._body_filter.computeMask(q, base_points), dtype=bool)
+        world_candidates = []
         for geometry in self._collision_geometry:
-            sensor_from_link = self._lookup(cloud.frame_id, geometry.link, cloud.ts)
-            world_from_link = self._lookup(config.world_frame, geometry.link, cloud.ts)
-            if sensor_from_link is None or world_from_link is None:
-                logger.warning(
-                    "Dropping cloud: capture-time TF unavailable for robot link %s", geometry.link
-                )
-                return None
-
-            if len(points):
-                sensor_from_geometry = sensor_from_link.to_matrix() @ geometry.link_from_geometry
-                local = _transform_points(points, np.linalg.inv(sensor_from_geometry))
-                keep &= ~_points_inside(
-                    local,
-                    geometry.shape,
-                    geometry.dimensions,
-                    geometry.mesh,
-                    config.padding_m,
-                )
-
-            world_from_geometry = world_from_link.to_matrix() @ geometry.link_from_geometry
-            world_samples = _transform_points(geometry.clear_samples, world_from_geometry)
-            keys = np.floor(world_samples / config.voxel_size).astype(np.int32)
-            current_clear_keys.update(map(tuple, keys.tolist()))
+            base_from_link = np.asarray(self._context.forwardKinematics(q, geometry.link))
+            world_from_geometry = (
+                world_from_base.to_matrix() @ base_from_link @ geometry.link_from_geometry
+            )
+            world_candidates.append(_transform_points(geometry.clear_samples, world_from_geometry))
+        # Keep volume sampling for map clearing: Coal mesh queries classify
+        # proximity to triangle surfaces, not the interior of a closed mesh.
+        keys = np.floor(np.concatenate(world_candidates) / config.voxel_size).astype(np.int64)
+        current_clear_keys = set(map(tuple, keys.tolist()))
 
         # Where the arm was plus where it is: a link that moved between frames
         # leaves a ghost behind it that nothing else will ever clear.
         clear_keys = self._previous_clear_keys | current_clear_keys
         self._previous_clear_keys = current_clear_keys
+        self._last_capture = cloud.ts
         clear_points = (
             np.asarray(sorted(clear_keys), dtype=np.float32).reshape((-1, 3)) + 0.5
         ) * config.voxel_size
@@ -166,6 +187,10 @@ class PointCloudSelfFilter(Module):
         )
 
     def _on_pointcloud(self, cloud: PointCloud2) -> None:
+        with self._filter_lock:
+            self._publish_capture(cloud)
+
+    def _publish_capture(self, cloud: PointCloud2) -> None:
         result = self.filter_cloud(cloud)
         if result is None:
             return
@@ -176,10 +201,76 @@ class PointCloudSelfFilter(Module):
         self.voxel_clear_mask.publish(clear_mask)
         self.filtered_pointcloud.publish(filtered)
 
+    def _capture_configuration(self, stamp: float) -> np.ndarray | None:
+        state = self._states.find_closest(stamp, self.config.state_tolerance_s)
+        positions: dict[str, float] = {}
+        if state is not None:
+            if len(state.name) != len(state.position) or len(set(state.name)) != len(state.name):
+                return None
+            positions = dict(zip(state.name, state.position, strict=True))
+            if not np.isfinite(list(positions.values())).all():
+                return None
+        # Start from the model's neutral configuration, never its latest state.
+        q = self._neutral_q.copy()
+        for name in self._scene.getJointNames():
+            info = self._scene.getJointInfo(name)
+            if info.num_velocity_dofs == 1:
+                if name not in positions:
+                    return None
+                value = positions[name]
+                values = [np.cos(value), np.sin(value)] if info.num_position_dofs == 2 else [value]
+            else:
+                # Multi-DOF joints have no scalar JointState representation.
+                # Recover their configuration from capture-time relative TF.
+                joint = self._joints[name]
+                parent_from_child = self._lookup(joint.parent, joint.child, stamp)
+                if parent_from_child is None:
+                    return None
+                origin = np.eye(4) if joint.origin is None else joint.origin
+                motion = np.linalg.inv(origin) @ parent_from_child.to_matrix()
+                pose = matrix_to_pose(motion)
+                if info.num_position_dofs == 4:
+                    if not np.allclose(motion[2], [0, 0, 1, 0], atol=1e-6):
+                        return None
+                    angle = np.arctan2(motion[1, 0], motion[0, 0])
+                    values = [motion[0, 3], motion[1, 3], np.cos(angle), np.sin(angle)]
+                elif info.num_position_dofs == 7:
+                    values = [
+                        *motion[:3, 3],
+                        pose.orientation.x,
+                        pose.orientation.y,
+                        pose.orientation.z,
+                        pose.orientation.w,
+                    ]
+                else:
+                    raise ValueError(f"Unsupported robot joint layout: {name}")
+            q[self._scene.getJointPositionIndices([name])] = values
+        return q
+
     def _load_collision_geometry(self) -> list[_CollisionGeometry]:
-        # The URDF is read as-is: yourdfpy tolerates what Drake needs stripped,
-        # and trimesh loads DAE and STL without conversion.
+        # RoboPlan is optional for stacks that do not use this module.
+        import roboplan.core as native
+
         description = self.config.model.load()
+        root = ET.fromstring(description.xml)
+        root.set("version", "1.0")
+        self._scene = native.Scene(
+            "dimos_self_filter",
+            native.loadUrdfSceneDescriptionFromXml(
+                ET.tostring(root, encoding="unicode"),
+                [str(path) for path in description.package_paths.values()],
+            ),
+        )
+        self._neutral_q = np.asarray(self._scene.getCurrentJointPositions()).copy()
+        self._context = native.SceneContext(self._scene)
+        self._body_filter = native.RobotBodyFilter(
+            self._scene,
+            native.RobotBodyFilterOptions(
+                padding=self.config.padding_m,
+                method=native.RobotBodyFilterMethod.Narrowphase,
+                num_threads=1,
+            ),
+        )
         mesh_dir = str(description.source_path.parent)
         robot = yourdfpy.URDF.load(
             BytesIO(description.xml.encode()),
@@ -188,6 +279,12 @@ class PointCloudSelfFilter(Module):
             load_meshes=False,
             load_collision_meshes=False,
         )
+        child_links = {joint.child for joint in robot.robot.joints}
+        roots = [link.name for link in robot.robot.links if link.name not in child_links]
+        if len(roots) != 1:
+            raise ValueError("Robot model must have one root link")
+        self._base_link = roots[0]
+        self._joints = {joint.name: joint for joint in robot.robot.joints}
         resolve = partial(yourdfpy.filename_handler_magic, dir=mesh_dir)
         result: list[_CollisionGeometry] = []
         for link in robot.robot.links:
@@ -204,9 +301,6 @@ class PointCloudSelfFilter(Module):
                             if collision.origin is None
                             else np.asarray(collision.origin, dtype=np.float64)
                         ),
-                        mesh=mesh,
-                        shape=shape_name,
-                        dimensions=dimensions,
                         clear_samples=self._clear_samples(mesh, shape_name, dimensions),
                     )
                 )
@@ -229,7 +323,7 @@ class PointCloudSelfFilter(Module):
             for lo, hi in zip(lower, upper, strict=True)
         ]
         grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape((-1, 3))
-        inside = _points_inside(grid, shape, dimensions, mesh, margin)
+        inside = _clear_volume_mask(grid, shape, dimensions, mesh, margin)
         return np.asarray(grid[inside], dtype=np.float64)
 
 
@@ -265,18 +359,14 @@ def _geometry_mesh(
     return mesh, "mesh", ()
 
 
-def _points_inside(
+def _clear_volume_mask(
     points: np.ndarray,
     shape: str,
     dimensions: tuple[float, ...],
     mesh: trimesh.Trimesh,
     padding: float,
 ) -> np.ndarray:
-    """Mask of points within `padding` of the shape, in its own frame.
-
-    Primitives answer analytically. Only a real mesh falls through to
-    trimesh.proximity, which needs rtree.
-    """
+    """Precompute occupied volume samples for clearing, never classify sensor points."""
     if shape == "box":
         half_size = np.asarray(dimensions, dtype=np.float64) / 2.0
         return np.asarray(np.all(np.abs(points) <= half_size + padding, axis=1))
