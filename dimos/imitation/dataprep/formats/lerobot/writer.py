@@ -46,8 +46,15 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.imitation.dataprep.core import DEFAULT_FPS, OutputConfig, Sample, is_image_array
+from dimos.imitation.dataprep.core import (
+    is_image_array,
+)
 from dimos.imitation.dataprep.formats._stats import StreamingStats, stats_from_metadata
+from dimos.imitation.dataprep.schema import (
+    DEFAULT_FPS,
+    OutputConfig,
+    Sample,
+)
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
