@@ -91,7 +91,7 @@ def _dataprep_config(db_path: Path, output: OutputConfig) -> DataPrepConfig:
                 stream="color_image",
                 field="data",
                 dtype="video",
-                shape=(16, 16, 3),
+                shape=(64, 64, 3),
                 names=["height", "width", "channels"],
             ),
             "state": FeatureSpec(
@@ -213,7 +213,7 @@ def _record_session(db_path: Path, executable: Path) -> dict[str, int]:
                 publish(
                     "color_image",
                     Image(
-                        data=np.full((16, 16, 3), pixel, dtype=np.uint8),
+                        data=np.full((64, 64, 3), pixel, dtype=np.uint8),
                         format=ImageFormat.RGB,
                         frame_id="camera",
                         ts=ts,
