@@ -81,6 +81,31 @@ fn update_map_drops_invalid_and_out_of_range_points() {
     assert_eq!(keys, vec![(2, 0, 0)], "only the valid in-range point lands");
 }
 
+/// A finite point too far out for a voxel key is dropped where it enters,
+/// seed and live alike, instead of saturating into the map.
+#[test]
+fn points_outside_the_key_range_are_dropped() {
+    let cfg = Config {
+        max_range: 0.0,
+        ..basic_config()
+    };
+    let far = 3.0e9;
+    let points = [
+        (0.5, 0.5, 0.5),
+        (far, 0.5, 0.5),
+        (0.5, -far, 0.5),
+        (0.5, 0.5, far),
+    ];
+
+    let mut map = VoxelMap::default();
+    assert_eq!(seed_points(&mut map, &points, &cfg), 1);
+    assert_eq!(map.voxels.keys().collect::<Vec<_>>(), vec![(0, 0, 0)]);
+
+    let mut map = VoxelMap::default();
+    update_map(&mut map, (-0.5, -0.5, -0.5), &points, &cfg);
+    assert_eq!(map.voxels.keys().collect::<Vec<_>>(), vec![(0, 0, 0)]);
+}
+
 #[test]
 fn find_misses_along_ray_hits_correct_voxels() {
     let voxel_size = 1.0;
@@ -101,28 +126,27 @@ fn find_misses_along_ray_hits_correct_voxels() {
     ]
     .into_iter()
     .collect();
-    let mut map_voxels = ChunkMap::default();
+    let mut voxels = ChunkMap::default();
     for v in &expected {
         let mut voxel = Voxel::with_health(1);
         voxel.normal = NormalFit::Fitted(None);
-        map_voxels.insert(*v, voxel);
+        voxels.insert(*v, voxel, 0);
     }
 
-    let mut walk = RayWalk::default();
-    find_misses_along_ray(
-        &mut walk,
-        &map_voxels,
-        &AHashSet::new(),
+    let hits = AHashSet::new();
+    let frame = RayFrame {
+        voxels: &voxels,
+        hits: &hits,
         origin,
-        end,
+        origin_voxel,
         voxel_size,
         shadow_depth,
-        0.0,
-        0.5,
-        None,
-        origin_voxel,
-        endpoint,
-    );
+        grace_depth: 0.0,
+        graze_cos: 0.5,
+        fine_divisor: None,
+    };
+    let mut walk = RayWalk::default();
+    find_misses_along_ray(&mut walk, &frame, end, endpoint);
 
     assert_eq!(walk.misses, expected);
     assert!(walk.deferred.is_empty());
@@ -159,10 +183,9 @@ fn batch_bounds_empty_points_zero_radius() {
     assert_eq!(c.z_max, 3.0);
 }
 
-/// clear() must empty the healthy-chunk index too. With support_min 0,
-/// emit_points reads only the index, so a stale entry would resurface here.
+/// clear() drops every chunk, so nothing is left for emit_points to scan.
 #[test]
-fn clear_empties_healthy_chunk_index() {
+fn clear_empties_the_emitted_map() {
     let cfg = basic_config();
     let mut map = VoxelMap::default();
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
@@ -173,7 +196,7 @@ fn clear_empties_healthy_chunk_index() {
     assert!(map.voxels.is_empty());
     assert!(
         emit_points(&map, 1.0, None, &no_live).is_empty(),
-        "cleared map must not emit from a stale chunk index"
+        "cleared map must emit nothing"
     );
 }
 
@@ -420,9 +443,6 @@ fn build_surface(
 ) -> (VoxelMap, Vec<VoxelKey>) {
     let inv = 1.0 / voxel_size;
     let mut map = VoxelMap::default();
-    for &p in lidar {
-        map.accumulate(p, voxel_size, None);
-    }
     let mut keys: Vec<VoxelKey> = lidar
         .iter()
         .map(|&(x, y, z)| world_to_voxel(x, y, z, inv))
@@ -431,6 +451,9 @@ fn build_surface(
     keys.dedup();
     for &k in &keys {
         map.set_health(k, health);
+    }
+    for &p in lidar {
+        map.accumulate(p, voxel_size, None);
     }
     map.recompute_all_normals(voxel_size);
     (map, keys)
@@ -838,8 +861,8 @@ fn support_gate_drops_isolated_voxels() {
     );
 }
 
-/// The whole-map scan `emit_points` used before the chunk index, kept only as a
-/// reference to differentially test the indexed implementation against.
+/// A plain whole-map scan, the reference the chunked `emit_points` is tested
+/// against.
 fn emit_points_naive(
     map: &VoxelMap,
     voxel_size: f32,
@@ -889,9 +912,9 @@ fn tuples(flat: Vec<f32>) -> Vec<(f32, f32, f32)> {
         .collect()
 }
 
-/// The chunk-indexed `emit_points` must return exactly what the old whole-map
-/// scan did, across randomized maps that straddle chunk boundaries, sparse and
-/// dense regions, and both bounded and unbounded queries.
+/// The chunked `emit_points` must return exactly what a whole-map scan does,
+/// across randomized maps that straddle chunk boundaries, sparse and dense
+/// regions, and both bounded and unbounded queries.
 #[test]
 fn emit_points_matches_naive_scan_on_random_maps() {
     let mut next_u64 = test_rng(88172645463325252);
@@ -932,22 +955,20 @@ fn emit_points_matches_naive_scan_on_random_maps() {
     }
 }
 
-/// Unhealthy voxels never reach an emitted cloud, however many there are.
+/// Unhealthy voxels never reach an emitted cloud, whether they share a chunk
+/// with healthy ones or fill a chunk of their own.
 #[test]
 fn emit_skips_unhealthy_voxels() {
     let mut map = VoxelMap::default();
-    for i in 0..50_000_i32 {
-        map.set_health((i % 500, (i / 500) % 500, 0), 0); // health=0, never healthy
-    }
     for x in 0..3 {
-        for y in 0..3 {
-            map.set_health((x, y, 100), 1);
-        }
+        map.set_health((x, 0, 0), 0);
+        map.set_health((x, 1, 0), 1);
+        map.set_health((x, 0, 100), -1);
     }
 
     let live = AHashSet::new();
     let points = tuples(emit_points(&map, 1.0, None, &live));
-    assert_eq!(points.len(), 9, "only the healthy patch is emitted");
+    assert_eq!(points.len(), 3, "only the healthy row is emitted");
 }
 
 /// `update_map` drives both `record_hit` (new voxel becomes healthy) and
@@ -976,12 +997,12 @@ fn emit_tracks_health_transitions_through_update_map() {
     );
 }
 
-/// Every voxel's incremental `support` field must equal a from-scratch
+/// Every voxel's incremental support count must equal a from-scratch
 /// 26-neighbor scan after any sequence of hits, misses, and direct
 /// `set_health` calls. Covers transitions that happen after a voxel's
 /// neighbors already exist, which seeding only at creation would miss.
 #[test]
-fn support_field_matches_neighbor_scan_after_random_transitions() {
+fn support_counts_match_neighbor_scan_after_random_transitions() {
     let mut next_u64 = test_rng(5573589319906701683);
 
     let cfg = Config {
@@ -1014,7 +1035,7 @@ fn support_field_matches_neighbor_scan_after_random_transitions() {
             let keys: Vec<VoxelKey> = map.voxels.keys().collect();
             for k in keys {
                 let want = map.count_healthy_neighbors(k);
-                let got = u32::from(map.voxels.support(&k).unwrap());
+                let got = map.voxels.support(&k).unwrap();
                 assert_eq!(
                     got, want,
                     "trial {trial} step {step}: support({k:?}) = {got}, want {want}"
@@ -1180,9 +1201,35 @@ fn fine_emission_applies_support_min() {
     assert_eq!(gated.len(), 9, "isolated voxel's fine cell is gated out");
 }
 
+/// The keys one frame's `mark_stale` must have marked: every voxel within
+/// the fit radius of a milestone crossing, a creation or a removal, found by
+/// diffing each voxel's next milestone against the frame-start snapshot.
+fn expected_stale(before: &AHashMap<VoxelKey, u32>, map: &VoxelMap) -> AHashSet<VoxelKey> {
+    let mut changed: Vec<VoxelKey> = map
+        .voxels
+        .iter()
+        .filter(|(k, v)| before.get(k) != Some(&v.next_fit_pts))
+        .map(|(k, _)| k)
+        .collect();
+    changed.extend(before.keys().filter(|k| !map.voxels.contains_key(k)));
+    let mut out = AHashSet::new();
+    for c in changed {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    out.insert((c.0 + dx, c.1 + dy, c.2 + dz));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Milestone-gated staleness bounds drift: normals fit mid-stream, then left
 /// unmarked through more frames of a jittered floor, still match a
-/// from-scratch pooled fit almost exactly.
+/// from-scratch pooled fit almost exactly. The stale voxels are exactly those
+/// near the last two frames' milestone crossings, and everything near the
+/// last frame's is stale.
 #[test]
 fn milestone_gated_normals_match_full_refit() {
     let mut next_u64 = test_rng(7043284794951226509);
@@ -1201,10 +1248,16 @@ fn milestone_gated_normals_match_full_refit() {
     let n = (2.0 / ds).ceil() as i32;
     let origin = (1.0, 1.0, 1.0);
     let mut map = VoxelMap::default();
+    let mut stale_near: Vec<AHashSet<VoxelKey>> = Vec::new();
     for frame in 0..14 {
         if frame == 12 {
             map.recompute_all_normals(voxel_size);
         }
+        let before: AHashMap<VoxelKey, u32> = map
+            .voxels
+            .iter()
+            .map(|(k, v)| (k, v.next_fit_pts))
+            .collect();
         let floor: Vec<(f32, f32, f32)> = (0..=n)
             .flat_map(|i| {
                 let mut j2 = jitter;
@@ -1212,17 +1265,33 @@ fn milestone_gated_normals_match_full_refit() {
             })
             .collect();
         update_map(&mut map, origin, &floor, &cfg);
+        if frame >= 12 {
+            stale_near.push(expected_stale(&before, &map));
+        }
     }
+    let (older, newest) = (&stale_near[0], &stale_near[1]);
+    assert!(!newest.is_empty(), "the last frame must cross a milestone");
 
     let mut checked = 0;
     for (key, v) in map.voxels.iter() {
+        let got = match v.normal {
+            NormalFit::Stale => {
+                assert!(
+                    older.contains(&key) || newest.contains(&key),
+                    "{key:?} is stale with no change nearby"
+                );
+                continue;
+            }
+            NormalFit::Fitted(got) => got,
+        };
+        assert!(
+            !newest.contains(&key),
+            "{key:?} is fitted beside a change from the last frame"
+        );
         if v.num_pts < 10 {
             continue;
         }
         let Some((want, _)) = pooled_normal(&map.voxels, key, voxel_size) else {
-            continue;
-        };
-        let NormalFit::Fitted(got) = v.normal else {
             continue;
         };
         let got = got.expect("fitted floor voxel must carry a normal");
@@ -1233,6 +1302,58 @@ fn milestone_gated_normals_match_full_refit() {
         checked += 1;
     }
     assert!(checked > 100, "expected a real floor, checked {checked}");
+}
+
+/// A change marks the voxels within the fit radius stale and leaves the rest
+/// of a fitted row alone, for milestone crossings and removals alike.
+#[test]
+fn mark_stale_dilates_each_change_by_the_fit_radius() {
+    let mut map = VoxelMap::default();
+    for x in 0..7 {
+        map.set_health((x, 0, 0), 1);
+    }
+    let fitted =
+        |map: &VoxelMap, x: i32| matches!(map.voxels[&(x, 0, 0)].normal, NormalFit::Fitted(_));
+
+    map.recompute_all_normals(1.0);
+    assert!((0..7).all(|x| fitted(&map, x)));
+    let changed: AHashSet<VoxelKey> = [(3, 1, 0)].into_iter().collect();
+    mark_stale(&mut map, &changed, &[]);
+    for x in 0..7 {
+        assert_eq!(fitted(&map, x), !(2..=4).contains(&x), "x={x}");
+    }
+
+    map.recompute_all_normals(1.0);
+    mark_stale(&mut map, &AHashSet::new(), &[(0, 1, 0)]);
+    for x in 0..7 {
+        assert_eq!(fitted(&map, x), x > 1, "x={x}");
+    }
+}
+
+/// A seeded patch holds only stale normals. `global_normals` fits them for
+/// the output and leaves the map as it was.
+#[test]
+fn global_normals_fits_stale_voxels_for_the_output() {
+    let cfg = basic_config();
+    let points: Vec<(f32, f32, f32)> = (0..5)
+        .flat_map(|i| (0..5).map(move |j| (i as f32 + 0.5, j as f32 + 0.5, 0.5)))
+        .collect();
+    let mut map = VoxelMap::default();
+    seed_all(&mut map, &points, &cfg);
+    let all_stale = |map: &VoxelMap| {
+        map.voxels
+            .values()
+            .all(|v| matches!(v.normal, NormalFit::Stale))
+    };
+    assert!(all_stale(&map));
+
+    let (positions, normals) = global_normals(&map, 1.0);
+    assert_eq!(positions.len(), 75);
+    assert_eq!(normals.len(), 75);
+    for n in normals.as_chunks::<3>().0 {
+        assert!(n[2].abs() > 0.99, "floor normal {n:?}");
+    }
+    assert!(all_stale(&map), "a read must not change the map");
 }
 
 /// A voxel created below its first milestone is fit from its converged
@@ -1384,11 +1505,10 @@ fn metric_voxel_keys_quantize_by_map_resolution() {
     assert_eq!(keys, vec![(0, 1, -1), (2, -2, 0)]);
 }
 
-/// A naive `voxels.remove` leaves the healthy-chunk index pointing at a voxel
-/// that is gone. With support_min 0, emit_points reads only the index, so the
-/// deleted voxel would come straight back out.
+/// A cleared voxel leaves the chunk's healthy mask with it, so emit_points
+/// cannot bring it back out.
 #[test]
-fn clear_voxels_removes_from_the_healthy_chunk_index() {
+fn clear_voxels_drops_the_voxel_from_emission() {
     let cfg = basic_config();
     let mut map = VoxelMap::default();
     update_map(&mut map, (0.0, 0.0, 0.0), &[(5.5, 0.5, 0.5)], &cfg);
@@ -1400,7 +1520,7 @@ fn clear_voxels_removes_from_the_healthy_chunk_index() {
     assert_eq!(map.health((5, 0, 0)), None);
     assert!(
         emit_points(&map, 1.0, None, &no_live).is_empty(),
-        "cleared voxel must not emit from a stale chunk index"
+        "cleared voxel must not be emitted"
     );
 }
 
@@ -1469,7 +1589,7 @@ fn clear_voxels_takes_the_fine_layer_with_it() {
 fn assert_indexes_consistent(map: &VoxelMap, when: &str) {
     for (k, v) in map.voxels.iter() {
         assert_eq!(
-            u32::from(map.voxels.support(&k).unwrap()),
+            map.voxels.support(&k).unwrap(),
             map.count_healthy_neighbors(k),
             "{when}: support({k:?})"
         );
@@ -1494,7 +1614,7 @@ fn sorted_chunks(map: &VoxelMap) -> Vec<ChunkKey> {
 }
 
 /// Seeding into an empty map builds exactly what the incremental path
-/// builds: voxels, health, moments, support, chunk index, normals.
+/// builds: voxels, health, moments, support, healthy masks, normals.
 #[test]
 fn seed_matches_from_scratch_build() {
     let mut next_u64 = test_rng(6364136223846793005);
@@ -1655,7 +1775,7 @@ fn seed_sets_fine_bits_when_layer_is_on() {
 }
 
 /// Seeding a live map leaves existing health alone and keeps support and
-/// the chunk index matching a from-scratch scan.
+/// the healthy masks matching a from-scratch scan.
 #[test]
 fn seed_into_live_map_keeps_indexes_consistent() {
     let mut next_u64 = test_rng(1442695040888963407);
@@ -1761,7 +1881,7 @@ fn assert_regions_cover_their_tiles(part: &SeedPartition) {
 }
 
 /// Live frames between seed tiles never see a half-updated map: support
-/// counts and the healthy-chunk index stay exact after every tile.
+/// counts and the healthy masks stay exact after every tile.
 #[test]
 fn seed_tiles_interleaved_with_live_frames_keep_indexes_consistent() {
     let mut next_u64 = test_rng(1442695040888963407);

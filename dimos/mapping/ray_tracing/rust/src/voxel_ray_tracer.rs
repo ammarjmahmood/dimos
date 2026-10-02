@@ -23,7 +23,7 @@ mod normals;
 #[cfg(test)]
 mod tests;
 
-use chunk_map::{chunk_of, Chunk, ChunkCursor};
+use chunk_map::{chunk_of, ChunkCursor, ChunkRef, HealthyVoxel};
 pub use chunk_map::{ChunkKey, ChunkMap, CHUNK_EDGE};
 
 #[cfg(test)]
@@ -199,9 +199,9 @@ impl VoxelMap {
         self.voxels.healthy_len()
     }
 
-    /// Add a return to its voxel's accumulated moments, marking its fine cell
-    /// when a divisor is given. The fine child index derives from the coarse
-    /// key so cell-boundary float error cannot plant phantom voxels.
+    /// Add a return to its existing voxel's accumulated moments, marking its
+    /// fine cell when a divisor is given. The fine child index derives from the
+    /// coarse key so cell-boundary float error cannot plant phantom voxels.
     fn accumulate(
         &mut self,
         point: (f32, f32, f32),
@@ -214,7 +214,10 @@ impl VoxelMap {
             (key.1 as f32 + 0.5) * voxel_size,
             (key.2 as f32 + 0.5) * voxel_size,
         );
-        let v = self.voxels.get_or_insert_default(key);
+        let v = self
+            .voxels
+            .get_mut(&key)
+            .expect("a return's voxel is recorded before its points are accumulated");
         let milestone = v.observe(Vector3::new(point.0, point.1, point.2) - center);
         let fine = fine_divisor.map(|divisor| {
             let inv_fine = divisor as f32 / voxel_size;
@@ -231,11 +234,11 @@ impl VoxelMap {
         (key, milestone, fine)
     }
 
-    /// Record that `key`'s health crossed zero, for the chunk's healthy mask
-    /// and the viz. A removed voxel only reaches the viz.
+    /// Settle `key`'s health crossing zero: its neighbors' support counts and
+    /// the viz.
     fn health_crossed(&mut self, key: VoxelKey, now_healthy: bool) {
-        self.voxels.set_healthy(key, now_healthy);
         self.changed_chunks.insert(chunk_of(key));
+        self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
     }
 
     /// The chunks whose emitted points changed since the last take.
@@ -247,8 +250,8 @@ impl VoxelMap {
     pub fn healthy_chunk_keys(&self) -> impl Iterator<Item = ChunkKey> + '_ {
         self.voxels
             .chunks()
-            .filter(|(_, c)| c.healthy_len() > 0)
-            .map(|(k, _)| k)
+            .filter(|c| c.healthy_len() > 0)
+            .map(|c| c.key)
     }
 
     #[cfg(test)]
@@ -257,8 +260,8 @@ impl VoxelMap {
     }
 
     /// Count of a key's 26 neighbors that currently exist and are healthy.
-    /// Called once per voxel, at creation, to seed its `support` field.
-    fn count_healthy_neighbors(&self, key: VoxelKey) -> u32 {
+    /// Called once per voxel, at creation, to seed its support count.
+    fn count_healthy_neighbors(&self, key: VoxelKey) -> u8 {
         let near = self.voxels.neighborhood(key, 1);
         let mut n = 0;
         for dx in -1..=1 {
@@ -310,10 +313,9 @@ impl VoxelMap {
             return false;
         }
         let support = self.count_healthy_neighbors(key);
-        self.voxels.insert(key, Voxel::with_health(SEED_HEALTH));
-        self.voxels.set_support(key, support as u8);
+        self.voxels
+            .insert(key, Voxel::with_health(SEED_HEALTH), support);
         self.health_crossed(key, true);
-        self.propagate_neighbor_support(key, 1);
         true
     }
 
@@ -326,20 +328,18 @@ impl VoxelMap {
         min_health: VoxelHealth,
         max_health: VoxelHealth,
     ) -> bool {
-        let (created, was_healthy, now_healthy) = if let Some(c) = self.voxels.get_mut(&key) {
-            let was_healthy = c.health > 0;
-            c.health = (c.health + 1).min(max_health);
-            (false, was_healthy, c.health > 0)
-        } else {
-            let support = self.count_healthy_neighbors(key);
-            let health = (min_health + 1).min(max_health);
-            self.voxels.insert(key, Voxel::with_health(health));
-            self.voxels.set_support(key, support as u8);
-            (true, false, health > 0)
+        let bumped = self.voxels.update_health(key, |h| (h + 1).min(max_health));
+        let (created, was_healthy, now_healthy) = match bumped {
+            Some((was, now)) => (false, was > 0, now > 0),
+            None => {
+                let support = self.count_healthy_neighbors(key);
+                let health = (min_health + 1).min(max_health);
+                self.voxels.insert(key, Voxel::with_health(health), support);
+                (true, false, health > 0)
+            }
         };
         if was_healthy != now_healthy {
             self.health_crossed(key, now_healthy);
-            self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
         }
         created
     }
@@ -348,19 +348,16 @@ impl VoxelMap {
     /// reaches `min_health`. Keeps every neighbor's `support` count in sync.
     /// Returns whether the voxel was removed.
     fn record_miss(&mut self, key: VoxelKey, min_health: VoxelHealth) -> bool {
-        let Some(c) = self.voxels.get_mut(&key) else {
+        let Some((was, now)) = self.voxels.update_health(key, |h| h - 1) else {
             return false;
         };
-        let was_healthy = c.health > 0;
-        c.health -= 1;
-        let removed = c.health <= min_health;
-        let now_healthy = !removed && c.health > 0;
+        let removed = now <= min_health;
+        let now_healthy = !removed && now > 0;
         if removed {
             self.voxels.remove(&key);
         }
-        if was_healthy != now_healthy {
+        if (was > 0) != now_healthy {
             self.health_crossed(key, now_healthy);
-            self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
         }
         removed
     }
@@ -383,7 +380,6 @@ impl VoxelMap {
             // layer needs no separate cleanup.
             if voxel.health > 0 {
                 self.health_crossed(key, false);
-                self.propagate_neighbor_support(key, -1);
             }
             removed += 1;
         }
@@ -394,20 +390,16 @@ impl VoxelMap {
     /// miss accounting but keeps support counts in sync.
     #[cfg(test)]
     pub fn set_health(&mut self, key: VoxelKey, health: VoxelHealth) {
-        let was_healthy = if let Some(c) = self.voxels.get_mut(&key) {
-            let was_healthy = c.health > 0;
-            c.health = health;
-            was_healthy
-        } else {
-            let support = self.count_healthy_neighbors(key);
-            self.voxels.insert(key, Voxel::with_health(health));
-            self.voxels.set_support(key, support as u8);
-            false
+        let was_healthy = match self.voxels.update_health(key, |_| health) {
+            Some((was, _)) => was > 0,
+            None => {
+                let support = self.count_healthy_neighbors(key);
+                self.voxels.insert(key, Voxel::with_health(health), support);
+                false
+            }
         };
-        let now_healthy = health > 0;
-        if was_healthy != now_healthy {
-            self.health_crossed(key, now_healthy);
-            self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
+        if was_healthy != (health > 0) {
+            self.health_crossed(key, health > 0);
         }
     }
 
@@ -440,10 +432,11 @@ impl VoxelMap {
 }
 
 /// Occupancy health, accumulated point moments about the voxel center, and the
-/// normal fit from the voxel's neighborhood.
+/// normal fit from the voxel's neighborhood. Health is written by the
+/// `ChunkMap` holding the voxel, which mirrors it in a healthy mask.
 #[derive(Clone)]
 pub struct Voxel {
-    pub health: VoxelHealth,
+    health: VoxelHealth,
     /// Occupancy bitmask of this voxel's fine cells.
     fine: u64,
     num_pts: u32,
@@ -602,62 +595,53 @@ fn percentile(values: &mut [f32], p: f32) -> f32 {
     v_lo + frac * (v_hi - v_lo)
 }
 
-/// Healthy voxel centers paired with their surface normal, the zero vector where
-/// there is no plane. Stale normals are fit on the fly.
-pub fn iter_global_normals(
-    map: &VoxelMap,
-    voxel_size: f32,
-) -> impl Iterator<Item = ((f32, f32, f32), [f32; 3])> + '_ {
-    let half = voxel_size * 0.5;
-    map.voxels
-        .iter()
-        .filter(|(_, c)| c.health > 0)
-        .map(move |((kx, ky, kz), c)| {
-            let pos = (
-                kx as f32 * voxel_size + half,
-                ky as f32 * voxel_size + half,
-                kz as f32 * voxel_size + half,
-            );
-            let fit = match c.normal {
-                NormalFit::Fitted(n) => n,
-                NormalFit::Stale => {
-                    pooled_normal(&map.voxels, (kx, ky, kz), voxel_size).map(|(n, _)| n)
-                }
-            };
-            let normal = fit.map_or([0.0; 3], |n| [n[0], n[1], n[2]]);
-            (pos, normal)
-        })
+/// Apply `f` to every healthy voxel in parallel, keeping map order.
+fn par_map_healthy<T, F>(map: &VoxelMap, f: F) -> Vec<T>
+where
+    T: Send,
+    F: Fn(VoxelKey, &Voxel) -> T + Sync,
+{
+    let healthy: Vec<HealthyVoxel> = map.voxels.chunks().flat_map(|c| c.healthy()).collect();
+    healthy.par_iter().map(|hv| f(hv.key, hv.voxel)).collect()
 }
 
-/// Healthy voxel centers with freshly recomputed pooled fits: flat positions,
-/// normals, and each fit's smallest eigenvalue, zeros where there is no plane.
-/// Whole-map refit cost. A visualization helper, not for control paths.
+fn flat3(v: Option<Vector3<f32>>) -> [f32; 3] {
+    v.map_or([0.0; 3], |n| [n[0], n[1], n[2]])
+}
+
+/// Healthy voxel centers and their surface normals, flat, the zero vector
+/// where there is no plane. Stale normals are fit for the output only.
+/// Whole-map cost. A visualization helper, not for control paths.
+pub fn global_normals(map: &VoxelMap, voxel_size: f32) -> (Vec<f32>, Vec<f32>) {
+    let fits = par_map_healthy(map, |key, v| {
+        let normal = match v.normal {
+            NormalFit::Fitted(n) => n,
+            NormalFit::Stale => pooled_normal(&map.voxels, key, voxel_size).map(|(n, _)| n),
+        };
+        (voxel_center(key, voxel_size), flat3(normal))
+    });
+    let mut positions: Vec<f32> = Vec::with_capacity(fits.len() * 3);
+    let mut normals: Vec<f32> = Vec::with_capacity(fits.len() * 3);
+    for ((x, y, z), n) in fits {
+        positions.extend_from_slice(&[x, y, z]);
+        normals.extend_from_slice(&n);
+    }
+    (positions, normals)
+}
+
+/// `global_normals` with every fit recomputed, plus each fit's smallest
+/// eigenvalue, zero where there is no plane.
 pub fn global_normal_fits(map: &VoxelMap, voxel_size: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-    let half = voxel_size * 0.5;
-    let keys: Vec<VoxelKey> = map
-        .voxels
-        .iter()
-        .filter(|(_, c)| c.health > 0)
-        .map(|(k, _)| k)
-        .collect();
-    let fits: Vec<([f32; 3], [f32; 3], f32)> = keys
-        .par_iter()
-        .map(|&(kx, ky, kz)| {
-            let pos = [
-                kx as f32 * voxel_size + half,
-                ky as f32 * voxel_size + half,
-                kz as f32 * voxel_size + half,
-            ];
-            let (normal, min_eig) = pooled_normal(&map.voxels, (kx, ky, kz), voxel_size)
-                .map_or(([0.0; 3], 0.0), |(n, e)| ([n[0], n[1], n[2]], e));
-            (pos, normal, min_eig)
-        })
-        .collect();
+    let fits = par_map_healthy(map, |key, _| {
+        let (normal, min_eig) =
+            pooled_normal(&map.voxels, key, voxel_size).map_or((None, 0.0), |(n, e)| (Some(n), e));
+        (voxel_center(key, voxel_size), flat3(normal), min_eig)
+    });
     let mut positions: Vec<f32> = Vec::with_capacity(fits.len() * 3);
     let mut normals: Vec<f32> = Vec::with_capacity(fits.len() * 3);
     let mut eigs: Vec<f32> = Vec::with_capacity(fits.len());
-    for (p, n, e) in fits {
-        positions.extend_from_slice(&p);
+    for ((x, y, z), n, e) in fits {
+        positions.extend_from_slice(&[x, y, z]);
         normals.extend_from_slice(&n);
         eigs.push(e);
     }
@@ -719,7 +703,7 @@ fn chunks_in_bounds<'a>(
     map: &'a VoxelMap,
     bounds: &LocalBounds,
     voxel_size: f32,
-) -> Vec<(ChunkKey, &'a Chunk)> {
+) -> Vec<ChunkRef<'a>> {
     let (lo, hi) = chunk_range_for_bounds(bounds, voxel_size);
     // Work must scale with map contents, not the requested box. A huge query
     // box would walk its full chunk range even where the map is empty, so
@@ -731,10 +715,10 @@ fn chunks_in_bounds<'a>(
         return map
             .voxels
             .chunks()
-            .filter(|&((cx, cy, cz), _)| {
-                (lo.0..=hi.0).contains(&cx)
-                    && (lo.1..=hi.1).contains(&cy)
-                    && (lo.2..=hi.2).contains(&cz)
+            .filter(|c| {
+                (lo.0..=hi.0).contains(&c.key.0)
+                    && (lo.1..=hi.1).contains(&c.key.1)
+                    && (lo.2..=hi.2).contains(&c.key.2)
             })
             .collect();
     }
@@ -742,18 +726,28 @@ fn chunks_in_bounds<'a>(
     for cx in lo.0..=hi.0 {
         for cy in lo.1..=hi.1 {
             for cz in lo.2..=hi.2 {
-                if let Some(chunk) = map.voxels.chunk(&(cx, cy, cz)) {
-                    out.push(((cx, cy, cz), chunk));
-                }
+                out.extend(map.voxels.chunk(&(cx, cy, cz)));
             }
         }
     }
     out
 }
 
-fn flatten_with_capacity(parts: Vec<Vec<f32>>, extra: usize) -> Vec<f32> {
+/// Scan `chunks` in parallel, one output buffer per rayon split, and flatten
+/// the buffers in chunk order. `scan` appends a chunk's points to the buffer.
+fn par_scan_chunks<F>(chunks: &[ChunkRef], extra_points: usize, scan: F) -> Vec<f32>
+where
+    F: Fn(ChunkRef, &mut Vec<f32>) + Sync,
+{
+    let parts: Vec<Vec<f32>> = chunks
+        .par_iter()
+        .fold(Vec::new, |mut part: Vec<f32>, &chunk| {
+            scan(chunk, &mut part);
+            part
+        })
+        .collect();
     let total: usize = parts.iter().map(Vec::len).sum();
-    let mut out = Vec::with_capacity(total + extra);
+    let mut out = Vec::with_capacity(total + 3 * extra_points);
     for part in parts {
         out.extend(part);
     }
@@ -765,8 +759,8 @@ fn voxel_supported(support: u8, support_min: i32) -> bool {
 }
 
 /// Scan the healthy voxels of every chunk overlapping `bounds` (all chunks
-/// when `None`) in parallel, flattening the per-chunk output. `emit` gets each
-/// voxel and whether its whole chunk is inside the cylinder.
+/// when `None`) in parallel. `emit` gets each voxel and whether its whole
+/// chunk is inside the cylinder.
 fn scan_chunks<F>(
     map: &VoxelMap,
     voxel_size: f32,
@@ -776,54 +770,47 @@ fn scan_chunks<F>(
     emit: F,
 ) -> Vec<f32>
 where
-    F: Fn(VoxelKey, u8, &Voxel, bool, &mut Vec<f32>) + Sync,
+    F: Fn(HealthyVoxel, bool, &mut Vec<f32>) + Sync,
 {
     let chunk_edge = CHUNK_EDGE as f32 * voxel_size;
-    let chunks: Vec<(ChunkKey, &Chunk)> = match bounds {
+    let chunks: Vec<ChunkRef> = match bounds {
         Some(b) => chunks_in_bounds(map, b, voxel_size),
         None => map.voxels.chunks().collect(),
     };
-    let parts: Vec<Vec<f32>> = chunks
-        .par_iter()
-        .filter_map(|&(ck, chunk)| {
-            let chunk_inside = match bounds {
-                Some(b) => {
-                    let (min, max) = cell_box(ck, chunk_edge);
-                    if box_outside(b, min, max) {
-                        return None;
-                    }
-                    box_inside(b, min, max)
+    par_scan_chunks(&chunks, extra_points, |chunk, part| {
+        let chunk_inside = match bounds {
+            Some(b) => {
+                let (min, max) = cell_box(chunk.key, chunk_edge);
+                if box_outside(b, min, max) {
+                    return;
                 }
-                None => true,
-            };
-            let mut part = Vec::with_capacity(3 * points_per_voxel * chunk.healthy_len());
-            for (key, support, v) in chunk.healthy(ck) {
-                emit(key, support, v, chunk_inside, &mut part);
+                box_inside(b, min, max)
             }
-            Some(part)
-        })
-        .collect();
-    flatten_with_capacity(parts, 3 * extra_points)
+            None => true,
+        };
+        part.reserve(3 * points_per_voxel * chunk.healthy_len());
+        for hv in chunk.healthy() {
+            emit(hv, chunk_inside, part);
+        }
+    })
 }
 
 /// Points of the given chunks, flat (x, y, z) triples: their healthy voxels
 /// that clear the map's support gate.
 pub fn chunk_points(map: &VoxelMap, voxel_size: f32, chunks: &[ChunkKey]) -> Vec<f32> {
-    let parts: Vec<Vec<f32>> = chunks
-        .par_iter()
-        .filter_map(|&ck| map.voxels.chunk(&ck).map(|chunk| (ck, chunk)))
-        .map(|(ck, chunk)| {
-            let mut part = Vec::with_capacity(3 * chunk.healthy_len());
-            for (key, support, _) in chunk.healthy(ck) {
-                if voxel_supported(support, map.support_min) {
-                    let (x, y, z) = voxel_center(key, voxel_size);
-                    part.extend_from_slice(&[x, y, z]);
-                }
-            }
-            part
-        })
+    let chunks: Vec<ChunkRef> = chunks
+        .iter()
+        .filter_map(|ck| map.voxels.chunk(ck))
         .collect();
-    flatten_with_capacity(parts, 0)
+    par_scan_chunks(&chunks, 0, |chunk, part| {
+        part.reserve(3 * chunk.healthy_len());
+        for hv in chunk.healthy() {
+            if voxel_supported(hv.support, map.support_min) {
+                let (x, y, z) = voxel_center(hv.key, voxel_size);
+                part.extend_from_slice(&[x, y, z]);
+            }
+        }
+    })
 }
 
 /// Points for an emitted cloud, flat (x, y, z) triples: healthy surface voxels
@@ -856,11 +843,11 @@ fn emit_points_impl(
         bounds,
         1,
         live.len(),
-        |key, support, _, chunk_inside, part| {
-            if gated && !voxel_supported(support, map.support_min) {
+        |hv, chunk_inside, part| {
+            if gated && !voxel_supported(hv.support, map.support_min) {
                 return;
             }
-            let (x, y, z) = voxel_center(key, voxel_size);
+            let (x, y, z) = voxel_center(hv.key, voxel_size);
             if chunk_inside || bounds.is_none_or(|b| b.contains(x, y, z)) {
                 part.extend_from_slice(&[x, y, z]);
             }
@@ -868,7 +855,7 @@ fn emit_points_impl(
     );
 
     for &key in live.iter() {
-        if matches!(map.voxels.get(&key), Some(c) if c.health > 0) {
+        if map.voxels.is_healthy(&key) {
             continue;
         }
         let (x, y, z) = voxel_center(key, voxel_size);
@@ -900,24 +887,24 @@ pub fn emit_points_fine(
         bounds,
         4,
         live_fine.len(),
-        |key, support, v, chunk_inside, part| {
-            if !voxel_supported(support, map.support_min) {
+        |hv, chunk_inside, part| {
+            if !voxel_supported(hv.support, map.support_min) {
                 return;
             }
             // Boundary chunks test each voxel's box. Boundary voxels fall back
             // to per-cell checks.
             let inside = chunk_inside || {
-                let (min, max) = cell_box(key, voxel_size);
+                let (min, max) = cell_box(hv.key, voxel_size);
                 if bounds.is_some_and(|b| box_outside(b, min, max)) {
                     return;
                 }
                 bounds.is_some_and(|b| box_inside(b, min, max))
             };
-            let mut bits = v.fine;
+            let mut bits = hv.voxel.fine;
             while bits != 0 {
                 let i = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
-                let (x, y, z) = voxel_center(join_fine_key(key, i, divisor), fine_size);
+                let (x, y, z) = voxel_center(join_fine_key(hv.key, i, divisor), fine_size);
                 if inside || bounds.is_none_or(|b| b.contains(x, y, z)) {
                     part.extend_from_slice(&[x, y, z]);
                 }
@@ -927,7 +914,7 @@ pub fn emit_points_fine(
 
     for &fine_key in live_fine.iter() {
         let (coarse, _) = split_fine_key(fine_key, divisor);
-        if matches!(map.voxels.get(&coarse), Some(v) if v.health > 0) {
+        if map.voxels.is_healthy(&coarse) {
             continue;
         }
         let (x, y, z) = voxel_center(fine_key, fine_size);
@@ -971,10 +958,11 @@ pub fn update_map(
         f32::INFINITY
     };
 
-    // Drop invalid returns and out-of-range points before they enter the map.
+    // Drop invalid, unaddressable and out-of-range returns before they enter
+    // the map.
     let mut filtered: Vec<(f32, f32, f32)> = Vec::with_capacity(points.len());
     filtered.extend(points.iter().copied().filter(|&(x, y, z)| {
-        if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+        if !in_key_range(x, y, z, inv) {
             return false;
         }
         let dx = x - origin.0;
@@ -988,9 +976,18 @@ pub fn update_map(
     let hits = live_voxels(points, cfg.voxel_size);
     let fine = cfg.fine_layer().map(|(d, _)| d as i32);
 
-    let origin_voxel = world_to_voxel(origin.0, origin.1, origin.2, inv);
+    let frame = RayFrame {
+        voxels: &map.voxels,
+        hits: &hits,
+        origin,
+        origin_voxel: world_to_voxel(origin.0, origin.1, origin.2, inv),
+        voxel_size: cfg.voxel_size,
+        shadow_depth: cfg.shadow_depth,
+        grace_depth: cfg.grace_depth,
+        graze_cos: cfg.graze_cos,
+        fine_divisor: fine,
+    };
     let step = cfg.ray_subsample as usize;
-    let voxels = &map.voxels;
     let walk = points
         .par_iter()
         .enumerate()
@@ -999,20 +996,7 @@ pub fn update_map(
                 return walk;
             }
             let endpoint = world_to_voxel(p.0, p.1, p.2, inv);
-            find_misses_along_ray(
-                &mut walk,
-                voxels,
-                &hits,
-                origin,
-                p,
-                cfg.voxel_size,
-                cfg.shadow_depth,
-                cfg.grace_depth,
-                cfg.graze_cos,
-                fine,
-                origin_voxel,
-                endpoint,
-            );
+            find_misses_along_ray(&mut walk, &frame, p, endpoint);
             walk
         })
         .reduce(RayWalk::default, RayWalk::merge);
@@ -1022,8 +1006,9 @@ pub fn update_map(
     } = walk;
     resolve_deferred(map, &mut misses, &deferred, cfg.voxel_size, cfg.graze_cos);
 
-    // New voxels join the refresh set so a sparse voxel among converged
-    // neighbors gets a pooled fit before its first milestone.
+    // New voxels join the stale set so a sparse voxel among converged
+    // neighbors is pooled from them by the first ray that needs it, not only
+    // at its own first milestone.
     let mut changed: AHashSet<VoxelKey> = AHashSet::new();
     for &v in &hits {
         if map.record_hit(v, cfg.min_health, cfg.max_health) {
@@ -1113,7 +1098,7 @@ fn seed_tiles(
     let mut tiles: AHashMap<ChunkKey, SeedTile> = AHashMap::new();
     let mut keys: AHashSet<VoxelKey> = AHashSet::new();
     for &(x, y, z) in points {
-        if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+        if !in_key_range(x, y, z, inv) {
             continue;
         }
         let key = world_to_voxel(x, y, z, inv);
@@ -1218,7 +1203,7 @@ pub fn seed_tile(
 
     let mut created: AHashSet<VoxelKey> = AHashSet::new();
     for &(x, y, z) in points {
-        if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+        if !in_key_range(x, y, z, inv) {
             continue;
         }
         let key = world_to_voxel(x, y, z, inv);
@@ -1251,6 +1236,17 @@ fn world_to_voxel(x: f32, y: f32, z: f32, inv: f32) -> VoxelKey {
         (y * inv).floor() as i32,
         (z * inv).floor() as i32,
     )
+}
+
+/// Keys stay this far inside i32 so the neighborhood and chunk arithmetic
+/// around any stored voxel cannot overflow.
+const KEY_LIMIT: f32 = (1 << 30) as f32;
+
+/// Whether a point quantizes to a key the map can hold. Non-finite
+/// coordinates fail too.
+#[inline]
+fn in_key_range(x: f32, y: f32, z: f32, inv: f32) -> bool {
+    (x * inv).abs() < KEY_LIMIT && (y * inv).abs() < KEY_LIMIT && (z * inv).abs() < KEY_LIMIT
 }
 
 /// Quantize world-frame metric points to voxel keys the same way returns are
@@ -1345,26 +1341,42 @@ impl RayWalk {
     }
 }
 
-/// Amanatides and Woo 3d DDA. Records in-map voxels along the ray between the
-/// origin and the end of the shadow region. Voxels within the grace region of
-/// the endpoint are spared from being marked as misses, as are voxels hit this
-/// frame. With a fine divisor, a voxel is also spared when the ray misses all of
-/// its observed fine cells.
-#[allow(clippy::too_many_arguments)]
-fn find_misses_along_ray(
-    walk: &mut RayWalk,
-    map_voxels: &ChunkMap,
-    hits: &AHashSet<VoxelKey>,
+/// The inputs one frame's ray walks share.
+#[derive(Clone, Copy)]
+struct RayFrame<'a> {
+    voxels: &'a ChunkMap,
+    hits: &'a AHashSet<VoxelKey>,
     origin: (f32, f32, f32),
-    end: (f32, f32, f32),
+    origin_voxel: VoxelKey,
     voxel_size: f32,
     shadow_depth: f32,
     grace_depth: f32,
     graze_cos: f32,
     fine_divisor: Option<i32>,
-    origin_voxel: VoxelKey,
+}
+
+/// Amanatides and Woo 3d DDA. Records in-map voxels along the ray between the
+/// origin and the end of the shadow region. Voxels within the grace region of
+/// the endpoint are spared from being marked as misses, as are voxels hit this
+/// frame. With a fine divisor, a voxel is also spared when the ray misses all of
+/// its observed fine cells.
+fn find_misses_along_ray(
+    walk: &mut RayWalk,
+    frame: &RayFrame,
+    end: (f32, f32, f32),
     endpoint: VoxelKey,
 ) {
+    let RayFrame {
+        voxels,
+        hits,
+        origin,
+        origin_voxel,
+        voxel_size,
+        shadow_depth,
+        grace_depth,
+        graze_cos,
+        fine_divisor,
+    } = *frame;
     if origin_voxel == endpoint {
         return;
     }
@@ -1425,7 +1437,7 @@ fn find_misses_along_ray(
     let t_max = 1.0 + shadow_depth / ray_len.max(f32::EPSILON);
     let ray_unit = Vector3::new(dx, dy, dz) / ray_len.max(f32::EPSILON);
 
-    let mut cursor = ChunkCursor::new(map_voxels);
+    let mut cursor = ChunkCursor::new(voxels);
     let mut past_endpoint = false;
     loop {
         let t_enter = tx.min(ty).min(tz);

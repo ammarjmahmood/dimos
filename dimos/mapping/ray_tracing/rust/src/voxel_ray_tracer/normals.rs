@@ -29,6 +29,13 @@ const NORMAL_REWEIGHT_ITERS: u32 = 3;
 const NORMAL_PLANE_SIGMA_FRAC: f32 = 0.5;
 /// Fraction of points that must survive the IRLS to count as a real plane.
 const NORMAL_MIN_SUPPORT: f32 = 0.5;
+/// Eigenvalue spread below this fraction of the matrix scale is isotropic.
+const EIGEN_ISOTROPIC_TOL: f64 = 1e-12;
+/// Null-space cross product below this fraction of the squared row scale
+/// means a repeated eigenvalue.
+const EIGEN_NULL_TOL: f64 = 1e-18;
+/// Largest eigenvalue below this is a degenerate fit with no plane.
+const EIGEN_DEGENERATE: f32 = 1e-12;
 
 /// A voxel's cached pooled fit. Stale until a clearing ray needs it.
 #[derive(Clone, Copy, Debug)]
@@ -44,15 +51,14 @@ pub(super) fn fit_normal(cov: Matrix3<f32>) -> Option<(Vector3<f32>, f32)> {
 }
 
 /// Eigenvalues of a symmetric 3x3, ascending, and the eigenvector of the smallest.
-pub(super) struct Sym3Eigen {
-    pub(super) values: [f32; 3],
-    pub(super) smallest: Vector3<f32>,
+struct Sym3Eigen {
+    values: [f32; 3],
+    smallest: Vector3<f32>,
 }
 
-/// Closed-form eigendecomposition of a symmetric 3x3 (trigonometric roots, f64 inside).
-///
-/// The normal fit runs this ~100k times a frame; nalgebra's iterative solver made it most of the ray tracer's cost.
-pub(super) fn sym3_eigen(m: &Matrix3<f32>) -> Sym3Eigen {
+/// Closed-form eigendecomposition of a symmetric 3x3, computed in f64. An
+/// iterative solver is too slow for the per-voxel fit.
+fn sym3_eigen(m: &Matrix3<f32>) -> Sym3Eigen {
     let at = |r: usize, c: usize| 0.5 * (m[(r, c)] as f64 + m[(c, r)] as f64);
     let (a, b, c) = (at(0, 0), at(1, 1), at(2, 2));
     let (d, e, f) = (at(0, 1), at(1, 2), at(0, 2));
@@ -60,8 +66,8 @@ pub(super) fn sym3_eigen(m: &Matrix3<f32>) -> Sym3Eigen {
     let off = d * d + e * e + f * f;
     let spread = (a - q).powi(2) + (b - q).powi(2) + (c - q).powi(2) + 2.0 * off;
     let scale = a.abs().max(b.abs()).max(c.abs()).max(off.sqrt());
-    if spread <= (1e-12 * scale).powi(2) {
-        // Isotropic (or zero): every direction is an eigenvector.
+    if spread <= (EIGEN_ISOTROPIC_TOL * scale).powi(2) {
+        // Isotropic or zero. Every direction is an eigenvector.
         return Sym3Eigen {
             values: [q as f32; 3],
             smallest: Vector3::z(),
@@ -84,7 +90,7 @@ pub(super) fn sym3_eigen(m: &Matrix3<f32>) -> Sym3Eigen {
     }
 }
 
-/// Unit vector spanning the null space of a rank-2 symmetric matrix, from its rows' largest cross product.
+/// Unit vector spanning the null space of a rank-2 symmetric matrix.
 fn null_vector(rows: [[f64; 3]; 3]) -> Option<Vector3<f32>> {
     let cross = |u: [f64; 3], v: [f64; 3]| {
         [
@@ -103,8 +109,7 @@ fn null_vector(rows: [[f64; 3]; 3]) -> Option<Vector3<f32>> {
     .max_by(|x, y| norm2(*x).total_cmp(&norm2(*y)))?;
     let row_scale = rows.iter().map(|r| norm2(*r)).fold(0.0, f64::max);
     let n2 = norm2(best);
-    // A near-zero cross product means a repeated eigenvalue: no unique null direction.
-    if n2 <= 1e-18 * row_scale * row_scale {
+    if n2 <= EIGEN_NULL_TOL * row_scale * row_scale {
         return None;
     }
     let n = n2.sqrt();
@@ -117,7 +122,8 @@ fn null_vector(rows: [[f64; 3]; 3]) -> Option<Vector3<f32>> {
 
 /// Some unit vector perpendicular to `v`, for the repeated-smallest-eigenvalue case.
 fn any_perpendicular(v: Vector3<f32>) -> Vector3<f32> {
-    let axis = if v.x.abs() < 0.9 {
+    // Cross with whichever axis is further from v.
+    let axis = if v.x.abs() < v.y.abs() {
         Vector3::x()
     } else {
         Vector3::y()
@@ -129,7 +135,7 @@ fn any_perpendicular(v: Vector3<f32>) -> Vector3<f32> {
 /// with the smallest eigenvalue, the fit's out-of-plane variance.
 fn classify(eig: &Sym3Eigen) -> Option<(Vector3<f32>, f32)> {
     let e2 = eig.values[2].max(0.0);
-    if e2 < 1e-12 {
+    if e2 < EIGEN_DEGENERATE {
         return None;
     }
     let e0 = eig.values[0].max(0.0);
@@ -288,7 +294,8 @@ mod sym3_tests {
     fn closed_form_matches_nalgebra_on_planar_and_random_covariances() {
         let mut state = 7u64;
         for case in 0..20_000 {
-            // Half flat, voxel-sized planes with thin noise; half arbitrary SPD matrices.
+            // Even cases are flat voxel-sized planes with thin noise. Odd
+            // cases are arbitrary SPD matrices.
             let spread = if case % 2 == 0 {
                 Vector3::new(2.5e-3, 1.5e-3, 1e-6)
             } else {
@@ -339,5 +346,16 @@ mod sym3_tests {
         let iso = sym3_eigen(&(Matrix3::identity() * 2.0));
         assert!(iso.values.iter().all(|v| (v - 2.0).abs() < 1e-6));
         assert!((iso.smallest.norm() - 1.0).abs() < 1e-6);
+    }
+
+    /// A repeated smallest eigenvalue has no unique eigenvector. Any unit
+    /// vector in its plane, so perpendicular to the largest's, will do.
+    #[test]
+    fn repeated_smallest_eigenvalue_yields_a_vector_in_its_plane() {
+        let eig = sym3_eigen(&Matrix3::from_diagonal(&Vector3::new(2.0, 2.0, 3.0)));
+        assert!((eig.values[0] - 2.0).abs() < 1e-6);
+        assert!((eig.values[2] - 3.0).abs() < 1e-6);
+        assert!((eig.smallest.norm() - 1.0).abs() < 1e-6);
+        assert!(eig.smallest.z.abs() < 1e-6, "{:?}", eig.smallest);
     }
 }

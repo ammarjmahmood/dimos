@@ -44,7 +44,7 @@ enum Job {
 const JOB_QUEUE_CAPACITY: usize = 256;
 
 /// Tiles between seed load progress lines.
-const SEED_PROGRESS_TILES: usize = 100;
+const SEED_PROGRESS_TILES: usize = 400;
 
 /// How long one worker pass may spend on seed tiles before it returns to the
 /// job queue.

@@ -20,7 +20,7 @@ use validator::Validate;
 
 use dimos_voxel_ray_tracing::mapper::{Mapper, Pose};
 use dimos_voxel_ray_tracing::voxel_ray_tracer::{
-    iter_global_normals, partition_seed, Config, LocalBounds, SeedPartition,
+    partition_seed, Config, LocalBounds, SeedPartition,
 };
 
 fn extract_tuples(arr: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<(f32, f32, f32)>> {
@@ -288,18 +288,7 @@ impl VoxelRayMapper {
         py: Python<'py>,
     ) -> (Bound<'py, PyArray2<f32>>, Bound<'py, PyArray2<f32>>) {
         let mapper = &self.mapper;
-        let (positions, normals): (Vec<f32>, Vec<f32>) = py.allow_threads(|| {
-            let map = mapper.map();
-            let mut positions: Vec<f32> = Vec::with_capacity(map.voxels.len() * 3);
-            let mut normals: Vec<f32> = Vec::with_capacity(map.voxels.len() * 3);
-            for ((x, y, z), n) in iter_global_normals(map, mapper.config().voxel_size) {
-                positions.push(x);
-                positions.push(y);
-                positions.push(z);
-                normals.extend_from_slice(&n);
-            }
-            (positions, normals)
-        });
+        let (positions, normals) = py.allow_threads(|| mapper.normals());
         let m = positions.len() / 3;
         let positions = Array2::from_shape_vec((m, 3), positions)
             .expect("3 elements pushed per voxel")
