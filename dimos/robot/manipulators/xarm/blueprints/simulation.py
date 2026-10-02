@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dimos.control.coordinator import TaskConfig
+from dimos.control.manipulation_control import ManipulationControl
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
@@ -34,9 +35,10 @@ from dimos.robot.manipulators.xarm.config import (
 from dimos.simulation.engines.mujoco_sim_module import MujocoSimModule
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
-_xarm7_sim_model = make_xarm7_sim_robot_config()
 _xarm7_sim_scene = global_config.mujoco_scene or XARM7_SIM_PATH
+_xarm7_sim_model = make_xarm7_sim_robot_config()
 _xarm7_sim_hw = make_xarm7_sim_hardware(_xarm7_sim_scene)
+_xarm7_sim_kwargs = make_xarm7_sim_module_kwargs(_xarm7_sim_scene)
 
 xarm_perception_sim = autoconnect(
     ManipulationModule.blueprint(
@@ -47,7 +49,7 @@ xarm_perception_sim = autoconnect(
     ManipulationSkills.blueprint(),
     PickAndPlaceModule.blueprint(planning_frame="world"),
     HeuristicGraspModule.blueprint(),
-    MujocoSimModule.blueprint(**make_xarm7_sim_module_kwargs(_xarm7_sim_scene)),
+    MujocoSimModule.blueprint(**_xarm7_sim_kwargs),
     ObjectSceneRegistrationModule.blueprint(
         target_frame="world",
         detector_backend="moondream",
@@ -67,4 +69,27 @@ xarm_perception_sim = autoconnect(
         ],
     ),
     RerunBridgeModule.blueprint(),
+)
+
+# Robot-only stack: low-level control and sensors, reusable with any transport.
+_bounded_trajectory = trajectory_task(_xarm7_sim_hw)
+_bounded_trajectory.params["velocity_limits"] = dict.fromkeys(_xarm7_sim_hw.joints, 0.5)
+
+xarm_sim = autoconnect(
+    MujocoSimModule.blueprint(
+        **{**_xarm7_sim_kwargs, "base_frame_id": "world", "overview_camera_name": "env_camera"}
+    ),
+    coordinator(
+        hardware=[_xarm7_sim_hw],
+        tasks=[
+            _bounded_trajectory,
+            TaskConfig(
+                name="arm_gripper",
+                type="gripper",
+                joint_names=["arm/gripper"],
+                priority=20,
+            ),
+        ],
+    ),
+    ManipulationControl.blueprint(model=_xarm7_sim_model),
 )

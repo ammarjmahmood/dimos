@@ -67,3 +67,99 @@ any Zenoh client works, e.g. `pip install eclipse-zenoh`.
 
 There is no other interface to this robot.
 """
+
+RAW_MANIPULATION_README = """\
+Robot interface: a Zenoh peer at {endpoint}. Use a plain Zenoh client, for example
+`pip install eclipse-zenoh`. Disable multicast and gossip scouting, and connect
+directly to this endpoint. Explicitly close the session before your script exits.
+
+Python connection setup (use the same Python environment for installing and running):
+  import json, zenoh
+  config = zenoh.Config()
+  config.insert_json5("mode", '"peer"')
+  config.insert_json5("connect/endpoints", json.dumps(["{endpoint}"]))
+  config.insert_json5("scouting/multicast/enabled", "false")
+  config.insert_json5("scouting/gossip/enabled", "false")
+  session = zenoh.open(config)
+
+Subscribe before commanding. Topics:
+  robot/camera/jpeg        JPEG wrist-camera frames; attachment {{"t": unix_seconds}}
+  robot/camera/depth_f32   Float32 little-endian (height,width), row-major optical Z
+                           depth in metres; attachment {{"t": unix_seconds}}
+  robot/camera/depth_info/json  {{"t", "width", "height", "dtype":"<f4", "unit":"metres", "frame_id"}}
+  robot/camera_info/json   {{"width", "height", "K"}}: camera intrinsics
+  robot/camera_pose/json   {{"t", "frame":"base", "xyz", "quaternion_xyzw"}}:
+                           camera optical pose; +Z forward, +X right, +Y down
+  robot/overview/jpeg      RGB-only fixed env_camera overview; attachment {{"t": unix_seconds}}
+  robot/overview/camera_info/json  {{"width", "height", "K"}}: overview's own intrinsics
+  robot/overview/camera_pose/json  {{"t", "frame":"base", "xyz", "quaternion_xyzw"}}:
+                           overview optical pose relative to robot base
+  robot/arm/info/json      static info at 1 Hz: joint_names in command order, joint_limits in radians,
+                           base_frame, ee_frame, max_delta_m, max_delta_rad,
+                           max_joint_velocity_rad_s
+  robot/arm/state/json     {{"t", "frame":"base", "joint_names", "positions", "velocities",
+                           "ee_pose":{{"xyz", "quaternion_xyzw"}}, "gripper_opening"}}
+  robot/arm/status/json    {{"id", "status", "reason", "t"}}; changes immediately, latest repeated at 1 Hz
+
+Primary controls are delta EE XYZ/RPY and gripper opening. Joint-angle targets
+are optional advanced control; stop is always available. If robot context files
+are listed, read robot/README.md and robot/robot_info.json once for URDFs,
+joint/frame conventions, jaw-gap estimates and TCP-to-finger-pad offsets.
+Keep the latest sensor message per topic rather than printing every frame.
+Print command status only when its id/status changes; use compact state snapshots.
+Save JPEG/depth bytes to files instead of printing binary payloads or entire arrays.
+Use a depth neighborhood or compact numeric summary for the region being inspected.
+
+The wrist camera provides aligned RGB and depth: use camera_info K and camera_pose
+for that pair. The fixed overview provides RGB only, with DIFFERENT intrinsics and
+pose on its own overview topics. Use it to see the whole workspace and check the
+object after a grasp/lift, especially when the wrist view is blocked by the gripper.
+Never index wrist depth using an overview image pixel. Match image/depth attachments
+and pose by timestamp within each camera; topics arrive separately and the two
+cameras may run at different frame rates (wrist 15 Hz, overview 5 Hz by default).
+Decode wrist depth with NumPy:
+  depth = np.frombuffer(payload, dtype="<f4").reshape(height, width)
+Depth is optical-axis Z, not distance along the pixel ray. For pixel (u,v), let
+z=depth[v,u], x=(u-cx)*z/fx, y=(v-cy)*z/fy, using K's fx,fy,cx,cy. Transform
+[x,y,z] into the robot base frame with camera_pose's quaternion and translation.
+Ignore non-finite/nonpositive depths; distant background can have very large
+depths. Depth contains the visible robot/gripper as well as scene surfaces.
+Save the numeric array as .npy if needed; JPEG or a colorized preview loses depth.
+
+Publish JSON to robot/arm/command/json. Main commands (unique id per command):
+  {{"id":"up", "kind":"delta", "xyz":[0,0,0.05], "rpy":[0,0,0], "frame":"base"}}
+  {{"id":"turn", "kind":"delta", "xyz":[0,0,0], "rpy":[0,0,0.1]}}
+  {{"id":"open", "kind":"gripper", "opening":1.0}}
+  {{"id":"halt", "kind":"stop"}}
+
+Optional joint-target command:
+  {{"id":"j1", "kind":"joints", "positions":[0,-0.247,0,0.909,0,1.15644,0], "timeout_s":10}}
+
+Positions are radians for joints, metres for xyz. Delta rpy is radians, interpreted
+as extrinsic rotations around fixed base X/Y/Z axes: Rz(yaw) Ry(pitch) Rx(roll)
+left-multiplies the measured EE rotation. Deltas are applied ONCE to the measured
+pose when accepted, not repeatedly or as velocity. Omitted xyz/rpy means zero.
+The base frame is the robot mounting frame, not necessarily the world's origin.
+Points below the mounting height have negative base-frame Z coordinates.
+The gripper opening is normalized: 0 closed, 1 open; it is not a distance in metres.
+
+Joint targets must give every arm joint, in arm/info/json order (no gripper entry).
+The joint controller bounds velocity. Cartesian deltas use local IK tracking,
+not obstacle-aware motion planning. Inspect the scene and choose your increments.
+Translation norm and rpy-vector norm must be within the limits in arm/info/json;
+out-of-range/non-finite inputs are rejected, not silently clamped.
+
+Only one command executes at a time. Wait for status succeeded, timed_out, error,
+cancelled, or rejected before the next move. running means accepted, not completed.
+Completion checks measured feedback. A gripper blocked by an object may time out
+before reaching its requested opening; inspect its measured state and the image.
+timeout_s defaults to 10 seconds for arm moves and 5 for gripper; maximum is 30.
+Stop/timeout stops arm motion and retains gripper intent; it never zeros joint angles.
+Repeated identical ids return their recorded status without moving again; reusing
+an id with a different command is rejected. Use new ids after a rejection.
+Malformed commands may return id=null. Retry an identical valid command if its
+status was missed. Do not assume a completed trajectory means the object moved.
+
+Only these robot observations and commands are available. The full internal TF
+tree, object ground-truth poses, and higher-level manipulation tools are not exposed.
+"""
