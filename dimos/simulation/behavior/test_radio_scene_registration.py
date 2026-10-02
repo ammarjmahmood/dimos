@@ -29,7 +29,7 @@ pytestmark = pytest.mark.self_hosted
 
 # The optional backend is absent from lightweight environments. No simulator is started.
 pytest.importorskip("roboplan")
-from dimos.manipulation.planning.world.roboplan_world import RoboPlanWorld
+from dimos.manipulation.planning.world import roboplan_world
 
 
 @pytest.fixture
@@ -51,7 +51,9 @@ def radio_runtime(tmp_path):
         base_link="base",
         planning_groups=[PlanningGroupDefinition("right_arm", ("slide",), "base", "tip")],
     )
-    world = RoboPlanWorld()
+    # Native integration tests reload bindings. Resolve the current class at
+    # setup, rather than retaining its identity from test collection.
+    world = roboplan_world.RoboPlanWorld()
     monitor = WorldMonitor(world)
     runtime = RadioManipulationModule(model=model)
     try:
