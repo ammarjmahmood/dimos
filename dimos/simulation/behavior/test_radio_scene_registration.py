@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Real CPU planning-world registration; requires the accepted R1 Pro assets."""
+"""Real CPU planning-world registration with a hermetic robot model."""
 
 import copy
 
 import pytest
 
+from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
+from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.simulation.behavior.r1pro_model import simulation_model_config
+from dimos.robot.assets.model import RobotModel
 from dimos.simulation.behavior.radio_motion import RadioManipulationModule
 
 pytestmark = pytest.mark.self_hosted
@@ -31,8 +33,24 @@ from dimos.manipulation.planning.world.roboplan_world import RoboPlanWorld
 
 
 @pytest.fixture
-def radio_runtime():
-    model = simulation_model_config()
+def radio_runtime(tmp_path):
+    # Registration ownership/rollback does not depend on R1 kinematics. Keep
+    # the real native world, but require no licensed simulator asset checkout.
+    path = tmp_path / "registration.urdf"
+    path.write_text("""<robot name="registration">
+      <link name="base"/><link name="tip">
+        <collision><geometry><sphere radius="0.01"/></geometry></collision>
+      </link>
+      <joint name="slide" type="prismatic">
+        <parent link="base"/><child link="tip"/><axis xyz="1 0 0"/>
+        <limit lower="-1" upper="1" effort="10" velocity="1" acceleration="2"/>
+      </joint></robot>""")
+    model = RobotModelConfig(
+        model=RobotModel.from_file(path),
+        joint_names=["slide"],
+        base_link="base",
+        planning_groups=[PlanningGroupDefinition("right_arm", ("slide",), "base", "tip")],
+    )
     world = RoboPlanWorld()
     monitor = WorldMonitor(world)
     runtime = RadioManipulationModule(model=model)
