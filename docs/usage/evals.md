@@ -472,72 +472,9 @@ instead of its default `scene.xml`. For xArm7, `base_height` passes
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
 modules disabled: pick up the cylinder, then put the red ball on top of it.
 
-### Robosuite-derived xArm scenes
-
-The `robosuite_xarm` LFS package contains six portable scenes with dimos's existing
-xArm7, gripper, wrist camera and actuators. No robosuite runtime is required.
-One suite contains six independent cases; each case chooses its own scene and
-starts a fresh environment.
-
-| Scene tag | Task | Success check |
-| --- | --- | --- |
-| `lift` | Lift and hold the red cube by at least 5 cm | Recorded height increase, using `lifted()` |
-| `door` | Open and release the door | Panel rotated at least 0.3 rad relative to the frame |
-| `pick_place` | Place the can upright at its matching marker | Final position and upright orientation relative to the marker |
-| `stack` | Stack red on green, then release | Relative position and height, using `stacked_on()` |
-| `tool_hang` | Assemble the frame and hang the wrench | Frame/stand alignment and larger-hole pose relative to the hook |
-| `nut_assembly` | Seat the square nut on its peg | Final position relative to the peg and flat orientation |
-
-```bash skip
-dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi
-# Run one scene's case:
-dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi --tags door
-```
-
-Grading reuses `tracked_bodies` and the existing recorded `tf` poses. Lift and
-Stack reuse the default xArm suite's graders; the other cases have small
-pose-based checks in the suite file. Lift compares the first and last recorded
-heights. Stack accepts a 4.1-4.9 cm centre-height difference and passes at a score
-of 0.5 (up to 1.5 cm horizontal offset). The can must finish within 5 cm / 7.5 cm
-of its marker in X/Y and within 5 mm in Z. Nut seating checks alignment within
-7 mm and resting height within 4 mm. Door and ToolHang use relative body poses.
-
-These geometric checks do not verify physical contact, gripper release, or
-sustained stability; ToolHang in particular is a pose-based proxy for assembly
-and hanging. They are task checks for the fixed exports, not an exact
-reproduction of robosuite scores. Recording and readiness use the existing
-MuJoCo environment defaults.
-
-#### Scene placement
-
-Select an export using `scene=LfsPath("robosuite_xarm/stack/scene.xml")` and
-`base_height=0.912` in `MujocoEnvironment`. Original full-height tables/bins,
-fixtures, sampled placements and RethinkMount platforms are retained. Each
-workspace is translated horizontally so the robot base is at x=y=0; the surfaces
-remain at world z=0.80-0.82 m and the base is at z=0.912 m.
-
-`--xarm7-sim-base-height` aligns the robot's planning model with the physical base
-placement in the scene XML; it does not move scene geometry. The default compact
-xArm scene keeps its existing 0.12 m base height. `source.json` is provenance only
-and is not loaded as robot configuration.
-
-```bash skip
-python -c 'from dimos.utils.data import get_data; print(get_data("robosuite_xarm"))'
-MUJOCOSIMMODULE__HEADLESS=false dimos --simulation mujoco \
-  --mujoco-scene "$PWD/data/robosuite_xarm/stack/scene.xml" \
-  --xarm7-sim-base-height 0.912 \
-  run xarm-perception-sim mcp-server observe-skill \
-  --disable object-scene-registration-module \
-  --disable pick-and-place-module --disable heuristic-grasp-module
-```
-
-Replace `stack` with any scene tag. Each directory includes portable assets,
-licenses, source metadata and overview/wrist previews. Assets originate from
-robosuite 1.5.2, seed 0, and the dimos xArm7 model. These are adapted workspaces,
-not unchanged robosuite benchmark environments. The source exports were checked
-for loading, rendering, settling, arm/gripper commands and reset. The new suite
-and graders have static/unit validation; autonomous task completion, all target
-reachability and collision-aware plans have not been established for every scene.
+`dimos.evals.suites.robosuite_xarm` provides six scene-specific xArm7 cases using
+recorded body poses. See `data/robosuite_xarm/README.md` in the downloaded data
+package for tasks, scene setup and usage; use `--tags <scene>` to select a case.
 
 ## Running
 
