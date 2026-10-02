@@ -40,13 +40,15 @@ from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.build import inspect_dataset, run_dataprep
 from dimos.imitation.dataprep.core import (
+    extract_episodes,
+)
+from dimos.imitation.dataprep.schema import (
     DataPrepConfig,
     EpisodeExtractor,
     FeatureSpec,
     OutputConfig,
     QualityConfig,
     SyncConfig,
-    extract_episodes,
 )
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.protocol import DimosMsg
