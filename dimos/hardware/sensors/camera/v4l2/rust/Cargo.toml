@@ -29,6 +29,4 @@ tracing = "0.1"
 validator = { version = "0.21", features = ["derive"] }
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake"] }
 libc = "0.2"
-
-[build-dependencies]
-cc = "1"
+jetson-multimedia = "0.1"

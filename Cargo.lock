@@ -785,8 +785,8 @@ dependencies = [
 name = "dimos-v4l2-camera"
 version = "0.1.0"
 dependencies = [
- "cc",
  "dimos-module",
+ "jetson-multimedia",
  "lcm-msgs",
  "libc",
  "serde",
@@ -1524,6 +1524,15 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "jetson-multimedia"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36ac971c81504643f6a2477482b657695b3b76d7096460441a8333a7a66f322e"
+dependencies = [
+ "libloading",
+]
 
 [[package]]
 name = "jiff"
