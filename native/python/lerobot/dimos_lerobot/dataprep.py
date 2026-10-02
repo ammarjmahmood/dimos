@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from contextlib import redirect_stdout, suppress
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol, cast
 
 from lerobot.datasets import LeRobotDatasetMetadata
@@ -50,8 +51,8 @@ class _WritableDataset(Protocol):
     def finalize(self) -> None: ...
 
 
-def _task(sample: Sample) -> str:
-    value = sample.task_label
+def _task(sample: Sample, default_task_label: Any) -> str:
+    value = sample.task_label or default_task_label
     if not isinstance(value, str) or not value.strip():
         raise ValueError("every LeRobot frame requires an episode task label")
     return value
@@ -111,58 +112,83 @@ def write(samples: Iterator[Sample], output: OutputConfig) -> Path:
         raise ValueError(
             f"sample features {sorted(first_values)} do not match schema {sorted(features)}"
         )
-    dataset = cast(
-        "_WritableDataset",
-        LeRobotDataset.create(
-            repo_id=repo_id,
-            fps=fps,
-            features=features,
-            root=output.path,
-            robot_type=output.metadata.get("robot_type"),
-            use_videos=True,
-        ),
-    )
-    current_episode: str | None = None
-    finished: set[str] = set()
+    default_task_label = output.metadata.get("default_task_label", "task")
+    _task(first, default_task_label)
+    destination = output.path
+    if destination.is_symlink() or (
+        destination.exists()
+        and (
+            not destination.is_dir()
+            or (any(destination.iterdir()) and not (destination / "meta" / "info.json").is_file())
+        )
+    ):
+        raise FileExistsError(f"{destination} already exists and is not a LeRobot dataset")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f".{destination.name}-", dir=destination.parent) as temporary:
+        staged_path = Path(temporary) / "dataset"
+        dataset = cast(
+            "_WritableDataset",
+            LeRobotDataset.create(
+                repo_id=repo_id,
+                fps=fps,
+                features=features,
+                root=staged_path,
+                robot_type=output.metadata.get(
+                    "robot_type", output.metadata.get("robot", "unknown")
+                ),
+                use_videos=True,
+            ),
+        )
+        current_episode: str | None = None
+        finished: set[str] = set()
 
-    def add(sample: Sample) -> None:
-        nonlocal current_episode
-        if current_episode is not None and sample.episode_id != current_episode:
+        def add(sample: Sample) -> None:
+            nonlocal current_episode
+            if current_episode is not None and sample.episode_id != current_episode:
+                dataset.save_episode(parallel_encoding=False)
+                finished.add(current_episode)
+            if sample.episode_id in finished:
+                raise ValueError(f"episode {sample.episode_id!r} is not contiguous")
+            current_episode = sample.episode_id
+            values = _sample_features(sample)
+            if set(values) != set(features):
+                raise ValueError(f"sample feature keys changed in episode {sample.episode_id}")
+            frame: dict[str, Any] = {"task": _task(sample, default_task_label)}
+            for key, definition in features.items():
+                value = np.asarray(values[key])
+                shape = tuple(definition["shape"])
+                if value.shape != shape:
+                    raise ValueError(f"{key} shape changed from {shape} to {value.shape}")
+                dtype = definition["dtype"]
+                frame[key] = (
+                    value.astype(np.uint8, copy=False)
+                    if dtype == "video"
+                    else value.astype(np.dtype(dtype), copy=False)
+                )
+            dataset.add_frame(frame)
+
+        try:
+            add(first)
+            for sample in iterator:
+                add(sample)
             dataset.save_episode(parallel_encoding=False)
-            finished.add(current_episode)
-        if sample.episode_id in finished:
-            raise ValueError(f"episode {sample.episode_id!r} is not contiguous")
-        current_episode = sample.episode_id
-        values = _sample_features(sample)
-        if set(values) != set(features):
-            raise ValueError(f"sample feature keys changed in episode {sample.episode_id}")
-        frame: dict[str, Any] = {"task": _task(sample)}
-        for key, definition in features.items():
-            value = np.asarray(values[key])
-            shape = tuple(definition["shape"])
-            if value.shape != shape:
-                raise ValueError(f"{key} shape changed from {shape} to {value.shape}")
-            dtype = definition["dtype"]
-            frame[key] = (
-                value.astype(np.uint8, copy=False)
-                if dtype == "video"
-                else value.astype(np.dtype(dtype), copy=False)
-            )
-        dataset.add_frame(frame)
-
-    try:
-        add(first)
-        for sample in iterator:
-            add(sample)
-        dataset.save_episode(parallel_encoding=False)
-        dataset.finalize()
-    except BaseException:
-        with suppress(Exception):
-            dataset.clear_episode_buffer()
-        with suppress(Exception):
             dataset.finalize()
-        raise
-    return Path(dataset.root)
+        except BaseException:
+            with suppress(Exception):
+                dataset.clear_episode_buffer()
+            with suppress(Exception):
+                dataset.finalize()
+            raise
+        previous = Path(temporary) / "previous"
+        if destination.exists():
+            destination.rename(previous)
+        try:
+            staged_path.rename(destination)
+        except BaseException:
+            if previous.exists():
+                previous.rename(destination)
+            raise
+    return destination
 
 
 def inspect_dataset(path: Path) -> dict[str, Any]:

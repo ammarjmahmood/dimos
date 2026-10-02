@@ -218,3 +218,24 @@ def test_collection_to_lerobot_roundtrip(
         recorded_images[ts].mean() for ts in (100.0, 101.0, 102.0, 108.0, 109.0, 110.0)
     ]
     np.testing.assert_allclose([frame.mean() for frame in video], expected_means, atol=5.0)
+
+
+def test_explicit_range_exports_use_configured_task_label(
+    tmp_path: Path,
+    recorded_session: tuple[Path, dict[float, np.ndarray[Any, Any]]],
+) -> None:
+    recording, _ = recorded_session
+    output = OutputConfig(
+        format="lerobot",
+        path=tmp_path / "range-dataset",
+        metadata={"repo_id": "dimos/range-test", "default_task_label": "manual pick"},
+    )
+    config = _dataprep_config(recording, output)
+    config.episodes = EpisodeExtractor(extractor="ranges", ranges=[(100, 102)])
+
+    root = run_dataprep(config, writer=write)
+
+    metadata = LeRobotDataset("dimos/range-test", root=root).meta
+    assert metadata.total_frames == 3
+    assert [row["tasks"] for row in metadata.episodes] == [["manual pick"]]
+    assert (root / "dimos_meta.json").is_file()
