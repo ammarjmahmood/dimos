@@ -22,13 +22,11 @@ readers/writers. Built-in workflows expose it through `dimos imitation`.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from itertools import chain
 import json
 from pathlib import Path
 from typing import Any, cast
-
-from mcap.reader import make_reader
 
 from dimos.imitation.dataprep.core import (
     extract_episodes,
@@ -51,6 +49,14 @@ from dimos.memory.store.mcap import McapStore, StreamCodec
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.utils.logging_config import setup_logger
 
+make_reader: Callable[..., Any] | None
+try:
+    from mcap.reader import make_reader as _make_reader
+except ImportError:
+    make_reader = None
+else:
+    make_reader = _make_reader
+
 logger = setup_logger()
 
 
@@ -66,6 +72,8 @@ def _open_recording(path: str | Path) -> Store:
 
 def _recording_codecs(path: Path) -> dict[str, StreamCodec]:
     """Load native codecs from a trusted recording's message-type metadata."""
+    if make_reader is None:
+        raise RuntimeError("MCAP recording support requires the optional learning extra")
     with path.open("rb") as file:
         summary = make_reader(file).get_summary()
     codecs: dict[str, StreamCodec] = {}
