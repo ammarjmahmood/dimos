@@ -302,5 +302,11 @@ def test_policy_composition_hides_diagnostic_markers_only_when_opted_in():
     assert RadioPolicyModule not in ordinary and RadioPolicyModule in policy
     assert ordinary[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is False
     assert policy[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is True
-    with pytest.raises(ValueError, match="left_arm only"):
-        radio_blueprint(TaskSelection(), arm="right_arm", policy_supervisor=True)
+    right_policy = {
+        a.module: a
+        for a in radio_blueprint(
+            TaskSelection(), arm="right_arm", policy_supervisor=True
+        ).blueprints
+    }
+    assert right_policy[RadioPolicyModule].kwargs["arm"] == "right_arm"
+    assert right_policy[BehaviorConnection].kwargs["policy_hide_toggle_markers"] is True

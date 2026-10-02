@@ -250,8 +250,9 @@ to arm trajectories and one selected coupled gripper. It has no locomotion task.
 Run the measured motion check before trying contact:
 
 ```bash
-python -m dimos.simulation.behavior.demo_radio --stage motion --report /tmp/radio-motion.json
-python -m dimos.simulation.behavior.demo_radio --stage serve --report /tmp/radio-ready.json
+mkdir -p radio-development/evidence
+python -m dimos.simulation.behavior.demo_radio --stage motion --report radio-development/evidence/radio-motion.json
+python -m dimos.simulation.behavior.demo_radio --stage serve --report radio-development/evidence/radio-ready.json
 ```
 
 `serve` leaves the coordinator running so a separate Python policy can use
@@ -268,7 +269,7 @@ a JSON target containing `position`, `approach`, optional XYZW `orientation`, an
 explicit `provenance`, for example `development oracle-assisted geometry`.
 
 ```bash
-python -m dimos.simulation.behavior.demo_radio --stage press --target /tmp/radio-target.json --report /tmp/radio-press.json
+python -m dimos.simulation.behavior.demo_radio --stage press --target /tmp/radio-target.json --report radio-development/evidence/radio-press.json
 ```
 
 These commands are development experiments, not validated task-performance
