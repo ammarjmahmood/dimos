@@ -31,3 +31,5 @@ Live status uses the existing String transport for the Quest HUD and recorders.
 Collection recordings store JSON text directly with the event `ts`; MCAP carries
 its JSON Schema. Data preparation validates documents before extracting episode
 boundaries. No generated EpisodeStatus message or LCM fork changes are required.
+
+See the [offline alignment guide](/dimos/imitation/dataprep/README.md) and [isolated LeRobot exporter](/dimos/imitation/dataprep/lerobot.md) for the dataset contract.
