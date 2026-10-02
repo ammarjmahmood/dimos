@@ -93,3 +93,18 @@ def test_hdf5_stats_values_match(tmp_path: Path) -> None:
         # state = [0..3]+i for i in 0,1,2 → per-dim mean = base + mean(0,1,2)=base+1
         mean = f["stats"]["observation.state"]["mean"][:]
         np.testing.assert_allclose(mean, np.arange(4) + 1.0)
+
+
+def test_unlabeled_range_samples_use_configured_default_task(tmp_path: Path) -> None:
+    config = OutputConfig(
+        format="hdf5",
+        path=tmp_path / "ranges.hdf5",
+        metadata={"default_task_label": "manual range"},
+    )
+    samples = (sample.model_copy(update={"task_label": None}) for sample in _samples())
+
+    root = write(samples, config)
+
+    with h5py.File(root) as dataset:
+        assert dataset["tasks"].attrs["task_0"] == "manual range"
+        assert dataset.attrs["num_frames"] == 6

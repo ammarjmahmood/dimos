@@ -244,3 +244,25 @@ def test_existing_unrelated_directory_is_preserved(tmp_path: Path) -> None:
         write(numeric_samples(), config)
 
     assert asset.read_text() == "keep me"
+
+
+def test_native_dataset_retains_boolean_fill_flags(tmp_path: Path) -> None:
+    config = numeric_output(tmp_path / "dataset")
+    config.metadata["feature_schema"]["complementary_info.is_filled"] = {
+        "dtype": "bool",
+        "shape": [1],
+        "names": ["is_filled"],
+    }
+    samples = (
+        sample.model_copy(update={"complementary_info": {"is_filled": np.asarray([index == 1])}})
+        for index, sample in enumerate(numeric_samples())
+    )
+
+    root = write(samples, config)
+
+    dataset = dataprep.LeRobotDataset("local/openyam-test", root=root)
+    np.testing.assert_array_equal(
+        np.asarray(dataset.hf_dataset["complementary_info.is_filled"]),
+        [False, True],
+    )
+    assert dataset.meta.features["complementary_info.is_filled"]["dtype"] == "bool"
