@@ -127,3 +127,5 @@ working example. The fields that matter:
   true commanded actions you'd record `joint_command` and map `action` to it.
 - **Old vs new sessions** — recordings made before the `coordinator_joint_state`
   rename use the old stream name; point a matching config at them, or re-record.
+
+See the [offline alignment guide](/dimos/imitation/dataprep/README.md) and [isolated LeRobot exporter](/dimos/imitation/dataprep/lerobot.md) for the dataset contract.
