@@ -156,7 +156,8 @@ static int start_mmap(capture* cap, char* error, size_t len) {
 
 #ifdef DIMOS_JETSON_HW
 static int allocate(uint32_t width, uint32_t height, NvBufSurfaceColorFormat format, NvBufSurfaceTag tag) {
-    NvBufSurfaceAllocateParams params = {{0}};
+    NvBufSurfaceAllocateParams params;
+    memset(&params, 0, sizeof(params));
     params.params.width = width;
     params.params.height = height;
     params.params.memType = NVBUF_MEM_SURFACE_ARRAY;
