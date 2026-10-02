@@ -31,6 +31,15 @@ import pytest
 
 from dimos.imitation.dataprep.build import _write_dimos_meta, inspect_dataset, run_dataprep
 from dimos.imitation.dataprep.core import (
+    extract_episodes,
+    inspect_episode_quality,
+    inspect_episodes,
+    is_image_array,
+    iter_episode_samples,
+    resolve_field,
+    summarize_lengths,
+)
+from dimos.imitation.dataprep.schema import (
     DataPrepConfig,
     DatasetSchema,
     Episode,
@@ -41,13 +50,6 @@ from dimos.imitation.dataprep.core import (
     QualityConfig,
     Sample,
     SyncConfig,
-    extract_episodes,
-    inspect_episode_quality,
-    inspect_episodes,
-    is_image_array,
-    iter_episode_samples,
-    resolve_field,
-    summarize_lengths,
 )
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -566,6 +568,49 @@ def test_snapshots_can_align_forward_but_targets_remain_causal():
     np.testing.assert_array_equal(
         [sample.observation["target"] for sample in samples], [[1, 2, 0], [5, 2, 0]]
     )
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "expected"),
+    [
+        ("snapshot", [[3, 4], [5, 6]]),
+        ("joint_position_updates", [[1, 2], [5, 6]]),
+    ],
+)
+def test_joint_state_message_class_does_not_determine_source_semantics(source_kind, expected):
+    store = _FakeStore(
+        {
+            "anchor": _scalar_stream([(0.0, 0), (0.1, 0)]),
+            "joints": [
+                _Obs(-0.1, JointState(name=["left", "right"], position=[1, 2])),
+                _Obs(0.01, JointState(name=["left", "right"], position=[3, 4])),
+                _Obs(0.1, JointState(name=["left", "right"], position=[5, 6])),
+            ],
+        }
+    )
+    streams = {
+        "anchor": _feature("anchor"),
+        "joints": FeatureSpec(
+            stream="joints",
+            field="position",
+            dtype="float32",
+            shape=(2,),
+            names=["left", "right"],
+            source_kind=source_kind,
+        ),
+    }
+
+    samples = list(
+        iter_episode_samples(
+            store,
+            Episode(id="episode", start_ts=0.0, end_ts=0.1),
+            streams,
+            SyncConfig(anchor="anchor", rate_hz=10, tolerance_ms=20),
+            QualityConfig(),
+        )
+    )
+
+    np.testing.assert_array_equal([sample.observation["joints"] for sample in samples], expected)
 
 
 def test_shared_update_source_is_read_once_for_multiple_projections(mocker):

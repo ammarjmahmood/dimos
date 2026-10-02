@@ -26,7 +26,7 @@ import pytest
 
 from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.dataprep.build import _open_recording, inspect_recording, run_dataprep
-from dimos.imitation.dataprep.core import (
+from dimos.imitation.dataprep.schema import (
     DataPrepConfig,
     FeatureSpec,
     OutputConfig,

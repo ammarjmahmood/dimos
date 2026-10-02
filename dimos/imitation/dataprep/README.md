@@ -27,7 +27,7 @@ channels; the reader environment must contain their Python message classes.
 ## Explicit features
 
 `observation` and `action` each map a distinct output feature name to a
-`FeatureSpec` in [core.py](/dimos/imitation/dataprep/core.py). Each feature declares:
+`FeatureSpec` in [schema.py](/dimos/imitation/dataprep/schema.py). Each feature declares:
 
 | Field | Meaning |
 | --- | --- |
@@ -37,6 +37,12 @@ channels; the reader environment must contain their Python message classes.
 | `shape` | Exact per-frame dimensions, excluding the time axis. |
 | `names` | Ordered vector element names, or image axis names. |
 | `source_kind` | `snapshot` (default) or `joint_position_updates`. |
+
+Both source kinds use the same alignment planner. They describe different
+recorded meanings, not separate observation/action pipelines: a measured
+snapshot may align to a nearby future sample, while an accepted target must use
+only prior commands and retain joints omitted by sparse updates. Both can use
+`JointState` messages, so the message class cannot choose this meaning for you.
 
 JointState vectors are projected by joint name into the configured order.
 Missing joints, duplicate source joint names, shape mismatches and non-finite
@@ -50,7 +56,7 @@ actions separately. It only validates a config; building requires the named
 recorded streams to exist.
 
 ```python no-result
-from dimos.imitation.dataprep.core import (
+from dimos.imitation.dataprep.schema import (
     DataPrepConfig, FeatureSpec, OutputConfig, SyncConfig,
 )
 
