@@ -472,8 +472,8 @@ instead of its default `scene.xml`. For xArm7, `base_height` passes
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
 modules disabled: pick up the cylinder, then put the red ball on top of it.
 
-`dimos.evals.suites.robosuite_xarm` provides six scene-specific xArm7 cases using
-recorded body poses. See `data/robosuite_xarm/README.md` in the downloaded data
+`dimos.evals.suites.robosuite` provides six manipulation cases using
+recorded body poses. See `data/robosuite/README.md` in the downloaded data
 package for tasks, scene setup and usage; use `--tags <scene>` to select a case.
 
 ## Running

@@ -36,7 +36,7 @@ def environment(scene: str, bodies: tuple[str, ...]) -> MujocoEnvironment:
     return MujocoEnvironment(
         blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
         disable=PERCEPTION_MODULES,
-        scene=LfsPath(f"robosuite_xarm/{scene}/scene.xml"),
+        scene=LfsPath(f"robosuite/{scene}/scene.xml"),
         base_height=0.912,
         tracked_bodies=bodies,
     )
@@ -110,7 +110,7 @@ def hung_tool(outcome: Outcome) -> float:
 
 SUITE: Suite = [
     EvalCase(
-        id="robosuite_xarm_lift_cube",
+        id="robosuite_lift_cube",
         inputs=(
             "Pick up the red cube and hold it at least 5 cm above its resting position. "
             "The table top is at world z=0.80 m; the cube is 4 cm wide. " + GUIDANCE
@@ -121,7 +121,7 @@ SUITE: Suite = [
         tags=frozenset({"mujoco", "robosuite", "manipulation", "lift"}),
     ),
     EvalCase(
-        id="robosuite_xarm_open_door",
+        id="robosuite_open_door",
         inputs=(
             "Open the door by at least 0.3 radians (about 17 degrees), then release it "
             "and leave it open. The door has a movable handle. " + GUIDANCE
@@ -132,7 +132,7 @@ SUITE: Suite = [
         tags=frozenset({"mujoco", "robosuite", "manipulation", "door"}),
     ),
     EvalCase(
-        id="robosuite_xarm_place_can",
+        id="robosuite_place_can",
         inputs=(
             "Move the soda can from the source bin to the destination compartment marked "
             "by the transparent can. Place it upright near the marker's center, release it, "
@@ -144,7 +144,7 @@ SUITE: Suite = [
         tags=frozenset({"mujoco", "robosuite", "manipulation", "pick_place"}),
     ),
     EvalCase(
-        id="robosuite_xarm_stack_cubes",
+        id="robosuite_stack_cubes",
         inputs=(
             "Stack the smaller red cube centrally on top of the larger green cube. "
             "Leave both cubes upright on the table, release the red cube, and move the "
@@ -157,7 +157,7 @@ SUITE: Suite = [
         tags=frozenset({"mujoco", "robosuite", "manipulation", "stack"}),
     ),
     EvalCase(
-        id="robosuite_xarm_hang_tool",
+        id="robosuite_hang_tool",
         inputs=(
             "Insert the hook frame into the upright stand, then hang the wrench by its "
             "larger hole on the horizontal hook. Release all pieces and move the gripper "
@@ -173,7 +173,7 @@ SUITE: Suite = [
         tags=frozenset({"mujoco", "robosuite", "manipulation", "tool_hang"}),
     ),
     EvalCase(
-        id="robosuite_xarm_assemble_square_nut",
+        id="robosuite_assemble_square_nut",
         inputs=(
             "Pick up the square nut and lower its hole over the matching square peg until "
             "the nut rests flat on the table. Release it and move the gripper away. "
