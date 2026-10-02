@@ -103,6 +103,10 @@ def head_camera_infos(path: str = HEAD_STEREO_CALIBRATION) -> tuple[CameraInfo, 
     return eye("left", HEAD_LEFT_FRAME), eye("right", HEAD_RIGHT_FRAME)
 
 
+# How often to look again for a calibration file that is not there yet.
+_CALIBRATION_RETRY_S = 5.0
+
+
 class HeadCameraInfoConfig(ModuleConfig):
     calibration_path: str = HEAD_STEREO_CALIBRATION
     publish_hz: float = 1.0
@@ -137,14 +141,16 @@ class HeadCameraInfo(Module):
         super().stop()
 
     def _run(self) -> None:
-        try:
-            left, right = head_camera_infos(self.config.calibration_path)
-        except FileNotFoundError:
-            logger.warning(
-                "no head calibration at %s; head CameraInfo not published",
-                self.config.calibration_path,
-            )
-            return
+        while True:
+            try:
+                left, right = head_camera_infos(self.config.calibration_path)
+                break
+            except FileNotFoundError:
+                logger.warning(
+                    "no head calibration at %s yet; retrying", self.config.calibration_path
+                )
+                if self._stop.wait(_CALIBRATION_RETRY_S):
+                    return
         while not self._stop.is_set():
             for out, info in ((self.left_info, left), (self.right_info, right)):
                 info.ts = time.time()
