@@ -47,14 +47,6 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.protocol.pubsub.impl.zenohpubsub import QOS_LATEST_WINS, Topic as ZenohTopic, Zenoh
 from dimos.robot.galaxea.r1pro.connection import R1PRO_UPPER_BODY_JOINTS, R1ProConnection
 from dimos.robot.galaxea.r1pro.head_cameras import (
-    HEAD_FOURCC,
-    HEAD_FPS,
-    HEAD_HEIGHT,
-    HEAD_LEFT_FRAME,
-    HEAD_LEFT_V4L2,
-    HEAD_RIGHT_FRAME,
-    HEAD_RIGHT_V4L2,
-    HEAD_WIDTH,
     HeadCameraInfo,
     HeadLeftCamera,
     HeadRightCamera,
@@ -173,13 +165,8 @@ def _zenoh_transport(
 
 
 def _head_cameras() -> list[Blueprint]:
-    """Both head eyes at the sensor's one real mode, and their intrinsics; see ``head_cameras``."""
-    mode = {"width": HEAD_WIDTH, "height": HEAD_HEIGHT, "fps": HEAD_FPS, "fourcc": HEAD_FOURCC}
-    return [
-        HeadLeftCamera.blueprint(device=HEAD_LEFT_V4L2, frame_id=HEAD_LEFT_FRAME, **mode),
-        HeadRightCamera.blueprint(device=HEAD_RIGHT_V4L2, frame_id=HEAD_RIGHT_FRAME, **mode),
-        HeadCameraInfo.blueprint(),
-    ]
+    """Both head eyes and their intrinsics; see ``head_cameras``."""
+    return [HeadLeftCamera.blueprint(), HeadRightCamera.blueprint(), HeadCameraInfo.blueprint()]
 
 
 def r1pro_control(

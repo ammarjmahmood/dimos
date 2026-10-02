@@ -22,8 +22,8 @@ from dimos.robot.galaxea.r1pro.connection import R1ProConnection
 from dimos.robot.galaxea.r1pro.head_cameras import (
     HEAD_LEFT_V4L2,
     HEAD_RIGHT_V4L2,
-    HeadLeftCamera,
-    HeadRightCamera,
+    HeadLeftCameraConfig,
+    HeadRightCameraConfig,
     head_camera_infos,
 )
 
@@ -31,14 +31,13 @@ from dimos.robot.galaxea.r1pro.head_cameras import (
 _SENSOR_MODE = (1920, 1536, 30.0, "UYVY")
 
 
-def test_each_eye_opens_its_own_node_at_the_sensor_mode() -> None:
-    atoms = {atom.module: atom.kwargs for atom in r1pro_control().active_blueprints}
+def test_each_eye_defaults_to_its_own_node_at_the_sensor_mode() -> None:
+    left, right = HeadLeftCameraConfig(), HeadRightCameraConfig()
 
-    left, right = atoms[HeadLeftCamera], atoms[HeadRightCamera]
-    assert (left["device"], left["frame_id"]) == (HEAD_LEFT_V4L2, "camera_head_left_link")
-    assert (right["device"], right["frame_id"]) == (HEAD_RIGHT_V4L2, "camera_head_right_link")
+    assert (left.device, left.frame_id) == (HEAD_LEFT_V4L2, "camera_head_left_link")
+    assert (right.device, right.frame_id) == (HEAD_RIGHT_V4L2, "camera_head_right_link")
     for eye in (left, right):
-        assert (eye["width"], eye["height"], eye["fps"], eye["fourcc"]) == _SENSOR_MODE
+        assert (eye.width, eye.height, eye.fps, eye.fourcc) == _SENSOR_MODE
 
 
 def test_head_colour_is_raw_image_under_the_old_names() -> None:

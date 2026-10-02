@@ -38,7 +38,7 @@ from typing import Any
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
-from dimos.hardware.sensors.camera.v4l2_camera import V4L2CameraModule
+from dimos.hardware.sensors.camera.v4l2_camera import V4L2CameraConfig, V4L2CameraModule
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.utils.logging_config import setup_logger
 
@@ -63,14 +63,28 @@ HEAD_RIGHT_FRAME = "camera_head_right_link"
 HEAD_STEREO_CALIBRATION = "/opt/galaxea/body/stereo.yaml"
 
 
+class HeadLeftCameraConfig(V4L2CameraConfig):
+    device: str = HEAD_LEFT_V4L2
+    width: int = HEAD_WIDTH
+    height: int = HEAD_HEIGHT
+    fps: float = HEAD_FPS
+    fourcc: str = HEAD_FOURCC
+    frame_id: str = HEAD_LEFT_FRAME
+
+
+class HeadRightCameraConfig(HeadLeftCameraConfig):
+    device: str = HEAD_RIGHT_V4L2
+    frame_id: str = HEAD_RIGHT_FRAME
+
+
 # Distinct classes only because blueprints can't yet run two instances of one
 # module (same reason as the wrist cameras).
 class HeadLeftCamera(V4L2CameraModule):
-    pass
+    config: HeadLeftCameraConfig
 
 
 class HeadRightCamera(V4L2CameraModule):
-    pass
+    config: HeadRightCameraConfig
 
 
 def head_camera_infos(path: str = HEAD_STEREO_CALIBRATION) -> tuple[CameraInfo, CameraInfo]:
