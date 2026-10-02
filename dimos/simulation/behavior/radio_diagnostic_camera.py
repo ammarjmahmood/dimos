@@ -45,10 +45,10 @@ class RadioDiagnosticCamera:
             rgb = observation["rgb"]
             if hasattr(rgb, "detach"):
                 rgb = rgb.detach().cpu().numpy()
-            image = np.asarray(rgb, dtype=np.uint8)[..., :3]
-            if image.ndim != 3 or image.shape[2] != 3 or not image.size:
+            rgb_image = np.asarray(rgb, dtype=np.uint8)[..., :3]
+            if rgb_image.ndim != 3 or rgb_image.shape[2] != 3 or not rgb_image.size:
                 raise ValueError("Evaluator viewer RGB unavailable")
-            image = self.cv2.resize(image[..., ::-1], (640, 480))
+            image = self.cv2.resize(rgb_image[..., ::-1], (640, 480))
             stage_file = self.directory / "active-stage.json"
             stage = json.loads(stage_file.read_text()) if stage_file.exists() else "initializing"
             self.cv2.putText(

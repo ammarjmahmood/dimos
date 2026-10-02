@@ -854,10 +854,11 @@ class RadioGraspCheckpoint:
                         self.scene.world.set_joint_state(ctx, endstate)
                         left_pose = self.scene.world.get_link_pose(ctx, "left_gripper_link")
                     left_delta = np.linalg.inv(pose_to_matrix(left_target)) @ left_pose
-                    left_arrived = np.linalg.norm(left_delta[:3, 3]) <= (
-                        0.002 if phase in COORDINATED_PHASES else 0.005
-                    ) and Rotation.from_matrix(left_delta[:3, :3]).magnitude() <= (
-                        0.005 if phase in COORDINATED_PHASES else 0.01
+                    left_arrived = bool(
+                        np.linalg.norm(left_delta[:3, 3])
+                        <= (0.002 if phase in COORDINATED_PHASES else 0.005)
+                        and Rotation.from_matrix(left_delta[:3, :3]).magnitude()
+                        <= (0.005 if phase in COORDINATED_PHASES else 0.01)
                     )
                 if (
                     left_arrived
