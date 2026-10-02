@@ -37,6 +37,13 @@ channels; the reader environment must contain their Python message classes.
 | `shape` | Exact per-frame dimensions, excluding the time axis. |
 | `names` | Ordered vector element names, or image axis names. |
 | `source_kind` | `snapshot` (default) or `joint_position_updates`. |
+| `message_type` | Optional live-capture Python message class; omitted from JSON. |
+
+The same `FeatureSpec` is used for live collection and offline preparation.
+Offline configurations need no `message_type`: recorded channel metadata owns
+decoding. Collection requires a message class for every captured stream and
+checks its native codec before creating the recorder. Saved feature schemas and
+the isolated-runtime JSON protocol contain only the portable projection fields.
 
 Both source kinds use the same alignment planner. They describe different
 recorded meanings, not separate observation/action pipelines: a measured
