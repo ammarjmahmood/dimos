@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dataset-shape types + pure helpers.
+"""Pure dataset alignment and inspection helpers.
 
-Sub-configs (FeatureSpec, SyncConfig, QualityConfig, OutputConfig, EpisodeExtractor) and
-data records (Episode, Sample) live here. So do the stateless functions
-that walk samples — `resolve_field`, `extract_episodes`,
+Dataset declarations live in `schema.py` and remain re-exported here for existing
+callers. The stateless functions below walk samples — `resolve_field`, `extract_episodes`,
 `iter_episode_samples`. Pure and side-effect-free; importable without
 booting a Module.
 
@@ -28,184 +27,41 @@ from __future__ import annotations
 
 import bisect
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import pairwise
 import math
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dimos.constants import STATE_DIR
 from dimos.imitation.collection.episode import EpisodeStatus
+from dimos.imitation.dataprep.schema import (
+    DEFAULT_FPS as DEFAULT_FPS,
+    DataPrepConfig as DataPrepConfig,
+    DatasetSchema as DatasetSchema,
+    Episode as Episode,
+    EpisodeExtractor as EpisodeExtractor,
+    EpisodeQualityReport as EpisodeQualityReport,
+    EpisodeReport as EpisodeReport,
+    FeatureSpec as FeatureSpec,
+    IncompleteEpisode as IncompleteEpisode,
+    Inspector as Inspector,
+    OutputConfig as OutputConfig,
+    QualityConfig as QualityConfig,
+    Sample as Sample,
+    SourceKind as SourceKind,
+    SyncConfig as SyncConfig,
+    Writer as Writer,
+    validate_source_kinds as validate_source_kinds,
+)
 from dimos.memory.store.mcap import McapStore
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.protocol.service.spec import BaseConfig
 
 if TYPE_CHECKING:
     from dimos.memory.store.base import Store
     from dimos.memory.stream import Stream
-
-# Each host-supported format package exposes a writer through ``get_writer``.
-Writer = Callable[[Iterator["Sample"], "OutputConfig"], Path]
-Inspector = Callable[[Path], dict[str, Any]]
-
-SourceKind = Literal["snapshot", "joint_position_updates"]
-
-DEFAULT_FPS = 30.0  # resample rate == written video/timestamp rate
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sub-configs
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class EpisodeExtractor(BaseConfig):
-    extractor: Literal["episode_status", "ranges"] = "episode_status"
-    # Recorded stream name for EpisodeStatus events. Must match the recorder's
-    # `status` In port (CollectionRecorder records it as "status").
-    status_stream: str = "status"
-    ranges: list[tuple[float, float]] | None = None
-
-
-class FeatureSpec(BaseConfig):
-    """Explicit dataset feature and its recorded source."""
-
-    stream: str
-    field: str | None = None
-    dtype: str
-    shape: tuple[int, ...]
-    names: list[str]
-    source_kind: SourceKind = "snapshot"
-
-    @model_validator(mode="after")
-    def validate_schema(self) -> FeatureSpec:
-        if not self.shape or any(value <= 0 for value in self.shape):
-            raise ValueError("feature shape must contain positive dimensions")
-        if self.dtype == "video":
-            if len(self.names) != len(self.shape):
-                raise ValueError("video feature names must name every axis")
-        else:
-            try:
-                np.dtype(self.dtype)
-            except TypeError as error:
-                raise ValueError(f"unsupported feature dtype {self.dtype!r}") from error
-            if len(self.shape) == 1 and len(self.names) != self.shape[0]:
-                raise ValueError("vector feature names must match its length")
-        if any(not name.strip() for name in self.names):
-            raise ValueError("feature names must not be empty")
-        if self.source_kind == "joint_position_updates" and (
-            self.field != "position"
-            or self.dtype == "video"
-            or len(self.shape) != 1
-            or len(self.names) != len(set(self.names))
-        ):
-            raise ValueError(
-                "joint_position_updates requires a position vector with unique joint names"
-            )
-        return self
-
-
-class SyncConfig(BaseConfig):
-    anchor: str
-    rate_hz: float = Field(gt=0)
-    tolerance_ms: float = Field(ge=0)
-
-
-class QualityConfig(BaseConfig):
-    mode: Literal["strict", "fill"] = "strict"
-    min_source_rate_ratio: float = 0.95
-    max_camera_gap_ms: float = 100.0
-    max_alignment_error_ms: float = 20.0
-
-
-class OutputConfig(BaseConfig):
-    format: Literal["lerobot", "hdf5"] = "lerobot"
-    path: Path
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class DatasetSchema(BaseConfig):
-    """Dataset features, episode extraction, alignment, and quality rules."""
-
-    episodes: EpisodeExtractor = EpisodeExtractor()
-    observation: dict[str, FeatureSpec] = Field(default_factory=dict)
-    action: dict[str, FeatureSpec] = Field(default_factory=dict)
-    sync: SyncConfig = SyncConfig(anchor="image", rate_hz=DEFAULT_FPS, tolerance_ms=50.0)
-    quality: QualityConfig = QualityConfig()
-
-    @model_validator(mode="after")
-    def validate_sources(self) -> DatasetSchema:
-        validate_source_kinds((*self.observation.values(), *self.action.values()))
-        return self
-
-
-def validate_source_kinds(features: Iterable[FeatureSpec]) -> None:
-    """Every projection of a recorded stream must agree on its source meaning."""
-    kinds: dict[str, SourceKind] = {}
-    for feature in features:
-        previous = kinds.setdefault(feature.stream, feature.source_kind)
-        if previous != feature.source_kind:
-            raise ValueError(f"stream {feature.stream!r} has conflicting source kinds")
-
-
-class DataPrepConfig(DatasetSchema):
-    """Dataset interpretation plus this preparation's input and output paths."""
-
-    source: str = ""
-    output: OutputConfig = OutputConfig(format="lerobot", path=STATE_DIR / "datasets" / "default")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Data records
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class Episode(BaseModel):
-    id: str
-    start_ts: float
-    end_ts: float
-    task_label: str | None = None
-    success: bool = True
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class IncompleteEpisode(BaseModel):
-    start_ts: float
-    task_label: str | None = None
-
-
-class EpisodeReport(BaseModel):
-    episodes: list[Episode] = Field(default_factory=list)
-    incomplete: list[IncompleteEpisode] = Field(default_factory=list)
-
-
-class Sample(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    ts: float
-    episode_id: str
-    observation: dict[str, NDArray[Any]]
-    action: dict[str, NDArray[Any]]
-    task_label: str | None = None  # carried from the episode for multi-task datasets
-    complementary_info: dict[str, NDArray[Any]] = Field(default_factory=dict)
-
-
-class EpisodeQualityReport(BaseModel):
-    episode_id: str
-    valid: bool
-    mode: Literal["strict", "fill"]
-    expected_frames: int = 0
-    emitted_frames: int = 0
-    filled_frames: int = 0
-    source_rates_hz: dict[str, float] = Field(default_factory=dict)
-    max_gaps_ms: dict[str, float] = Field(default_factory=dict)
-    max_alignment_error_ms: float = 0.0
-    rejection_reasons: list[str] = Field(default_factory=list)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure helpers — used by format writers and run_dataprep

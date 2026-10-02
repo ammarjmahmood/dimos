@@ -31,9 +31,12 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
-from dimos.imitation.dataprep.core import OutputConfig, Sample
 from dimos.imitation.dataprep.formats.lerobot.reader import inspect
 from dimos.imitation.dataprep.formats.lerobot.writer import write
+from dimos.imitation.dataprep.schema import (
+    OutputConfig,
+    Sample,
+)
 
 
 def _state_samples(n: int = 4) -> Iterator[Sample]:
