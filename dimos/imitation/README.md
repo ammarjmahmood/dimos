@@ -1,5 +1,7 @@
 # Imitation learning
 
+See [Collection profiles](/dimos/imitation/collection/README.md) for the recording contract, feature fields and executable custom-robot examples.
+
 See [Imitation Learning for Manipulation](../../docs/capabilities/manipulation/imitation-learning.md)
 for collection, custom profiles, dataset preparation, and existing LeRobot rollout.
 
