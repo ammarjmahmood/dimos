@@ -147,7 +147,7 @@ consistency. Recorder wiring checks required inputs; preparation validates the
 actual recorded values.
 
 One `CollectionProfile` declares the typed source streams and their dataset
-interpretation. A `CollectionFeature` adds a Python `message_type` to the
+interpretation. A `FeatureSpec` adds a Python `message_type` to the
 dataprep feature fields: `stream`, `source_kind`, `field`, `dtype`, `shape`, and `names`.
 Several features can project different fields or joint subsets from one source;
 the recorder captures that source once.
@@ -176,7 +176,7 @@ feature does **not** construct a webcam. Add any number of camera features and
 matching producers, using normal blueprint remappings when names differ.
 Source names must be nonreserved Python identifiers, and message classes must
 be importable and support native LCM encoding. The recorder also requires the
-reserved `status: In[EpisodeStatus]` input.
+reserved `status: In[String]` input carrying a versioned JSON episode document.
 
 Export the blueprint using an installed package entry point:
 

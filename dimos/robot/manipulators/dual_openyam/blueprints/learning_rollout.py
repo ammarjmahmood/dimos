@@ -16,15 +16,12 @@
 
 from dataclasses import replace
 
-from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
 from dimos.control.tasks.trajectory_task.trajectory_task import joint_trajectory_task
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
-from dimos.core.transport import pSHMTransport
 from dimos.hardware.sensors.camera.module import CameraModule
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.hardware.sensors.camera.webcam import WebcamConfig
 from dimos.imitation.policy.module import policy_module
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.robot.manipulators.dual_openyam.blueprints.basic import (
     DualOpenYamCoordinator,
 )
@@ -101,14 +98,7 @@ def build_dual_openyam_rollout(*, quest_control: bool = False) -> Blueprint:
             for port in ("color_image", "camera_info", "tf")
         ]
     )
-    return blueprint.transports(
-        {
-            (port, Image): pSHMTransport.spec(
-                f"/{port}", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE
-            )
-            for port in mapping
-        }
-    )
+    return blueprint.global_config(transport="zenoh")
 
 
 dual_openyam_policy_rollout = autoconnect(build_dual_openyam_rollout())

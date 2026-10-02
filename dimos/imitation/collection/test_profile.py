@@ -16,8 +16,9 @@
 import numpy as np
 import pytest
 
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.dataprep.core import DataPrepConfig, OutputConfig, SyncConfig, resolve_field
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 
@@ -28,7 +29,7 @@ def profile():
         name="custom",
         robot_type="test",
         observations={
-            "camera": CollectionFeature(
+            "camera": FeatureSpec(
                 stream="camera",
                 message_type=Image,
                 field="data",
@@ -36,7 +37,7 @@ def profile():
                 shape=(8, 8, 3),
                 names=["height", "width", "channels"],
             ),
-            "positions": CollectionFeature(
+            "positions": FeatureSpec(
                 stream="measured",
                 message_type=JointState,
                 field="position",
@@ -44,7 +45,7 @@ def profile():
                 shape=(2,),
                 names=["b", "a"],
             ),
-            "velocities": CollectionFeature(
+            "velocities": FeatureSpec(
                 stream="measured",
                 message_type=JointState,
                 field="velocity",
@@ -54,7 +55,7 @@ def profile():
             ),
         },
         actions={
-            "target": CollectionFeature(
+            "target": FeatureSpec(
                 stream="commanded",
                 source_kind="joint_position_updates",
                 message_type=JointState,
@@ -66,6 +67,17 @@ def profile():
         },
         sync=SyncConfig(anchor="camera", rate_hz=30, tolerance_ms=20),
     )
+
+
+@pytest.fixture
+def profile_values(profile):
+    # Keep runtime feature objects for capture validation; serialized feature
+    # dictionaries deliberately omit their Python message classes.
+    return {
+        **profile.model_dump(),
+        "observations": profile.observations,
+        "actions": profile.actions,
+    }
 
 
 def test_profile_lowers_to_existing_json_protocol_and_preserves_projections(profile, tmp_path):
@@ -80,35 +92,53 @@ def test_profile_lowers_to_existing_json_protocol_and_preserves_projections(prof
     assert restored.action["target"].names == ["b"]
     assert restored.action["target"].source_kind == "joint_position_updates"
     assert restored.observation["positions"].source_kind == "snapshot"
+    assert restored.observation["positions"].message_type is None
+    assert restored.action["target"].message_type is None
     message = JointState(name=["a", "b"], position=[1.0, 2.0], velocity=[3.0, 4.0])
     np.testing.assert_array_equal(resolve_field(message, restored.observation["positions"]), [2, 1])
     np.testing.assert_array_equal(resolve_field(message, restored.observation["velocities"]), [3])
 
 
-def test_profile_rejects_conflicting_raw_types(profile):
-    values = profile.model_dump()
-    values["actions"]["target"].update(stream="camera", source_kind="snapshot")
+def test_profile_rejects_conflicting_raw_types(profile, profile_values):
+    values = profile_values
+    values["actions"] = {
+        "target": profile.actions["target"].model_copy(
+            update={"stream": "camera", "source_kind": "snapshot"}
+        )
+    }
     with pytest.raises(ValueError, match="conflicting message types"):
         CollectionProfile(**values)
 
 
-def test_profile_rejects_conflicting_source_kinds(profile):
-    values = profile.model_dump()
-    values["actions"]["target"].update(stream="measured", source_kind="joint_position_updates")
+def test_profile_rejects_conflicting_source_kinds(profile, profile_values):
+    values = profile_values
+    values["actions"] = {
+        "target": profile.actions["target"].model_copy(update={"stream": "measured"})
+    }
     with pytest.raises(ValueError, match="conflicting source kinds"):
         CollectionProfile(**values)
 
 
-def test_profile_rejects_updates_from_non_joint_messages(profile):
-    values = profile.model_dump()
-    values["actions"]["target"].update(message_type=Image, source_kind="joint_position_updates")
+def test_profile_rejects_updates_from_non_joint_messages(profile, profile_values):
+    values = profile_values
+    values["actions"] = {
+        "target": profile.actions["target"].model_copy(update={"message_type": Image})
+    }
     with pytest.raises(ValueError, match="requires JointState"):
         CollectionProfile(**values)
 
 
 @pytest.mark.parametrize("anchor", ["absent", "target"])
-def test_sync_anchor_must_be_an_observation(profile, anchor):
-    values = profile.model_dump()
+def test_sync_anchor_must_be_an_observation(profile_values, anchor):
+    values = profile_values
     values["sync"]["anchor"] = anchor
     with pytest.raises(ValueError, match="sync anchor"):
+        CollectionProfile(**values)
+
+
+def test_offline_features_require_message_types_when_used_for_capture(profile, profile_values):
+    values = profile_values
+    values["actions"] = profile.to_schema().action
+
+    with pytest.raises(ValueError, match="Collection stream 'commanded' requires message_type"):
         CollectionProfile(**values)

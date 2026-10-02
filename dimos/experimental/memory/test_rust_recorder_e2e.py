@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import importlib.util
+import json
 import os
 from pathlib import Path
 import select
@@ -27,6 +29,7 @@ import uuid
 
 import numpy as np
 import pytest
+from reactivex.testing import TestScheduler
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.global_config import global_config
@@ -40,12 +43,15 @@ from dimos.experimental.memory.rust_recorder import (
     RustRecordingStoreConfig,
     RustSqliteStoreConfig,
 )
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.episode import EpisodeStatus
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
-from dimos.imitation.dataprep.core import SyncConfig
+from dimos.imitation.dataprep.core import EpisodeExtractor, SyncConfig, extract_episodes
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.memory.codecs.lcm import LcmCodec
 from dimos.memory.codecs.lz4 import Lz4Codec
+from dimos.memory.replay_module import ReplayModule
 from dimos.memory.store.mcap import McapStore
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.memory.type.observation import Observation
@@ -53,18 +59,26 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.Imu import Imu
+from dimos.msgs.std_msgs.String import String
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic
 from dimos.protocol.service.zenohservice import ZenohConfig, ZenohSessionPool
+from dimos.teleop.webxr.module import WebXRTeleopModule
 
 pytestmark = pytest.mark.self_hosted
 
 _RUST_PACKAGE = DIMOS_PROJECT_ROOT / "dimos" / "experimental" / "memory" / "rust"
-_EXECUTABLE = _RUST_PACKAGE / "result" / "bin" / "dimos-memory-recorder"
+_EXECUTABLE = Path(
+    os.environ.get(
+        "DIMOS_MEMORY_RECORDER_TEST_EXECUTABLE",
+        str(_RUST_PACKAGE / "result" / "bin" / "dimos-memory-recorder"),
+    )
+)
 _MCAP_AVAILABLE = importlib.util.find_spec("mcap") is not None
 
 
 class InteropRustRecorder(RustRecorder):
+    status: In[String]
     color_image: In[Image]
     imu: In[Imu]
 
@@ -154,7 +168,7 @@ def test_native_collection_directory_preserves_schema_and_messages(
     store_kind,
     monkeypatch,
 ):
-    camera = CollectionFeature(
+    camera = FeatureSpec(
         stream="color_image",
         message_type=Image,
         field="data",
@@ -162,7 +176,7 @@ def test_native_collection_directory_preserves_schema_and_messages(
         shape=(16, 16, 3),
         names=["height", "width", "channels"],
     )
-    state = CollectionFeature(
+    state = FeatureSpec(
         stream="imu",
         message_type=Imu,
         field="angular_velocity",
@@ -208,7 +222,9 @@ def _capture_native_artifact(
         store=store,
         record_tf=False,
         encoding_threads=2,
-        stream_codecs={"imu": "lz4+lcm"},
+        stream_codecs={"imu": "lz4+lcm", "status": "json"},
+        stream_timestamp_fields={"status": "ts"},
+        stream_json_schemas={"status": EpisodeStatus.json_schema()},
         session=ZenohConfig(
             mode="peer",
             connect=[],
@@ -222,7 +238,9 @@ def _capture_native_artifact(
         kwargs = {
             "executable": str(rust_recorder_executable),
             "encoding_threads": 2,
-            "stream_codecs": {"imu": "lz4+lcm"},
+            "stream_codecs": {"imu": "lz4+lcm", "status": "json"},
+            "stream_timestamp_fields": {"status": "ts"},
+            "stream_json_schemas": {"status": EpisodeStatus.json_schema()},
             "session": recorder.config.session,
         }
         recorder.stop()
@@ -252,6 +270,16 @@ def _capture_native_artifact(
         gossip=False,
         connect_timeout=5,
     )
+    status_publisher: ZenohTransport[String] = ZenohTransport(
+        ZenohTopic(f"dimos/rr_status_{channel_suffix}", String),
+        session_pool=session_pool,
+        mode="client",
+        connect=[endpoint],
+        multicast=False,
+        gossip=False,
+        connect_timeout=5,
+    )
+    recorder.status.transport = FakeTransport(status_publisher.channel)
     imu_topic = publisher.channel
     image_topic = image_publisher.channel
     recorder.imu.transport = FakeTransport(imu_topic)  # type: ignore[assignment]
@@ -291,6 +319,21 @@ def _capture_native_artifact(
             frame_id="camera",
             ts=12.75,
         )
+        for ts, event, state in [(12.0, "start", "recording"), (13.0, "save", "idle")]:
+            status_publisher.broadcast(
+                None,
+                String(
+                    EpisodeStatus(
+                        ts=ts,
+                        state=state,
+                        episodes_saved=int(event == "save"),
+                        episodes_discarded=0,
+                        last_event=event,
+                        task_label="拿起积木",
+                    ).to_json()
+                ),
+            )
+            _wait_for_log(process, "memory recorder batch written")
         publisher.broadcast(None, expected)
         image_publisher.broadcast(None, expected_image)
         _wait_for_log(process, "memory recorder batch written")
@@ -298,6 +341,7 @@ def _capture_native_artifact(
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=10.0) == 0
     finally:
+        status_publisher.stop()
         publisher.stop()
         image_publisher.stop()
         session_pool.close_all()
@@ -314,6 +358,11 @@ def _capture_native_artifact(
             codecs={"imu": Lz4Codec(LcmCodec(Imu))},
         )
     with memory:
+        episodes = extract_episodes(memory, EpisodeExtractor())
+        assert len(episodes) == 1
+        assert episodes[0].start_ts == 12.0
+        assert episodes[0].end_ts == 13.0
+        assert episodes[0].task_label == "拿起积木"
         observation = cast("Observation[Imu]", memory.stream("imu").first())
         assert observation.ts == 12.5
         assert observation.data.lcm_encode() == expected.lcm_encode()
@@ -479,3 +528,36 @@ def test_tf_records_over_zenoh_and_replays_through_python(
             "base_link",
             "camera",
         ]
+
+
+@pytest.mark.parametrize("store_kind", ["sqlite", "mcap"])
+def test_native_json_events_replay_to_the_live_quest_hud(
+    tmp_path, rust_recorder_executable, store_kind, monkeypatch, mocker
+):
+    artifact = _capture_native_artifact(tmp_path, rust_recorder_executable, store_kind, monkeypatch)
+    received = []
+    scheduler = TestScheduler()
+    # Replay intentionally skips late subscribers. Keep its clock and scheduler
+    # together so host setup latency cannot skip the first status at 100x speed.
+    clock = mocker.patch("dimos.memory.replay.time")
+    clock.time.side_effect = lambda: scheduler.clock
+    mocker.patch("dimos.memory.replay.TimeoutScheduler", return_value=scheduler)
+    with ExitStack() as cleanup:
+        hud = WebXRTeleopModule()
+        cleanup.callback(hud.stop)
+        replay = ReplayModule(dataset=str(artifact), topics="status", speed=100.0)
+        cleanup.callback(replay.stop)
+
+        def broadcast(text):
+            received.append(json.loads(text))
+
+        mocker.patch.object(hud, "_broadcast_text", side_effect=broadcast)
+        subscription = replay.outputs["status"].subscribe(hud._on_episode_status)
+        cleanup.callback(subscription)
+        replay.start()
+        scheduler.advance_to(1.0)
+        assert [(p["ts"], p["last_event"]) for p in received] == [(12.0, "start"), (13.0, "save")]
+        assert received[-1]["type"] == "episode_status"
+        assert received[-1]["episodes_saved"] == 1
+        assert received[-1]["task_label"] == "拿起积木"
+        assert received[-1]["elapsed_s"] == 0.0

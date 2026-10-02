@@ -48,12 +48,17 @@ from dimos.utils.generic import classproperty
 class PolicyControlSpec(Spec, Protocol):
     """Coordinator operations used by policy rollout."""
 
+    def get_trajectory_generation(self) -> int: ...
+
     def execute_trajectory(
         self,
         trajectory: JointTrajectory,
+        expected_generation: int | None = None,
     ) -> TrajectoryExecutionResult: ...
 
-    def cancel_trajectory(self) -> TrajectoryCancellationResult: ...
+    def cancel_trajectory(
+        self, expected_generation: int | None = None
+    ) -> TrajectoryCancellationResult: ...
 
     def list_tasks(self) -> list[str]: ...
 

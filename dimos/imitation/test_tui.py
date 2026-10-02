@@ -20,11 +20,11 @@ from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.episode_monitor import EpisodeCommand, EpisodeControlSpec
 from dimos.imitation.collection.prompts import CollectionSpeech
 from dimos.imitation.policy.module import RolloutControlSpec
 from dimos.imitation.tui import CollectionApp, CollectionSession, RolloutApp, RolloutSession
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.porcelain.dimos import Dimos
 from dimos.stream.audio.tts.kokoro import KokoroTTSConfig
 
@@ -228,3 +228,36 @@ def test_disabled_collection_does_not_open_audio(collection_session, mocker):
     player = mocker.patch("dimos.imitation.tui.WavPlayer", autospec=True)
     CollectionApp(session)
     player.assert_not_called()
+
+
+def test_discard_reaches_monitor_when_cached_dashboard_state_is_idle(collection_session, mocker):
+    session, _driver, monitor = collection_session
+    app = CollectionApp(session)
+    mocker.patch.object(app, "_refresh")
+    monitor.command.return_value = EpisodeStatus(
+        ts=2.0,
+        state="idle",
+        episodes_saved=0,
+        episodes_discarded=1,
+        last_event="discard",
+        task_label="pick",
+    )
+
+    app.action_discard()
+
+    monitor.command.assert_called_once_with("discard")
+    assert app._status.episodes_discarded == 1
+    assert app._message == "Episode discarded. Reset the scene and try again."
+
+
+def test_discard_with_no_active_episode_reports_authoritative_noop(collection_session, mocker):
+    session, _driver, monitor = collection_session
+    app = CollectionApp(session)
+    mocker.patch.object(app, "_refresh")
+    monitor.command.return_value = monitor.get_status.return_value
+
+    app.action_discard()
+
+    monitor.command.assert_called_once_with("discard")
+    assert app._status.episodes_discarded == 0
+    assert app._message == "No active episode to discard."

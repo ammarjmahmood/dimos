@@ -14,8 +14,8 @@
 
 import pytest
 
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.prompts import CollectionSpeech
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.stream.audio.tts.kokoro import KokoroTTSConfig
 
 

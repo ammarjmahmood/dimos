@@ -33,6 +33,14 @@ identities belong to their camera module configuration. The wrist cameras use
 the existing RealSense native module with depth disabled; overhead uses the
 existing webcam module. All provide 640×480 RGB at 30 Hz.
 
+Both rollout blueprints use Zenoh for all streams, including the native wrist
+cameras and Python overhead camera. Large payloads between local processes use
+Zenoh's own shared-memory transport when the installed bindings support SHM
+and the sessions negotiate it; there is no custom `pSHMTransport` override.
+The native build enables Zenoh's `shared-memory` feature. Camera images remain
+raw RGB. Remote links use the negotiated network transport; SHM does not extend
+across hosts. Image decoding and policy observation storage still copy data.
+
 ```bash
 dimos run dual-openyam-policy-quest-rollout --daemon \
   --policy.backend abc \

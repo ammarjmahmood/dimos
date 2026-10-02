@@ -14,7 +14,7 @@
 
 """Spoken feedback for confirmed collection transitions."""
 
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.stream.audio.tts.kokoro import KokoroTTS, KokoroTTSConfig
 
 RECORDING_PROMPTS = {
