@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.CompressedImage import CompressedImage
 from dimos.robot.galaxea.r1pro.blueprints.basic.r1pro_coordinator import r1pro_control
 from dimos.robot.galaxea.r1pro.connection import R1ProConnection
 from dimos.robot.galaxea.r1pro.head_cameras import (
@@ -40,12 +40,12 @@ def test_each_eye_defaults_to_its_own_node_at_the_sensor_mode() -> None:
         assert (eye.width, eye.height, eye.fps, eye.fourcc) == _SENSOR_MODE
 
 
-def test_head_colour_is_raw_image_under_the_old_names() -> None:
+def test_head_colour_is_jpeg_under_the_old_names() -> None:
     blueprint = r1pro_control()
 
     assert {"head_left_color", "head_right_color"} <= set(blueprint.remapping_map.values())
-    assert ("head_left_color", Image) in blueprint.transport_map
-    assert ("head_right_color", Image) in blueprint.transport_map
+    assert ("head_left_color", CompressedImage) in blueprint.transport_map
+    assert ("head_right_color", CompressedImage) in blueprint.transport_map
 
 
 def test_connection_no_longer_publishes_head_colour() -> None:

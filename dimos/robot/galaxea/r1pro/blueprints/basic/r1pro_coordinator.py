@@ -220,8 +220,8 @@ def r1pro_control(
             [
                 (R1ProConnection, "cmd_vel", "chassis_cmd_vel"),
                 (R1ProConnection, "odom", "chassis_odom"),
-                (HeadLeftCamera, "image_out", "head_left_color"),
-                (HeadRightCamera, "image_out", "head_right_color"),
+                (HeadLeftCamera, "jpeg_out", "head_left_color"),
+                (HeadRightCamera, "jpeg_out", "head_right_color"),
                 (HeadCameraInfo, "left_info", "head_left_info"),
                 (HeadCameraInfo, "right_info", "head_right_info"),
             ]
@@ -248,11 +248,11 @@ def r1pro_control(
                 ("cmd_vel", Twist): _zenoh_transport("/cmd_vel", Twist),
                 ("twist_command", Twist): _zenoh_transport("/cmd_vel", Twist),
                 # Sensor pass-throughs.
-                ("head_left_color", Image): _zenoh_transport(
-                    "/head_left_color", Image, latest_wins=True
+                ("head_left_color", CompressedImage): _zenoh_transport(
+                    "/head_left_color", CompressedImage, latest_wins=True
                 ),
-                ("head_right_color", Image): _zenoh_transport(
-                    "/head_right_color", Image, latest_wins=True
+                ("head_right_color", CompressedImage): _zenoh_transport(
+                    "/head_right_color", CompressedImage, latest_wins=True
                 ),
                 ("head_left_info", CameraInfo): _zenoh_transport("/head_left_info", CameraInfo),
                 ("head_right_info", CameraInfo): _zenoh_transport("/head_right_info", CameraInfo),

@@ -54,11 +54,13 @@ def module(monkeypatch: pytest.MonkeyPatch) -> V4L2CameraModule:
             retry_s=0.0,
             max_missed_reads=3,
             stats_period_s=0.0,
+            jpeg_quality=None,
         )
 
     monkeypatch.setattr(Module, "__init__", _fake_init)
     module = V4L2CameraModule()
     module.image_out = MagicMock()
+    module.jpeg_out = MagicMock()
     return module
 
 
@@ -121,6 +123,20 @@ def test_frames_are_published_as_bgr_images(module: V4L2CameraModule) -> None:
     assert image.format == ImageFormat.BGR
     assert (image.width, image.height) == (848, 480)
     assert image.frame_id == "wrist_left_optical"
+
+
+def test_frames_are_published_as_jpeg_at_the_configured_quality(module: V4L2CameraModule) -> None:
+    module.config.jpeg_quality = 90
+    cap = _FakeCapture(reads=[True, True, False, False, False])
+
+    module._pump(cap)
+
+    assert _published(module).call_count == 0
+    jpegs = [call[0][0] for call in cast("MagicMock", module.jpeg_out.publish).call_args_list]
+    assert len(jpegs) == 2
+    assert jpegs[0].format == "jpeg" and jpegs[0].frame_id == "wrist_left_optical"
+    decoded = jpegs[0].decode()
+    assert (decoded.width, decoded.height) == (848, 480)
 
 
 def test_a_missed_read_between_frames_is_tolerated(module: V4L2CameraModule) -> None:

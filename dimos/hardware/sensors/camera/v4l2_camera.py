@@ -44,6 +44,7 @@ from typing import Any
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import Out
+from dimos.msgs.sensor_msgs.CompressedImage import CompressedImage
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.utils.logging_config import setup_logger
 
@@ -152,14 +153,17 @@ class V4L2CameraConfig(ModuleConfig):
     max_missed_reads: int = 30
     # Log capture rate and publish cost this often; 0 disables.
     stats_period_s: float = 10.0
+    # JPEG quality (1-100) to publish frames compressed on jpeg_out; None publishes raw on image_out.
+    jpeg_quality: int | None = None
 
 
 class V4L2CameraModule(Module):
-    """Publish a UVC camera's colour stream as ``Image`` frames."""
+    """Publish a UVC camera's colour stream as raw ``Image`` frames, or as JPEG when ``jpeg_quality`` is set."""
 
     config: V4L2CameraConfig
 
     image_out: Out[Image]
+    jpeg_out: Out[CompressedImage]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -258,14 +262,15 @@ class V4L2CameraModule(Module):
             # A backend without capture timestamps reports 0, or one on an unknown clock; stamp on arrival.
             ts = (clock.stamp(capture_ms / 1e3) if capture_ms > 0 else None) or time.time()
             t0 = time.perf_counter()
-            self.image_out.publish(
-                Image.from_numpy(
-                    frame,
-                    format=ImageFormat.BGR,
-                    frame_id=self.config.frame_id,
-                    ts=ts,
-                )
+            image = Image.from_numpy(
+                frame, format=ImageFormat.BGR, frame_id=self.config.frame_id, ts=ts
             )
+            if self.config.jpeg_quality is None:
+                self.image_out.publish(image)
+            else:
+                self.jpeg_out.publish(
+                    CompressedImage.from_image(image, quality=self.config.jpeg_quality)
+                )
             dt = time.perf_counter() - t0
             frames += 1
             publish_s += dt

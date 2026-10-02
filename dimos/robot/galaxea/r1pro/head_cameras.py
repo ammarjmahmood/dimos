@@ -70,6 +70,8 @@ class HeadLeftCameraConfig(V4L2CameraConfig):
     fps: float = HEAD_FPS
     fourcc: str = HEAD_FOURCC
     frame_id: str = HEAD_LEFT_FRAME
+    # Raw, both eyes would push ~0.5 GB/s over the transport; JPEG is ~20x smaller.
+    jpeg_quality: int | None = 90
 
 
 class HeadRightCameraConfig(HeadLeftCameraConfig):
