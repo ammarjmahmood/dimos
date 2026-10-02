@@ -35,7 +35,7 @@ from dimos.imitation.collection.episode import (
     EpisodeStatus,
     RecordingState,
 )
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.build import inspect_dataset, run_dataprep
@@ -125,14 +125,14 @@ def _record_session(db_path: Path, executable: Path) -> dict[str, int]:
         name="synthetic",
         robot_type="synthetic",
         observations={
-            name: CollectionFeature(
+            name: FeatureSpec(
                 **feature.model_dump(),
                 message_type=Image if name == "camera" else JointState,
             )
             for name, feature in config.observation.items()
         },
         actions={
-            name: CollectionFeature(**feature.model_dump(), message_type=JointState)
+            name: FeatureSpec(**feature.model_dump(), message_type=JointState)
             for name, feature in config.action.items()
         },
         sync=config.sync,
