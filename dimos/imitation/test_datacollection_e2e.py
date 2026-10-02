@@ -46,6 +46,7 @@ from dimos.imitation.dataprep.core import (
 from dimos.memory.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.utils.testing.waiting import wait_until
 
 pytestmark = [
@@ -134,6 +135,8 @@ def _record_session(db_path: Path) -> None:
     counts = {name: 0 for name in transports}
 
     def publish(name: str, message: Any) -> None:
+        if name == "status":
+            message = String(message.to_json())
         counts[name] += 1
         transports[name].publish(message)
         wait_until(
