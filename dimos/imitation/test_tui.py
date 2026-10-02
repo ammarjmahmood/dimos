@@ -20,10 +20,10 @@ from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.global_config import GlobalConfig
 from dimos.core.module import Module
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.episode_monitor import EpisodeCommand, EpisodeControlSpec
 from dimos.imitation.policy.module import RolloutControlSpec
 from dimos.imitation.tui import CollectionApp, CollectionSession, RolloutApp, RolloutSession
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
 from dimos.porcelain.dimos import Dimos
 
 
@@ -172,3 +172,36 @@ def test_rollout_disconnect_disables_commands_without_stopping_policy(mocker):
         driver.stop.assert_called_once_with()
     finally:
         session.close()
+
+
+def test_discard_reaches_monitor_when_cached_dashboard_state_is_idle(collection_session, mocker):
+    session, _driver, monitor = collection_session
+    app = CollectionApp(session)
+    mocker.patch.object(app, "_refresh")
+    monitor.command.return_value = EpisodeStatus(
+        ts=2.0,
+        state="idle",
+        episodes_saved=0,
+        episodes_discarded=1,
+        last_event="discard",
+        task_label="pick",
+    )
+
+    app.action_discard()
+
+    monitor.command.assert_called_once_with("discard")
+    assert app._status.episodes_discarded == 1
+    assert app._message == "Episode discarded. Reset the scene and try again."
+
+
+def test_discard_with_no_active_episode_reports_authoritative_noop(collection_session, mocker):
+    session, _driver, monitor = collection_session
+    app = CollectionApp(session)
+    mocker.patch.object(app, "_refresh")
+    monitor.command.return_value = monitor.get_status.return_value
+
+    app.action_discard()
+
+    monitor.command.assert_called_once_with("discard")
+    assert app._status.episodes_discarded == 0
+    assert app._message == "No active episode to discard."

@@ -127,3 +127,13 @@ def test_collection_exposes_inherited_viser_without_changing_teleop(tmp_path, mo
     ).module_kwargs("manipulationmodule")
     assert restricted["visualization"] == teleop["visualization"]
     download.assert_not_called()
+
+
+def test_dual_collection_waits_for_accepted_targets_on_all_canonical_joints():
+    [monitor] = [
+        atom for atom in dual_openyam_quest_collection.active_blueprints if atom.name == "episodes"
+    ]
+    assert monitor.kwargs["required_action_joints"] == DUAL_OPENYAM_JOINTS
+    assert "applied_joint_position_command" in {
+        port.name for port in monitor.streams if port.direction == "in"
+    }

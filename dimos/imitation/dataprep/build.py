@@ -31,17 +31,19 @@ from typing import Any, cast
 from mcap.reader import make_reader
 
 from dimos.imitation.dataprep.core import (
+    extract_episodes,
+    get_writer,
+    inspect_episode_quality,
+    inspect_episodes,
+    iter_episode_samples,
+)
+from dimos.imitation.dataprep.schema import (
     DataPrepConfig,
     Episode,
     EpisodeExtractor,
     EpisodeQualityReport,
     Sample,
     Writer,
-    extract_episodes,
-    get_writer,
-    inspect_episode_quality,
-    inspect_episodes,
-    iter_episode_samples,
 )
 from dimos.memory.codecs.base import codec_from_id
 from dimos.memory.store.base import Store

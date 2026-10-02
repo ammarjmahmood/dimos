@@ -27,13 +27,14 @@ from dimos.core.module import Module
 from dimos.core.native_module import NativeModule
 from dimos.core.stream import Out, RemoteIn
 from dimos.imitation.collection import recorder as recorder_module
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recorder import CollectionRecorderConfig, collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.core import OutputConfig, SyncConfig
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.std_msgs.String import String
 from dimos.robot.get_all_blueprints import get_by_name
 
 
@@ -47,7 +48,7 @@ def _profile(camera_count):
         robot_type="test",
         observations={
             **{
-                f"images.{i}": CollectionFeature(
+                f"images.{i}": FeatureSpec(
                     stream=f"camera_{i}",
                     message_type=Image,
                     field="data",
@@ -57,7 +58,7 @@ def _profile(camera_count):
                 )
                 for i in range(camera_count)
             },
-            "state": CollectionFeature(
+            "state": FeatureSpec(
                 stream="measured",
                 message_type=JointState,
                 field="position",
@@ -67,7 +68,7 @@ def _profile(camera_count):
             ),
         },
         actions={
-            "action": CollectionFeature(
+            "action": FeatureSpec(
                 stream="measured",
                 message_type=JointState,
                 field="position",
@@ -104,7 +105,7 @@ def test_factory_exposes_all_typed_inputs_before_autoconnect(count, tmp_path):
     assert {s.name: s.type for s in atom.streams if s.name != "tf"} == {
         **{f"camera_{i}": Image for i in range(count)},
         "measured": JointState,
-        "status": EpisodeStatus,
+        "status": String,
     }
     assert len([s for s in atom.streams if s.name == "measured"]) == 1
     # Autoconnect groups remapped ports by (name, message type).
@@ -161,7 +162,7 @@ def test_recorder_resolves_every_connected_stream(recorder, mocker):
         "camera_1": "jpeg",
         "measured": "lcm",
         "commanded": "lcm",
-        "status": "lcm",
+        "status": "json",
     }
 
 
@@ -373,10 +374,10 @@ def test_external_package_uses_standard_blueprint_entrypoint(tmp_path, monkeypat
     (package / "collection.py").write_text(
         "from dimos.core.coordination.blueprints import autoconnect\n"
         "from dimos.imitation.collection.recorder import CollectionRecorderConfig, collection_recorder\n"
-        "from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile\n"
+        "from dimos.imitation.collection.profile import CollectionProfile\nfrom dimos.imitation.dataprep.schema import FeatureSpec\n"
         "from dimos.imitation.dataprep.core import SyncConfig\n"
         "from dimos.msgs.sensor_msgs.JointState import JointState\n"
-        "feature = CollectionFeature(stream='joints', message_type=JointState, field='position', dtype='float32', shape=(1,), names=['joint'])\n"
+        "feature = FeatureSpec(stream='joints', message_type=JointState, field='position', dtype='float32', shape=(1,), names=['joint'])\n"
         "profile = CollectionProfile(name='vendor', robot_type='vendor', observations={'state': feature}, actions={'action': feature}, sync=SyncConfig(anchor='state', rate_hz=30, tolerance_ms=20))\n"
         "collect = autoconnect(collection_recorder(profile=profile))\n"
     )

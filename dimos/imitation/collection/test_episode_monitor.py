@@ -30,9 +30,11 @@ from pydantic import ValidationError
 import pytest
 import pytest_mock
 
+from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.episode_monitor import EpisodeMonitorModule
-from dimos.msgs.imitation_msgs.EpisodeStatus import EpisodeStatus
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
+from dimos.robot.manipulators.dual_openyam.joints import DUAL_OPENYAM_JOINTS
 from dimos.teleop.webxr.controller_types import BUTTON_ALIASES, Buttons
 
 
@@ -69,7 +71,9 @@ def make_monitor(
 
 def _events(monitor: EpisodeMonitorModule) -> list[EpisodeStatus]:
     """The EpisodeStatus objects published on the monitor's `status` port."""
-    return [call.args[0] for call in monitor.status.publish.call_args_list]  # type: ignore[attr-defined]
+    return [
+        EpisodeStatus.from_json(call.args[0].data) for call in monitor.status.publish.call_args_list
+    ]  # type: ignore[attr-defined]
 
 
 def _press(monitor: EpisodeMonitorModule, alias: str) -> None:
@@ -281,3 +285,51 @@ def test_stop_waits_for_in_flight_transition_and_blocks_later_transitions(
     event_count = len(_events(m))
     m._transition("start", 3.0)
     assert len(_events(m)) == event_count
+
+
+@pytest.mark.parametrize("command", ["start", "toggle"])
+def test_episode_start_requires_accepted_targets_for_every_action_joint(make_monitor, command):
+    monitor = make_monitor(required_action_joints=DUAL_OPENYAM_JOINTS)
+
+    with pytest.raises(ValueError, match="accepted targets"):
+        monitor.command(command)
+
+    assert monitor.get_status().state == "idle"
+    assert _events(monitor) == []
+
+
+def test_arm_only_targets_do_not_allow_start_until_both_grippers_are_accepted(make_monitor):
+    monitor = make_monitor(required_action_joints=DUAL_OPENYAM_JOINTS)
+    monitor._on_joint_position_command(
+        JointState(ts=1.0, name=DUAL_OPENYAM_JOINTS[:12], position=[0.1] * 12)
+    )
+    with pytest.raises(ValueError, match="left_arm/gripper.*right_arm/gripper"):
+        monitor._transition("start", 2.0)
+    assert _events(monitor) == []
+
+    monitor._on_joint_position_command(
+        JointState(ts=2.0, name=DUAL_OPENYAM_JOINTS[12:], position=[0.25, 0.75])
+    )
+    status = monitor._transition("start", 3.0)
+
+    assert status.state == "recording"
+    assert [event.last_event for event in _events(monitor)] == ["start"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        JointState(ts=5.0, name=DUAL_OPENYAM_JOINTS, position=[0.0] * 14),
+        JointState(ts=1.0, name=DUAL_OPENYAM_JOINTS, position=[float("nan")] * 14),
+        JointState(ts=1.0, name=DUAL_OPENYAM_JOINTS, position=[]),
+    ],
+)
+def test_invalid_or_future_targets_cannot_initialize_an_episode(make_monitor, command):
+    monitor = make_monitor(required_action_joints=DUAL_OPENYAM_JOINTS)
+    monitor._on_joint_position_command(command)
+
+    with pytest.raises(ValueError, match="missing accepted targets"):
+        monitor._transition("start", 2.0)
+
+    assert monitor.get_status().state == "idle"
+    assert _events(monitor) == []

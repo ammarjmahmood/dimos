@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::mapper::{Mapper, Pose};
 use crate::voxel_ray_tracer::Config;
+use dimos_module::pointcloud::extract_xyz;
 use dimos_module::{error_throttled, warn_throttled, Input, Module, Output, Tf};
 use lcm_msgs::geometry_msgs::{Point, Pose as PoseMsg, PoseStamped, Quaternion};
 use lcm_msgs::sensor_msgs::{PointCloud2, PointField};
@@ -61,6 +62,18 @@ pub struct RayTracingVoxelMap {
     last_clear_mask_stamp: f64,
 }
 
+/// Whether transforms have already moved past a cloud's stamp, so the one it needs will never
+/// arrive: waiting on it would cap a backed-up queue's drain rate at 1/TF_WAIT_TIMEOUT.
+fn transform_is_past(stamp: f64, latest_tf: Option<f64>, tolerance: f64) -> bool {
+    latest_tf.is_some_and(|latest| latest > stamp + tolerance)
+}
+
+/// Whether a cloud is more than `max_age_s` older than the newest transform for its frame (0 keeps all).
+/// Aged against the transforms rather than the wall clock, so a replay ages the same way.
+fn is_stale(stamp: f64, latest_tf: Option<f64>, max_age_s: f64) -> bool {
+    max_age_s > 0.0 && latest_tf.is_some_and(|latest| latest - stamp > max_age_s)
+}
+
 impl RayTracingVoxelMap {
     async fn init_mapper(&mut self) {
         self.mapper = Some(Mapper::new(self.config.clone()));
@@ -70,14 +83,26 @@ impl RayTracingVoxelMap {
         // Register with the transform nearest the cloud stamp, waiting briefly
         // for one still in flight rather than dropping the cloud.
         let stamp = time_secs(&msg.header.stamp);
-        let Some(tf_pose) = self
+        let tolerance = self.config.tf_match_tolerance_s;
+        let lookup = self
             .tf
             .lookup(&self.config.world_frame, &msg.header.frame_id)
             .at(stamp)
-            .tolerance(self.config.tf_match_tolerance_s)
-            .within(TF_WAIT_TIMEOUT)
-            .await
-        else {
+            .tolerance(tolerance);
+        let latest = self
+            .tf
+            .get_latest(&self.config.world_frame, &msg.header.frame_id)
+            .map(|latest| latest.ts);
+        if is_stale(stamp, latest, self.config.max_cloud_age_s) {
+            warn_throttled!(Duration::from_secs(5), cloud_frame = %msg.header.frame_id, "Skipped a cloud older than max_cloud_age_s: the map is behind and catching up.");
+            return;
+        }
+        let found = if transform_is_past(stamp, latest, tolerance) {
+            lookup.get()
+        } else {
+            lookup.within(TF_WAIT_TIMEOUT).await
+        };
+        let Some(tf_pose) = found else {
             warn!(
                 stamp,
                 world_frame = %self.config.world_frame,
@@ -99,7 +124,7 @@ impl RayTracingVoxelMap {
         };
 
         let points = match extract_xyz(&msg) {
-            Ok(p) => p,
+            Ok(p) => p.into_iter().map(|[x, y, z]| (x, y, z)).collect::<Vec<_>>(),
             Err(e) => {
                 warn_throttled!(
                     Duration::from_secs(1),
@@ -207,7 +232,7 @@ impl RayTracingVoxelMap {
             return;
         }
         let points = match extract_xyz(&msg) {
-            Ok(p) => p,
+            Ok(p) => p.into_iter().map(|[x, y, z]| (x, y, z)).collect::<Vec<_>>(),
             Err(e) => {
                 warn_throttled!(
                     Duration::from_secs(1),
@@ -231,72 +256,6 @@ const TF_WAIT_TIMEOUT: Duration = Duration::from_millis(50);
 
 fn time_secs(t: &Time) -> f64 {
     t.sec as f64 + t.nsec as f64 * 1e-9
-}
-
-struct ExtractError(&'static str);
-impl std::fmt::Display for ExtractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-fn extract_xyz(msg: &PointCloud2) -> Result<Vec<(f32, f32, f32)>, ExtractError> {
-    let mut x_off: Option<usize> = None;
-    let mut y_off: Option<usize> = None;
-    let mut z_off: Option<usize> = None;
-    for f in &msg.fields {
-        if f.datatype != PointField::FLOAT32 as u8 {
-            continue;
-        }
-        match f.name.as_str() {
-            "x" => x_off = Some(f.offset as usize),
-            "y" => y_off = Some(f.offset as usize),
-            "z" => z_off = Some(f.offset as usize),
-            _ => {}
-        }
-    }
-    let xo = x_off.ok_or(ExtractError("missing float32 x field"))?;
-    let yo = y_off.ok_or(ExtractError("missing float32 y field"))?;
-    let zo = z_off.ok_or(ExtractError("missing float32 z field"))?;
-
-    let n = (msg.width as usize) * (msg.height as usize);
-    let step = msg.point_step as usize;
-    if step == 0 {
-        return Err(ExtractError("point_step is 0"));
-    }
-    if msg.data.len() < n * step {
-        return Err(ExtractError(
-            "data buffer shorter than width*height*point_step",
-        ));
-    }
-    if xo + 4 > step || yo + 4 > step || zo + 4 > step {
-        return Err(ExtractError(
-            "xyz field offsets do not fit within point_step",
-        ));
-    }
-    if msg.is_bigendian {
-        return Err(ExtractError("big-endian point data not supported"));
-    }
-
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let base = i * step;
-        let x = read_f32_le(&msg.data, base + xo);
-        let y = read_f32_le(&msg.data, base + yo);
-        let z = read_f32_le(&msg.data, base + zo);
-        if x.is_finite() && y.is_finite() && z.is_finite() {
-            out.push((x, y, z));
-        }
-    }
-    Ok(out)
-}
-
-#[inline]
-fn read_f32_le(buf: &[u8], off: usize) -> f32 {
-    let bytes: [u8; 4] = buf[off..off + 4]
-        .try_into()
-        .expect("bounds checked by caller");
-    f32::from_le_bytes(bytes)
 }
 
 fn write_point(data: &mut Vec<u8>, n: &mut i32, x: f32, y: f32, z: f32) {
@@ -384,6 +343,7 @@ mod tests {
             region_percentile: 95.0,
             world_frame: "world".to_string(),
             tf_match_tolerance_s: 0.1,
+            max_cloud_age_s: 0.0,
             worker_threads: 4,
         };
         let mut map = VoxelMap::default();
@@ -416,6 +376,22 @@ mod tests {
         )
     }
 
+    #[test]
+    fn a_cloud_waits_for_its_transform_only_while_it_could_still_arrive() {
+        assert!(!transform_is_past(100.0, None, 0.1));
+        assert!(!transform_is_past(100.0, Some(100.05), 0.1));
+        assert!(transform_is_past(100.0, Some(100.5), 0.1));
+    }
+
+    #[test]
+    fn a_cloud_is_stale_by_the_newest_transform_not_the_wall_clock() {
+        assert!(!is_stale(100.0, None, 1.0));
+        assert!(!is_stale(100.0, Some(100.5), 1.0));
+        assert!(is_stale(100.0, Some(101.5), 1.0));
+        // 0 keeps every cloud, however old.
+        assert!(!is_stale(100.0, Some(500.0), 0.0));
+    }
+
     /// The clear-mask handler names voxels by decoding a cloud and quantizing
     /// it. Both halves have to agree with how returns were quantized on the way
     /// in, or a mask silently clears nothing.
@@ -431,6 +407,7 @@ mod tests {
         let Ok(points) = extract_xyz(&cloud) else {
             panic!("clear mask cloud must decode");
         };
+        let points: Vec<(f32, f32, f32)> = points.into_iter().map(|[x, y, z]| (x, y, z)).collect();
         let keys: Vec<VoxelKey> = metric_voxel_keys(points, 1.0).collect();
 
         assert_eq!(keys, occupied);
