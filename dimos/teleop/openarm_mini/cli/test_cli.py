@@ -47,6 +47,19 @@ def test_openarm_mini_command_help_needs_no_hardware(command: str) -> None:
     assert result.exit_code == 0, result.output
 
 
+def test_calibrate_accepts_only_the_selected_side_port(mocker) -> None:
+    run = mocker.patch.object(calibrate, "_run")
+
+    result = runner.invoke(
+        app,
+        ["calibrate", "--side", "right", "--port-right", "/dev/right", "--baudrate", "1000000"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["port_left"] is None
+    assert run.call_args.kwargs["port_right"] == "/dev/right"
+
+
 def test_calibrate_delegates_parsed_options(mocker) -> None:
     run = mocker.patch.object(calibrate, "_run")
 

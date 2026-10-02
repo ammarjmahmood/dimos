@@ -55,8 +55,8 @@ DEFAULT_FLIPS_BY_SIDE: dict[OpenArmMiniSide, frozenset[str]] = {
 
 def main(
     side: Literal["left", "right", "both"] = typer.Option("both"),
-    port_left: str = typer.Option(..., help="Left leader Feetech serial port."),
-    port_right: str = typer.Option(..., help="Right leader Feetech serial port."),
+    port_left: str | None = typer.Option(None, help="Left leader Feetech serial port."),
+    port_right: str | None = typer.Option(None, help="Right leader Feetech serial port."),
     baudrate: int = typer.Option(..., help="Feetech serial baudrate."),
     left_calibration_path: Path = typer.Option(default_calibration_path("left")),
     right_calibration_path: Path = typer.Option(default_calibration_path("right")),
@@ -99,8 +99,8 @@ def main(
 def _run(
     *,
     side: Literal["left", "right", "both"],
-    port_left: str,
-    port_right: str,
+    port_left: str | None,
+    port_right: str | None,
     baudrate: int,
     left_calibration_path: Path,
     right_calibration_path: Path,
@@ -119,7 +119,7 @@ def _run(
     print("It never starts ControlCoordinator or connects follower OpenArm hardware.")
     print("Place each selected leader side in its natural zero pose before calibration.")
     for selected_side in sides:
-        port = port_left if selected_side == "left" else port_right
+        port = _selected_port(selected_side, port_left, port_right)
         path = left_calibration_path if selected_side == "left" else right_calibration_path
         flip_arg = left_flips if selected_side == "left" else right_flips
         flips = _parse_flip_overrides(flip_arg, selected_side)
@@ -127,6 +127,13 @@ def _run(
             _live_readout(selected_side, port, path, baudrate)
         else:
             _calibrate_side(selected_side, port, path, baudrate, flips=flips)
+
+
+def _selected_port(side: OpenArmMiniSide, port_left: str | None, port_right: str | None) -> str:
+    port = port_left if side == "left" else port_right
+    if port is None:
+        raise typer.BadParameter(f"--port-{side} is required for --side {side}")
+    return port
 
 
 def _calibrate_side(

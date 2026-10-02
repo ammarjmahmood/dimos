@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import typer
 
 from dimos.teleop.openarm_mini.calibration import OPENARM_MINI_ARM_JOINT_NAMES, load_calibration
 from dimos.teleop.openarm_mini.cli.calibrate import (
@@ -25,6 +26,7 @@ from dimos.teleop.openarm_mini.cli.calibrate import (
     _capture_zero_calibration,
     _format_calibration_confirmation,
     _parse_flip_overrides,
+    _run,
 )
 
 
@@ -108,3 +110,18 @@ class _FakeRawReader:
 
     def read_raw_positions(self, _motor_ids_by_name: object) -> dict[str, int]:
         return self._snapshot
+
+
+def test_run_rejects_a_selected_side_without_its_port(tmp_path: Path) -> None:
+    with pytest.raises(typer.BadParameter, match="--port-right is required"):
+        _run(
+            side="right",
+            port_left="/dev/left",
+            port_right=None,
+            baudrate=1_000_000,
+            left_calibration_path=tmp_path / "left",
+            right_calibration_path=tmp_path / "right",
+            left_flips=None,
+            right_flips=None,
+            live_readout=False,
+        )

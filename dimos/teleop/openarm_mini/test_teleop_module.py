@@ -442,6 +442,68 @@ def test_tick_suppresses_failed_read_and_recovers(
     publish.assert_called_once()
 
 
+def test_tick_does_not_publish_when_stop_arrives_during_the_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: Any,
+) -> None:
+    left_path, right_path = _write_calibrations(tmp_path)
+    left_bus = _FakeBus(_readings())
+    _patch_buses(monkeypatch, {"left": left_bus})
+
+    with _connected_module(
+        _configured_config(left_path, right_path, enabled_sides=("left",))
+    ) as module:
+        publish = mocker.patch.object(module.joint_command, "publish")
+
+        def read_then_stop() -> dict[str, float]:
+            module._stop_event.set()
+            return _readings()
+
+        mocker.patch.object(left_bus, "read_positions", side_effect=read_then_stop)
+        module.tick()
+
+    publish.assert_not_called()
+
+
+def test_stop_keeps_a_live_worker_and_start_does_not_duplicate_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mocker: Any,
+) -> None:
+    left_path, right_path = _write_calibrations(tmp_path)
+    _patch_buses(monkeypatch, {"left": _FakeBus(_readings())})
+    monkeypatch.setattr(teleop_module, "DEFAULT_THREAD_JOIN_TIMEOUT", 0.01)
+    module = _module(
+        _configured_config(left_path, right_path, tick_period_s=10.0, enabled_sides=("left",))
+    )
+    release = threading.Event()
+    mocker.patch.object(module, "tick", side_effect=lambda: release.wait(5.0))
+    starts: list[threading.Thread] = []
+    original_start = threading.Thread.start
+
+    def record_start(thread: threading.Thread) -> None:
+        starts.append(thread)
+        original_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", record_start)
+
+    try:
+        module.start()
+        module.stop()
+        stuck = module._thread
+        assert stuck is not None and stuck.is_alive()
+
+        module.start()
+        assert len(starts) == 1
+    finally:
+        release.set()
+        if module._thread is not None:
+            module._thread.join(5.0)
+        module.stop()
+    assert module._thread is None
+
+
 def test_start_is_idempotent_and_stop_cleans_worker_and_bus(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

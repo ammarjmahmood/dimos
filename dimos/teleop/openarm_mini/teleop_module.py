@@ -167,7 +167,10 @@ class OpenArmMiniTeleopModule(Module):
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(DEFAULT_THREAD_JOIN_TIMEOUT)
-            self._thread = None
+            if self._thread.is_alive():
+                logger.warning("OpenArm Mini teleop polling worker did not exit in time")
+            else:
+                self._thread = None
         self.disconnect_teleop()
         super().stop()
 
@@ -248,8 +251,9 @@ class OpenArmMiniTeleopModule(Module):
         if self._stop_event.is_set():
             return
         command = self.get_current_command()
-        if command is not None:
-            self.joint_command.publish(command)
+        if command is None or self._stop_event.is_set():
+            return
+        self.joint_command.publish(command)
 
     def _run_loop(self) -> None:
         next_tick_time = time.monotonic()

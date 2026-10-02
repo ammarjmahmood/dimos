@@ -90,7 +90,6 @@ when needed:
 dimos hardware feetech-leader calibrate \
   --side left \
   --port-left <left-feetech-port> \
-  --port-right <right-feetech-port> \
   --baudrate <feetech-baudrate> \
   --left-flips joint_1,joint_3,joint_4,joint_5,joint_6,joint_7
 ```
@@ -111,7 +110,6 @@ To inspect calibrated leader readings without starting robot control:
 dimos hardware feetech-leader calibrate \
   --side left \
   --port-left <left-feetech-port> \
-  --port-right <right-feetech-port> \
   --baudrate <feetech-baudrate> \
   --live-readout
 ```
