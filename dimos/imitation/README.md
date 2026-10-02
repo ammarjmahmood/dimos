@@ -111,3 +111,5 @@ Guide the arm and gripper by hand. This Blueprint uses gravity compensation,
 zero position stiffness, joint damping, and a passive gripper. State and action
 both project the measured joint positions. Use `EpisodeControlSpec` to start,
 save, or discard episodes; support the arm before stopping the runtime.
+
+See the [offline alignment guide](/dimos/imitation/dataprep/README.md) and [isolated LeRobot exporter](/dimos/imitation/dataprep/lerobot.md) for the dataset contract.
