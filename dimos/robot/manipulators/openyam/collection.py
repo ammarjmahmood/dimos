@@ -14,8 +14,9 @@
 
 """OpenYAM collection presets, safe to import without robot hardware."""
 
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.dataprep.core import QualityConfig, SourceKind, SyncConfig
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.openyam.joints import OPENYAM_JOINTS
@@ -28,7 +29,7 @@ def _profile(
         name=name,
         robot_type="openyam",
         observations={
-            "observation.images.wrist": CollectionFeature(
+            "observation.images.wrist": FeatureSpec(
                 stream="wrist_image",
                 message_type=Image,
                 field="data",
@@ -36,7 +37,7 @@ def _profile(
                 shape=(480, 640, 3),
                 names=["height", "width", "channels"],
             ),
-            "observation.state": CollectionFeature(
+            "observation.state": FeatureSpec(
                 stream="coordinator_joint_state",
                 message_type=JointState,
                 field="position",
@@ -46,7 +47,7 @@ def _profile(
             ),
         },
         actions={
-            "action": CollectionFeature(
+            "action": FeatureSpec(
                 stream=action_stream,
                 source_kind=action_source_kind,
                 message_type=JointState,
