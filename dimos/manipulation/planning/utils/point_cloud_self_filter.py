@@ -25,6 +25,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from numpy.typing import NDArray
 from pydantic import Field
 import trimesh
 import yourdfpy  # type: ignore[import-untyped]
@@ -48,8 +49,8 @@ logger = setup_logger()
 @dataclass(frozen=True)
 class _CollisionGeometry:
     link: str
-    link_from_geometry: np.ndarray
-    clear_samples: np.ndarray
+    link_from_geometry: NDArray[np.float64]
+    clear_samples: NDArray[np.float64]
 
 
 class PointCloudSelfFilterConfig(ModuleConfig):
@@ -120,7 +121,11 @@ class PointCloudSelfFilter(Module):
         """Buffer full model state; out-of-order arrivals remain timestamped."""
         with self._filter_lock:
             if np.isfinite(state.ts):
+                self._states.remove_by_timestamp(state.ts)
                 self._states.add(JointState(state))
+                latest = self._states.last()
+                if latest is not None:
+                    self._states.prune_old(latest.ts - self.config.state_history_s)
 
     def _filter_capture(self, cloud: PointCloud2) -> tuple[PointCloud2, PointCloud2] | None:
         config = self.config
@@ -201,7 +206,7 @@ class PointCloudSelfFilter(Module):
         self.voxel_clear_mask.publish(clear_mask)
         self.filtered_pointcloud.publish(filtered)
 
-    def _capture_configuration(self, stamp: float) -> np.ndarray | None:
+    def _capture_configuration(self, stamp: float) -> NDArray[np.float64] | None:
         state = self._states.find_closest(stamp, self.config.state_tolerance_s)
         positions: dict[str, float] = {}
         if state is not None:
@@ -308,7 +313,7 @@ class PointCloudSelfFilter(Module):
 
     def _clear_samples(
         self, mesh: trimesh.Trimesh, shape: str, dimensions: tuple[float, ...]
-    ) -> np.ndarray:
+    ) -> NDArray[np.float64]:
         """Grid points covering the geometry, at map resolution.
 
         A cell whose center is outside the shape can still be occupied by it, so
@@ -360,12 +365,12 @@ def _geometry_mesh(
 
 
 def _clear_volume_mask(
-    points: np.ndarray,
+    points: NDArray[np.float64],
     shape: str,
     dimensions: tuple[float, ...],
     mesh: trimesh.Trimesh,
     padding: float,
-) -> np.ndarray:
+) -> NDArray[np.bool_]:
     """Precompute occupied volume samples for clearing, never classify sensor points."""
     if shape == "box":
         half_size = np.asarray(dimensions, dtype=np.float64) / 2.0
@@ -381,9 +386,7 @@ def _clear_volume_mask(
             & (np.abs(points[:, 2]) <= length / 2.0 + padding)
         )
 
-    # Exact mesh distance is expensive for a full RGB-D cloud. Reject points
-    # outside the padded mesh bounds first; robot links occupy only a small
-    # fraction of the camera view.
+    # Reject candidates outside the padded bounds before mesh volume sampling.
     padded_lower = mesh.bounds[0] - padding
     padded_upper = mesh.bounds[1] + padding
     candidates = np.all((points >= padded_lower) & (points <= padded_upper), axis=1)
@@ -396,7 +399,9 @@ def _clear_volume_mask(
     return inside
 
 
-def _transform_points(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
+def _transform_points(
+    points: NDArray[np.float32] | NDArray[np.float64], transform: NDArray[np.float64]
+) -> NDArray[np.float64]:
     if not len(points):
         return np.empty((0, 3), dtype=np.float64)
     rotation = transform[:3, :3]

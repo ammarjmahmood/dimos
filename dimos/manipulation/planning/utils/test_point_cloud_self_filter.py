@@ -331,3 +331,24 @@ def test_real_mesh_surface_is_removed_and_its_interior_is_cleared(make_filter, t
     assert result is not None
     np.testing.assert_allclose(result[0].points_f32(), [[0.2, 0, 0]])
     assert (0, 0, 0) in _keys(result[1], 0.05)
+
+
+def test_late_state_cannot_resurrect_expired_history(make_filter):
+    module = make_filter(urdf_xml=_joint_robot("prismatic"), state_history_s=1.0)
+    _place_arm(module, (0, 0, 0), 1.0)
+    module.add_joint_state(JointState(ts=3.0, name=["shoulder"], position=[0.5]))
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.5]))
+
+    assert module.filter_cloud(_cloud([[0.5, 0, 0]], ts=1.0)) is None
+
+
+def test_replacement_at_same_timestamp_uses_the_corrected_state(make_filter):
+    module = make_filter(urdf_xml=_joint_robot("prismatic"))
+    _place_arm(module, (0, 0, 0), 1.0)
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.0]))
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.5]))
+
+    result = module.filter_cloud(_cloud([[0.5, 0, 0], [0, 0, 0]]))
+
+    assert result is not None
+    np.testing.assert_allclose(result[0].points_f32(), [[0, 0, 0]])
