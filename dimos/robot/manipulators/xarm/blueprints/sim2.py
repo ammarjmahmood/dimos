@@ -42,11 +42,15 @@ from dimos.visualization.rerun.urdf_robot import (
 if global_config.simulation and global_config.simulation != "mujoco":
     raise ValueError("xarm-perception-sim2 supports --simulation mujoco")
 
-# One resolution for the whole mapping chain, the same 2.5 cm xarm-grasp uses.
-# The self filter's clear mask, the mapper's cells and the planner's octree must
-# all agree: a mismatched mask names cells the map does not hold, and a
-# mismatched octree does not line up with what was mapped.
-XARM7_SIM2_VOXEL_SIZE = 0.025
+# One resolution for the whole mapping chain. The self filter's clear mask, the
+# mapper's cells and the planner's octree must all agree: a mismatched mask
+# names cells the map does not hold, and a mismatched octree does not line up
+# with what was mapped. 1 cm, finer than xarm-grasp's 2.5 cm, because the
+# planner collides the gripper with every cell it is given: on a cluttered
+# table a 2.5 cm cell adds 1.25 cm to each face of a neighbour, which is most
+# of the gap a tabletop pick has. The mapper's fine layer cannot serve instead:
+# it is emitted only inside the current local region, not the whole workspace.
+XARM7_SIM2_VOXEL_SIZE = 0.01
 
 # The scene is always simulated: this stack has no real-hardware form, and
 # --scene-package / --scene-spawn pick where the arm stands. The wrist camera

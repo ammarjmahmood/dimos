@@ -73,7 +73,7 @@ wrist camera is `Camera("wrist_camera", camera="wrist_camera", pointcloud=True)`
 stamped like the depth image. The blueprint puts that cloud on
 `wrist_camera/pointcloud`, where `PointCloudSelfFilter` drops the arm's own
 returns and names the cells the arm occupies, `RayTracingVoxelMap` builds a
-2.5 cm voxel map of what the camera has seen (`global_map`), and
+1 cm voxel map of what the camera has seen (`global_map`), and
 `ManipulationModule` holds that map as its `mapping/voxel-map` octree obstacle,
 so `plan_to_pose` avoids mapped objects. All three use the same `world` frame
 and voxel size. In the planner's viser view the octree appears under
