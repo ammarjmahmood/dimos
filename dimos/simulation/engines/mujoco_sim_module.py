@@ -59,6 +59,10 @@ from dimos.simulation.engines.mujoco_engine import (
     MujocoEngine,
     RaycastLidarConfig,
 )
+from dimos.simulation.engines.mujoco_evaluation import (
+    MujocoEvaluationRecorder,
+    MujocoEvaluationState,
+)
 from dimos.simulation.engines.mujoco_shm import (
     CMD_MODE_PD_TAU,
     ManipShmWriter,
@@ -253,6 +257,9 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     reset_joint_positions: list[float] | None = None
     headless: bool = False
     tracked_bodies: list[str] = Field(default_factory=list)
+    evaluation_robot_body: str | None = None
+    evaluation_sites: list[str] = Field(default_factory=list)
+    evaluation_geoms: list[str] = Field(default_factory=list)
     dof: int = 7
 
     # Camera config (matches former MujocoCameraConfig).
@@ -334,6 +341,7 @@ class MujocoSimModule(
     # this to translate the robot in world space.
     odom: Out[PoseStamped]
     tf: Out[TFMessage]
+    evaluation_state: Out[MujocoEvaluationState]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -350,6 +358,8 @@ class MujocoSimModule(
         self._shm_ready_signaled = False
         self._latest_frame_ts: float | None = None
         self._missing_bodies: set[str] = set()
+        self._evaluation_recorder: MujocoEvaluationRecorder | None = None
+        self._last_evaluation_time = -math.inf
 
         # IMU sensor slices into MjData.sensordata, resolved once at start.
         # None if the MJCF has no recognized IMU sensors (e.g. arm-only sims).
@@ -506,6 +516,16 @@ class MujocoSimModule(
             engine_kwargs["spawn_z"] = self.config.spawn_z
             engine_kwargs["spawn_yaw"] = self.config.spawn_yaw
         self._engine = MujocoEngine(**engine_kwargs)
+        self._evaluation_recorder = None
+        if self.config.evaluation_robot_body is not None:
+            self._evaluation_recorder = MujocoEvaluationRecorder(
+                self._engine.model,
+                bodies=self.config.tracked_bodies,
+                sites=self.config.evaluation_sites,
+                geoms=self.config.evaluation_geoms,
+                robot_body=self.config.evaluation_robot_body,
+            )
+            self._last_evaluation_time = -math.inf
 
         # Detect gripper (extra joint beyond dof).
         dof = self.config.dof
@@ -778,6 +798,12 @@ class MujocoSimModule(
         This stays in the module so odom/IMU continue to flow through normal
         typed ports while the whole-body adapter consumes joint state via SHM.
         """
+        now = time.monotonic()
+        if self._evaluation_recorder is not None and now - self._last_evaluation_time >= 0.1:
+            self.evaluation_state.publish(
+                self._evaluation_recorder.capture(engine.data, time.time())
+            )
+            self._last_evaluation_time = now
         if self._sim_hooks is not None:
             self._sim_hooks.post_step(engine)
         shm = self._shm

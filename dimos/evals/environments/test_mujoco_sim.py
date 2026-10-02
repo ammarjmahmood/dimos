@@ -61,6 +61,10 @@ def test_launch_flags(monkeypatch):
     environment(scene=Path("scenes/table.xml")).configure_launch(proc)
     assert proc.global_args[-2:] == ["--mujoco-scene", str(Path("scenes/table.xml").resolve())]
 
+    proc = DimosCliCall()
+    environment(base_height=0.912).configure_launch(proc)
+    assert proc.global_args[-2:] == ["--xarm7-sim-base-height", "0.912"]
+
     monkeypatch.setenv("MUJOCOSIMMODULE__HEADLESS", "false")
     proc = DimosCliCall()
     environment(

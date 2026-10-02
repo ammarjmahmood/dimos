@@ -145,6 +145,7 @@ class GlobalConfig(BaseSettings):
     dimsim_port: int = 8090
     dimsim_headless: bool = True
     mujoco_scene: str | None = None
+    xarm7_sim_base_height: float = Field(default=0.12, ge=0, allow_inf_nan=False)
     local_relay: bool = False
     relay_url: str | None = None
     """HTTP URL of a relay started elsewhere (e.g. http://localhost:7780); the

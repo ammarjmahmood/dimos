@@ -472,6 +472,76 @@ instead of its default `scene.xml`. The planner's base pose is
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
 modules disabled: pick up the cylinder, then put the red ball on top of it.
 
+### Robosuite-derived xArm scenes
+
+The `robosuite_xarm` LFS package contains six portable scenes with dimos's existing
+xArm7, gripper, wrist camera and actuators. No robosuite runtime is required.
+One suite contains six independent cases; each case chooses its own scene and
+starts a fresh environment.
+
+| Scene tag | Task | Success check |
+| --- | --- | --- |
+| `lift` | Lift and hold the red cube by at least 5 cm | Height above its resting position and robot contact |
+| `door` | Open and release the door | Panel rotated at least 0.3 rad relative to the frame |
+| `pick_place` | Place the can upright at its matching marker | Destination position, resting height, upright orientation and release |
+| `stack` | Stack red on green, then release | Alignment, resting heights, cube contact and release |
+| `tool_hang` | Assemble the frame and hang the wrench | Stand/frame assembly, hook threaded through the larger hole, contact and release |
+| `nut_assembly` | Seat the square nut on its peg | Peg contained in the hole, table contact, resting height and release |
+
+```bash skip
+dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi
+# Run one scene's case:
+dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi --tags door
+```
+
+Grading is binary and requires success throughout the final second, with no more
+than 5 mm translation or 0.05 rad rotation drift. Prompts ask the agent to hold
+the result steady for two seconds. Missing, nonfinite, stale or incomplete
+terminal evidence fails. The Lift threshold uses the table surface plus the
+cube's half-height, avoiding a baseline taken while the initial cube is falling.
+The can must be within 5 cm / 7.5 cm of its marker in X/Y and within 5 mm of its
+resting height. Stack and nut seating use 4 mm height tolerances. These are
+task checks for the fixed exports, not an exact reproduction of robosuite scores.
+
+The suite enables a 10 Hz `evaluation_state` recording from the simulator's
+post-step hook. It captures selected bodies, sites, geoms and contact pairs in
+one physics-thread snapshot. `evaluation_robot_body="link_base"` enables it;
+`evaluation_sites` and `evaluation_geoms` select additional names. Tracking
+includes contact with compound-object descendants. These are internal grading
+records, not additional agent tools. Default simulation blueprints leave this
+recording disabled. The suite waits for it before starting the agent.
+
+#### Scene placement
+
+Select an export using `scene=LfsPath("robosuite_xarm/stack/scene.xml")` and
+`base_height=0.912` in `MujocoEnvironment`. Original full-height tables/bins,
+fixtures, sampled placements and RethinkMount platforms are retained. Each
+workspace is translated horizontally so the robot base is at x=y=0; the surfaces
+remain at world z=0.80-0.82 m and the base is at z=0.912 m.
+
+`--xarm7-sim-base-height` aligns the robot's planning model with the physical base
+placement in the scene XML; it does not move scene geometry. The default compact
+xArm scene keeps its existing 0.12 m base height. `source.json` is provenance only
+and is not loaded as robot configuration.
+
+```bash skip
+python -c 'from dimos.utils.data import get_data; print(get_data("robosuite_xarm"))'
+MUJOCOSIMMODULE__HEADLESS=false dimos --simulation mujoco \
+  --mujoco-scene "$PWD/data/robosuite_xarm/stack/scene.xml" \
+  --xarm7-sim-base-height 0.912 \
+  run xarm-perception-sim mcp-server observe-skill \
+  --disable object-scene-registration-module \
+  --disable pick-and-place-module --disable heuristic-grasp-module
+```
+
+Replace `stack` with any scene tag. Each directory includes portable assets,
+licenses, source metadata and overview/wrist previews. Assets originate from
+robosuite 1.5.2, seed 0, and the dimos xArm7 model. These are adapted workspaces,
+not unchanged robosuite benchmark environments. The source exports were checked
+for loading, rendering, settling, arm/gripper commands and reset. The new suite
+and graders have static/unit validation; autonomous task completion, all target
+reachability and collision-aware plans have not been established for every scene.
+
 ## Running
 
 - **CLI**: `dimos evals run <dotted.suite> --agent <agent-module> [--set model=gpt-4o] [--tags nav] [--limit 5]`
