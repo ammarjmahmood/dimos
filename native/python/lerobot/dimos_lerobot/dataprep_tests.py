@@ -145,3 +145,102 @@ def test_native_writer_rejects_fractional_fps(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="positive integer"):
         write(samples(), config)
+
+
+def numeric_output(path: Path) -> OutputConfig:
+    config = output(path)
+    config.metadata["feature_schema"] = {
+        "observation.state": {"dtype": "float32", "shape": [1], "names": ["joint"]},
+        "action": {"dtype": "float32", "shape": [1], "names": ["joint"]},
+    }
+    return config
+
+
+def numeric_samples(task_label: str | None = "pick") -> Iterator[Sample]:
+    for episode in ("first", "second"):
+        yield Sample(
+            ts=0,
+            episode_id=episode,
+            observation={"observation.state": np.asarray([1], dtype=np.float32)},
+            action={"action": np.asarray([2], dtype=np.float32)},
+            task_label=task_label,
+        )
+
+
+@pytest.mark.parametrize("default_label", [None, "manual range"])
+def test_unlabeled_samples_use_configured_default_task(
+    tmp_path: Path, default_label: str | None
+) -> None:
+    config = numeric_output(tmp_path / "dataset")
+    if default_label is not None:
+        config.metadata["default_task_label"] = default_label
+
+    root = write(numeric_samples(None), config)
+
+    metadata = dataprep.LeRobotDatasetMetadata(repo_id="local/openyam-test", root=root)
+    assert [row["tasks"] for row in metadata.episodes] == [[default_label or "task"]] * 2
+
+
+@pytest.mark.parametrize("explicit_robot", [None, "new-robot"])
+def test_robot_metadata_is_preserved_with_explicit_type_precedence(
+    tmp_path: Path, explicit_robot: str | None
+) -> None:
+    config = numeric_output(tmp_path / "dataset")
+    config.metadata.pop("robot_type")
+    config.metadata["robot"] = "xarm7"
+    if explicit_robot is not None:
+        config.metadata["robot_type"] = explicit_robot
+
+    root = write(numeric_samples(), config)
+
+    assert dataprep.inspect_dataset(root)["robot"] == (explicit_robot or "xarm7")
+
+
+def test_rebuild_replaces_dataset_only_after_success(tmp_path: Path) -> None:
+    config = numeric_output(tmp_path / "dataset")
+    root = write(numeric_samples(), config)
+
+    write(iter([next(numeric_samples("replacement"))]), config)
+
+    summary = dataprep.inspect_dataset(root)
+    assert (summary["episodes"], summary["frames"]) == (1, 1)
+    assert [
+        row["tasks"]
+        for row in dataprep.LeRobotDatasetMetadata(repo_id="local/openyam-test", root=root).episodes
+    ] == [["replacement"]]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["dataset"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_later_episode_failure_preserves_previous_output_and_allows_retry(
+    tmp_path: Path, existing: bool
+) -> None:
+    config = numeric_output(tmp_path / "dataset")
+    if existing:
+        write(numeric_samples("original"), config)
+    valid = list(numeric_samples())
+    invalid = valid[1].model_copy(update={"action": {"action": np.asarray([1, 2])}})
+
+    with pytest.raises(ValueError, match="shape changed"):
+        write(iter([valid[0], invalid]), config)
+
+    if existing:
+        metadata = dataprep.LeRobotDatasetMetadata(repo_id="local/openyam-test", root=config.path)
+        assert [row["tasks"] for row in metadata.episodes] == [["original"]] * 2
+    else:
+        assert not config.path.exists()
+    root = write(numeric_samples("retry"), config)
+    assert dataprep.inspect_dataset(root)["frames"] == 2
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["dataset"]
+
+
+def test_existing_unrelated_directory_is_preserved(tmp_path: Path) -> None:
+    config = numeric_output(tmp_path / "dataset")
+    config.path.mkdir()
+    asset = config.path / "unrelated.txt"
+    asset.write_text("keep me")
+
+    with pytest.raises(FileExistsError, match="LeRobot dataset"):
+        write(numeric_samples(), config)
+
+    assert asset.read_text() == "keep me"
