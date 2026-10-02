@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
 # Each host-supported format package exposes a writer through ``get_writer``.
 Writer = Callable[[Iterator["Sample"], "OutputConfig"], Path]
-Inspector = Callable[[Path], dict[str, Any]]
 
 SourceKind = Literal["snapshot", "joint_position_updates"]
 
@@ -685,23 +684,15 @@ def inspect_episode_quality(
 def get_writer(format_name: str) -> Writer:
     """Lazy-import the format writer's `write` function."""
     if format_name == "lerobot":
-        from dimos.imitation.dataprep.formats.lerobot.writer import write
+        raise RuntimeError(
+            "LeRobot conversion requires its isolated environment; "
+            "use `run_lerobot_dataprep()` or `dimos imitation prepare RECORDING_DIR`"
+        )
     elif format_name == "hdf5":
         from dimos.imitation.dataprep.formats.hdf5.writer import write
     else:
         raise ValueError(f"Unknown format: {format_name!r}")
     return write
-
-
-def get_inspector(format_name: str) -> Inspector:
-    """Lazy-import the format reader's `inspect` function."""
-    if format_name == "lerobot":
-        from dimos.imitation.dataprep.formats.lerobot.reader import inspect
-    elif format_name == "hdf5":
-        from dimos.imitation.dataprep.formats.hdf5.reader import inspect
-    else:
-        raise ValueError(f"Unknown format: {format_name!r}")
-    return inspect
 
 
 def summarize_lengths(lengths: list[int]) -> dict[str, Any]:
