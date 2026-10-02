@@ -39,6 +39,7 @@ from dimos.simulation.behavior.connection import BehaviorConnection
 from dimos.simulation.behavior.probe import BehaviorProbe
 from dimos.simulation.behavior.r1pro_bridge import BehaviorR1ProBridge
 from dimos.simulation.behavior.r1pro_model import MODEL_JOINTS, simulation_model_config
+from dimos.simulation.behavior.radio_bimanual import BimanualRadioManipulationModule
 from dimos.simulation.behavior.radio_motion import (
     RadioCoordinator,
     RadioManipulationModule,
@@ -55,27 +56,45 @@ def radio_blueprint(
     spawn_position: tuple[float, float, float] | None = None,
     spawn_yaw: float = 0.0,
     policy_supervisor: bool = False,
+    bimanual: bool = False,
 ) -> Blueprint:
     if arm not in ("left_arm", "right_arm"):
         raise ValueError("Choose left_arm or right_arm")
     if policy_supervisor and arm != "left_arm":
         raise ValueError("The first policy supervisor supports left_arm only")
+    if bimanual and policy_supervisor:
+        raise ValueError("The first policy supervisor has no bimanual observation/action contract")
     model = simulation_model_config()
-    model.planning_groups = [g for g in model.planning_groups if g.name in (arm, "torso")]
-    # One selected arm per development instance; the scalar SDK gripper binding
-    # refers only to this arm, never to both physical grippers.
+    groups = ("left_arm", "right_arm", "torso") if bimanual else (arm, "torso")
+    model.planning_groups = [g for g in model.planning_groups if g.name in groups]
+    manipulation = BimanualRadioManipulationModule if bimanual else RadioManipulationModule
+    # The single-arm module uses one scalar device binding. The task-local
+    # bimanual module routes explicit arm IDs to separate gripper tasks.
     model.gripper_hardware_id = "r1pro"
     side = arm.split("_", 1)[0]
     # The simulator's coupled gripper controller consumes the first finger's
     # target and physically drives both fingers. The SDK sends one scalar.
     gripper = [coordinator_name(f"{side}_gripper_finger_joint1")]
+    gripper_tasks = (
+        [
+            TaskConfig(
+                name=f"r1pro_{side}_gripper",
+                type="gripper",
+                joint_names=[coordinator_name(f"{side}_gripper_finger_joint1")],
+                priority=20,
+            )
+            for side in ("left", "right")
+        ]
+        if bimanual
+        else [TaskConfig(name="r1pro_gripper", type="gripper", joint_names=gripper, priority=20)]
+    )
     upper = [coordinator_name(n) for n in UPPER_BODY_JOINTS]
     return (
         autoconnect(
             BehaviorConnection.blueprint(
                 task=task,
                 allow_task_changes=False,
-                policy_hide_toggle_markers=policy_supervisor,
+                policy_hide_toggle_markers=policy_supervisor or bimanual,
                 spawn_position=spawn_position,
                 spawn_yaw=spawn_yaw,
                 development_task_spawn=spawn_position is not None,
@@ -98,15 +117,10 @@ def radio_blueprint(
                 ],
                 tasks=[
                     joint_trajectory_task(upper),
-                    TaskConfig(
-                        name="r1pro_gripper",
-                        type="gripper",
-                        joint_names=gripper,
-                        priority=20,
-                    ),
+                    *gripper_tasks,
                 ],
             ).remappings([(RadioCoordinator, "joint_command", "coordinator_joint_command")]),
-            RadioManipulationModule.blueprint(
+            manipulation.blueprint(
                 instance_name="ManipulationModule",
                 model=model,
                 planner=RoboPlanPlannerConfig(),
@@ -114,8 +128,8 @@ def radio_blueprint(
                 trajectory_tasks={"joint_trajectory": upper},
             ).remappings(
                 [
-                    (RadioManipulationModule, "coordinator_joint_state", "planning_joint_state"),
-                    (RadioManipulationModule, "tf", "planning_tf"),
+                    (manipulation, "coordinator_joint_state", "planning_joint_state"),
+                    (manipulation, "tf", "planning_tf"),
                 ]
             ),
             *([RadioPolicyModule.blueprint()] if policy_supervisor else []),
