@@ -156,6 +156,10 @@ impl ChunkMap {
         self.len = 0;
     }
 
+    pub fn reserve_chunks(&mut self, additional: usize) {
+        self.chunks.reserve(additional);
+    }
+
     #[inline]
     pub fn get(&self, key: &VoxelKey) -> Option<&Voxel> {
         self.chunks.get(&chunk_of(*key))?.get(*key)

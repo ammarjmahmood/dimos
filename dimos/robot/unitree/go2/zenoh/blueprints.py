@@ -26,9 +26,15 @@ failure can be bisected by dropping down a level:
   a baked host on the robot publishes their outputs.
 - ``go2-zenoh-motion``: ``local_planner`` + ``trajectory_follower`` replanning over the
   raycaster's local map, the follower reading the required precision off the path stamps.
-- ``go2-zenoh-motion-pointlio``: ``go2-zenoh-motion`` running its own ``PointLioRust``,
+- ``go2-zenoh-motion-pointlio``: ``go2-zenoh-motion`` running its own ``PointLio``,
   for when the MID-360 hangs off this box rather than the robot.
 - ``go2-viewer``: the rerun half alone, as a zenoh client of the robot's router.
+- ``go2-dds-basic``: ``go2-zenoh-basic`` with :class:`GO2DDS` in place of the bridge, for the
+  Jetson (or the Go2 itself) talking DDS to the robot directly.
+- ``go2-dds-motion-pointlio``: ``go2-zenoh-motion-pointlio`` over DDS, GO2DDS being the
+  zenoh router the viewer dials.
+- ``go2-dds-motion-pointlio-relocalization``: ``go2-dds-motion-pointlio`` placed in a premap
+  by :class:`LocalMapRelocalization`, which seeds the raycaster and the planner with it.
 """
 
 import os
@@ -36,29 +42,32 @@ from typing import Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
-from dimos.hardware.sensors.lidar.pointlio.module import PointLioRust
+from dimos.hardware.sensors.lidar.pointlio.module import PointLio
 from dimos.hardware.sensors.lidar.pointlio.pointlio_blueprints import mid360_for_pointlio
-from dimos.mapping.ray_tracing.module import RayTracingVoxelMap, RayTracingVoxelMapConfig
-from dimos.navigation.global_planner.mls_planner.mls_planner_native import (
-    MLSPlannerNative,
-    MLSPlannerNativeConfig,
-)
-from dimos.navigation.global_planner.mls_planner.viz import planner_visual_override
+from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
+from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
+from dimos.navigation.global_planner.viz import nav_static, nav_visual_override
 from dimos.navigation.local_planner.native import LocalPlannerNative
 from dimos.navigation.local_planner.viz import motion_visual_override
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.trajectory_follower.basic.module import BasicPathFollower
 from dimos.navigation.trajectory_follower.fancy.native import TrajectoryFollowerNative
-from dimos.robot.unitree.go2.constants import (
-    BASE_LINK_HEIGHT,
-    ROBOT_HEIGHT,
-    ROBOT_LENGTH,
-    ROBOT_WIDTH,
+from dimos.protocol.service.zenohservice import ZenohConfig
+from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
+from dimos.robot.unitree.go2.dds.module import GO2DDS
+from dimos.robot.unitree.go2.nav_3d_config import (
+    mls_planner_config,
+    ray_tracing_config,
+    relocalization,
+    voxel_size,
+    wall_clearance_m,
 )
 from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
+from dimos.visualization.rerun.bridge import RerunBridgeModule
+from dimos.visualization.rerun.websocket_server import RerunWebSocketServer
 from dimos.visualization.vis_module import vis_module
+from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 
-voxel_size = 0.08
 # Raise above 0 (2.0 works) to draw what the planner searched over: surface, nodes and
 # cost-colored edges. Drives both its publishing and the rerun overrides.
 planner_viz_hz = 2.0
@@ -68,40 +77,34 @@ planner_viz_hz = 2.0
 MOTION_BODY_DILATE_M = -0.03
 
 
-def _static_robot_body(rr: Any) -> list[Any]:
-    """Go2-shaped box on the body frame."""
-    return [
-        rr.Boxes3D(
-            half_sizes=[ROBOT_LENGTH / 2, ROBOT_WIDTH / 2, ROBOT_HEIGHT / 2],
-            colors=[(0, 255, 127)],
-        ),
-        rr.Transform3D(parent_frame="tf#/base_link"),
-    ]
+# h264 lands here off `video`; jpeg is redirected onto it, whichever the robot serves
+CAMERA_ENTITY = "world/video"
 
 
 def _camera_info_to_pinhole(camera_info: Any) -> Any:
-    """Log the pinhole onto the video's entity instead of camera_info's own.
+    """Log the pinhole onto the camera image's entity instead of camera_info's own.
 
     Entities are named after topics, so the two land on sibling paths, and a Pinhole only
     projects its own entity and its children, hence a frustum that draws but stays empty.
     No ``optical_frame``: the video's frame_id already anchors it, a second parent is
     rejected.
     """
-    return camera_info.to_rerun(image_topic="world/video")
+    return camera_info.to_rerun(image_topic=CAMERA_ENTITY)
+
+
+def _image_to_camera(image: Any) -> Any:
+    """GO2DDS's jpeg `image` onto the h264 `video` entity, so the pane is encoder-blind."""
+    return [(CAMERA_ENTITY, image.to_rerun())]
 
 
 def _rerun_blueprint() -> Any:
-    """Split layout: camera feed + 3D world, as the WebRTC go2 blueprint has.
-
-    The 2D view sits on ``world/video``, not ``world/color_image``: over zenoh the camera
-    arrives as H.264 on the ``video`` port, which is also where the pinhole is logged.
-    """
+    """Split layout: camera feed + 3D world, as the WebRTC go2 blueprint has."""
     import rerun as rr
     import rerun.blueprint as rrb
 
     return rrb.Blueprint(
         rrb.Horizontal(
-            rrb.Spatial2DView(origin="world/video", name="Camera"),
+            rrb.Spatial2DView(origin=CAMERA_ENTITY, name="Camera"),
             rrb.Spatial3DView(
                 origin="world",
                 name="3D",
@@ -133,19 +136,16 @@ def _rerun_config(visual_override: dict[str, Any] | None = None) -> dict[str, An
         "tf_axes": 0.5,
         # The robot box hangs off base_link on its own entity: a static transform
         # under world/tf would override the live one.
-        "static": {
-            "world/robot_body": _static_robot_body,
-        },
+        "static": nav_static(ROBOT_LENGTH, ROBOT_WIDTH, ROBOT_HEIGHT, wall_clearance_m),
         "visual_override": {
             "world/camera_info": _camera_info_to_pinhole,
+            "world/image": _image_to_camera,
             "world/pointlio_map": _render_map,
             "world/lidar": _render_map,
-            "world/local_map": _render_map,
-            "world/global_map": _render_map,
+            **nav_visual_override(planner_viz_hz, voxel_size, wall_clearance_m),
             # the local plan plus its body poses on world/path/body, coloured by the
             # stamped precision (green room, amber in the ramp, red at the floor)
             **motion_visual_override(body_dilate_m=MOTION_BODY_DILATE_M),
-            **planner_visual_override(planner_viz_hz, voxel_size=voxel_size, wall_clearance_m=0.1),
             **(visual_override or {}),
         },
     }
@@ -159,24 +159,21 @@ go2_zenoh_basic = autoconnect(
     MovementManager.blueprint(),
 ).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
 
-# global_map is remapped off so the planner runs purely on the
-# incremental local_map + region_bounds pair.
-mls_planner_config = MLSPlannerNativeConfig(
-    world_frame="odom",
-    voxel_size=voxel_size,
-    robot_height=ROBOT_HEIGHT,
-    start_z_offset_m=BASE_LINK_HEIGHT,
-    surface_closing_radius=0.3,
-    wall_clearance_m=0.1,
-    wall_buffer_m=0.75,
-    wall_buffer_weight=100.0,
-    step_threshold_m=0.16,
-    step_penalty_weight=4.0,
-    viz_publish_hz=planner_viz_hz,
-)
+# The same layer over DDS: the native module is the robot side, so this runs on the box
+# that has the Go2 on a wire. No pointlio_map: the L1 cloud arrives already in `odom`.
+go2_dds_basic = autoconnect(
+    vis_module(
+        viewer_backend=global_config.viewer,
+        rerun_config=_rerun_config({"world/pointlio_map": None}),
+    ),
+    GO2DDS.blueprint(),
+    MovementManager.blueprint(),
+).global_config(transport="zenoh", n_workers=4, robot_model="unitree_go2")
+
+_planner_config = mls_planner_config.model_copy(update={"viz_publish_hz": planner_viz_hz})
 
 _mls_planner = MLSPlannerNative.blueprint(
-    **mls_planner_config.model_dump(exclude_unset=True)
+    **_planner_config.model_dump(exclude_unset=True)
 ).remappings([(MLSPlannerNative, "global_map", "global_map_unused")])
 
 # Consumes GO2Zenoh's lidar + odometry directly, stamped as PointLio stamps them locally
@@ -185,15 +182,6 @@ _mls_planner = MLSPlannerNative.blueprint(
 _raytraced_vis = vis_module(
     viewer_backend=global_config.viewer,
     rerun_config=_rerun_config({"world/pointlio_map": None}),
-)
-
-ray_tracing_config = RayTracingVoxelMapConfig(
-    voxel_size=voxel_size,
-    emit_every=1,
-    global_emit_every=50,
-    min_health=-1,
-    max_health=5,
-    support_min=4,
 )
 
 go2_zenoh_raycaster = autoconnect(
@@ -256,8 +244,8 @@ go2_zenoh_motion = autoconnect(
 
 
 # `go2-zenoh-motion` with Point-LIO here: the MID-360 hangs off the Jetson, so the robot's
-# onboard LIO is blind. The mount tree stays the bridge's (rooted at mid360_link); rust
-# Point-LIO because the C++ SDK is LCM-only. host_ip is explicit: the Jetson has two NICs.
+# onboard LIO is blind. The mount tree stays the bridge's (rooted at mid360_link).
+# host_ip is explicit: the Jetson has two NICs.
 go2_zenoh_motion_pointlio = autoconnect(
     _go2_zenoh_motion_base,
     TrajectoryFollowerNative.blueprint(),
@@ -270,7 +258,7 @@ go2_zenoh_motion_pointlio = autoconnect(
         ]
     ),
     mid360_for_pointlio(lidar_ip="192.168.123.157", host_ip="192.168.123.5"),
-    PointLioRust.blueprint(),
+    PointLio.blueprint(),
     # the clouds are already drawn as the raytraced map; only this stack has lidar_raw
     vis_module(
         viewer_backend=global_config.viewer,
@@ -292,6 +280,65 @@ go2_zenoh_motion_pointlio = autoconnect(
 )
 
 
+# `go2-zenoh-motion-pointlio` with GO2DDS as the robot side, no go2web bridge anywhere.
+# Its native process is the zenoh router (the Go2 forwards 7447 to the Jetson, so the
+# viewer still dials go22); every other process dials it on loopback. The head L1 stays
+# off and Point-LIO owns odom, so GO2DDS publishes no lidar, odometry or odom tf edge. Its
+# raw L1 cloud and body IMU move aside so only the MID-360 reaches Point-LIO's inputs.
+_go2_dds_pointlio = GO2DDS.blueprint(
+    iface="enP8p1s0",
+    lidar_on=False,
+    tf_root="mid360_link",
+    session=ZenohConfig(mode="router", listen=["tcp/0.0.0.0:7447"], connect=[]),
+).remappings(
+    [
+        (GO2DDS, "odometry", "go2_odometry_unused"),
+        (GO2DDS, "lidar", "go2_lidar_unused"),
+        (GO2DDS, "lidar_raw", "go2_lidar_raw_unused"),
+        (GO2DDS, "imu", "body_imu"),
+    ]
+)
+
+# Point-LIO's own inputs and the raycaster's region cylinder, noise on a nav view.
+_dds_pointlio_hidden = {
+    "world/pointlio_map": None,
+    "world/lidar": None,
+    "world/lidar_raw": None,
+    "world/region_bounds": None,
+}
+
+go2_dds_motion_pointlio = autoconnect(
+    vis_module(
+        viewer_backend=global_config.viewer,
+        rerun_config=_rerun_config(_dds_pointlio_hidden),
+    ),
+    _go2_dds_pointlio,
+    MovementManager.blueprint(),
+    RayTracingVoxelMap.blueprint(**ray_tracing_config.model_dump(exclude_unset=True)),
+    _mls_planner_motion.remappings([(MLSPlannerNative, "path", "planner_path")]),
+    LocalPlannerNative.blueprint(body_dilate_m=MOTION_BODY_DILATE_M),
+    TrajectoryFollowerNative.blueprint(),
+    mid360_for_pointlio(lidar_ip="192.168.123.157", host_ip="192.168.123.5"),
+    PointLio.blueprint(),
+).global_config(
+    transport="zenoh",
+    zenoh_connect="tcp/127.0.0.1:7447",
+    # the router is a native process; the peers keep dialing until it is up
+    zenoh_connect_timeout=15.0,
+    n_workers=11,
+    robot_model="unitree_go2",
+)
+
+# No loaded_map republish: the channel is never-drop. Headless on the robot, so the viewer
+# modules are dropped and go2-viewer on another machine is the screen.
+go2_dds_motion_pointlio_relocalization = autoconnect(
+    go2_dds_motion_pointlio.disabled_modules(
+        RerunBridgeModule, WebsocketVisModule, RerunWebSocketServer
+    ),
+    relocalization(republish_loaded_map=0.0),
+).global_config(n_workers=9)
+
+
 # The viewer half alone, for the machine with the screen. Zenoh keeps the newest sample
 # per topic, so the drop sits in front of the wifi instead of rerun's lossless stream
 # replaying history. `topics` is one subscription per name: unlisted never crosses the link.
@@ -307,20 +354,20 @@ go2_viewer = autoconnect(
             "topics": [
                 "tf",
                 "odometry",
-                "local_map",
                 "path",
                 "planner_path",
                 "nodes",
                 "node_edges",
                 "surface_map",
+                "map_regions",
                 "goal",
                 "way_point",
                 "goal_reached",
+                # h264 off the zenoh stacks, jpeg off GO2DDS: one of the two arrives
                 "video",
+                "image",
                 "camera_info",
             ],
-            # the map's own rate is the lidar's, more than a screen or a bad link needs
-            "max_hz": {"world/local_map": 4.0, "world/surface_map": 1.0},
         },
     ),
 ).global_config(
@@ -328,6 +375,8 @@ go2_viewer = autoconnect(
     # a client: the router forwards to clients only, never between peers
     zenoh_mode="client",
     zenoh_connect=GO2_ROUTER,
+    # the router appears well after the robot's dimos run, keep dialing until it does
+    zenoh_connect_timeout=120.0,
     # the robot's stack owns the bus-wide `Coordinator` name; this one only watches
     serve_coordinator_rpc=False,
     n_workers=3,
