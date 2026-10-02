@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+import weakref
 
 from mcap.writer import Writer as McapWriter
 import numpy as np
@@ -26,6 +27,7 @@ import pytest
 
 from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.dataprep.build import _open_recording, inspect_recording, run_dataprep
+from dimos.imitation.dataprep.core import extract_episodes, iter_episode_samples
 from dimos.imitation.dataprep.schema import (
     DataPrepConfig,
     FeatureSpec,
@@ -256,3 +258,40 @@ def test_missing_message_package_reports_the_recorded_type(tmp_path: Path) -> No
 
     with pytest.raises(ImportError, match="custom_state.*missing_recording_package.State"):
         _open_recording(path)
+
+
+def test_sample_emission_does_not_keep_every_decoded_camera_frame(tmp_path, mocker):
+    recording = tmp_path / "session.mcap"
+    _write_collection(recording)
+    config = _config(recording, tmp_path / "dataset")
+    config.observation["camera_alias"] = config.observation["observation.images.wrist"]
+    decoded = []
+    decode = JpegCodec.decode
+
+    def track_decode(codec, payload):
+        image = decode(codec, payload)
+        decoded.append(weakref.ref(image.data))
+        return image
+
+    mocker.patch.object(JpegCodec, "decode", autospec=True, side_effect=track_decode)
+    with _open_recording(recording) as store:
+        episode = extract_episodes(store, config.episodes)[0]
+        samples = iter_episode_samples(
+            store,
+            episode,
+            {**config.observation, **config.action},
+            config.sync,
+            config.quality,
+            obs_keys=set(config.observation),
+            action_keys=set(config.action),
+        )
+        first = next(samples)
+
+        assert sum(reference() is not None for reference in decoded) <= 2
+        np.testing.assert_array_equal(
+            first.observation["observation.images.wrist"], np.zeros((8, 8, 3), dtype=np.uint8)
+        )
+        np.testing.assert_array_equal(
+            first.observation["camera_alias"], first.observation["observation.images.wrist"]
+        )
+        samples.close()
