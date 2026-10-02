@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
@@ -241,7 +242,7 @@ class RoboPlanWorld:
             model = build_roboplan_model(
                 self.get_prepared_model(),
                 self._planning_groups,
-                roboplan_core.Scene,
+                _create_scene,
             )
             self._model = model
             self._scene = model.scene
@@ -620,3 +621,13 @@ def _octree(obstacle: Obstacle) -> Any:
         np.array((x, y, z, resolution, 1.0, 0.5), dtype=np.float64) for x, y, z in obstacle.points
     ]
     return roboplan_core.OcTree(boxes, resolution)
+
+
+def _create_scene(
+    *, name: str, urdf: str, srdf: str, package_paths: Sequence[str], joint_limits: Path
+) -> Any:
+    description = roboplan_core.loadUrdfSceneDescriptionFromXml(urdf, package_paths)
+    scene = roboplan_core.Scene(name, description)
+    scene.importSrdf(srdf)
+    scene.importJointLimitsFromConfig(roboplan_core.loadJointLimitsConfig(joint_limits))
+    return scene

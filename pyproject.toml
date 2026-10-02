@@ -285,7 +285,7 @@ planning = [
     "dimos[control]",
     "drake==1.45.0; sys_platform == 'darwin' and platform_machine != 'aarch64'",
     "drake>=1.40.0; sys_platform != 'darwin' and platform_machine != 'aarch64'",
-    "roboplan>=0.6.0,<0.7.0",
+    "roboplan>=0.7.0,<0.8.0",
     # Mesh conversion (STL/DAE → OBJ for Drake collision geometry)
     "trimesh",
     "pycollada",
@@ -470,7 +470,7 @@ lint = [
     "pytest==8.3.5",
     "python-can>=4",
     "python-socketio>=5.16.1",
-    "roboplan>=0.6.0,<0.7.0",
+    "roboplan>=0.7.0,<0.8.0",
     "sounddevice>=0.5.5",
     "trimesh>=4.12",
     "watchdog>=3.0.0",
