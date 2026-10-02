@@ -18,13 +18,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import hashlib
 from importlib import import_module
+import os
 from pathlib import Path
-from typing import Any
+import tempfile
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from dimos.utils.data import get_data
+
+if TYPE_CHECKING:
+    from dimos.robot.assets.model import RobotModel
 
 JointNameMapper = Callable[[str], str]
 RERUN_URDF_INSTALL_HINT = (
@@ -41,7 +47,36 @@ def default_joint_name_mapper(name: str) -> str:
     return short if short.endswith("_joint") else f"{short}_joint"
 
 
-def _resolve_urdf_path(path: str | Path) -> Path:
+def bare_joint_name_mapper(name: str) -> str:
+    """Drop a hardware joint's namespace: ``arm/joint1`` is the URDF's ``joint1``."""
+    return name.rsplit("/", 1)[-1]
+
+
+@dataclass(frozen=True)
+class RobotModelUrdf(os.PathLike[str]):
+    """A planner model's URDF as a file path, for the factories below.
+
+    The model's xacro is expanded and its mesh paths resolved the first time the
+    path is asked for, in whichever process draws the robot, and written once to
+    a temp file named by its content. Rerun then shows the same robot the planner
+    plans with, without a second copy of the description in the repo.
+    """
+
+    model: RobotModel
+
+    def __fspath__(self) -> str:
+        xml = self.model.load().xml
+        name = hashlib.sha1(xml.encode()).hexdigest()[:16]
+        path = Path(tempfile.gettempdir()) / "dimos-rerun-urdf" / f"{name}.urdf"
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            staging = path.with_name(f"{name}.{os.getpid()}.tmp")
+            staging.write_text(xml)
+            staging.replace(path)
+        return str(path)
+
+
+def _resolve_urdf_path(path: str | os.PathLike[str]) -> Path:
     candidate = Path(path).expanduser()
     if candidate.is_absolute() or candidate.exists():
         return candidate
@@ -122,10 +157,18 @@ def _build_link_paths(
 
 @dataclass
 class UrdfRobotStaticRerunFactory:
-    """Log a URDF robot's static visual meshes under a Rerun root path."""
+    """Log a URDF robot's static visual meshes under a Rerun root path.
 
-    urdf_path: str | Path
+    ``parent_frame`` names the Rerun coordinate frame the robot's root link
+    follows, such as ``tf#/link_base`` for the frame the bridge logs when a tf
+    message carries child frame ``link_base``. The robot then stands wherever
+    that frame is published, and moves with it. None leaves the root at the
+    origin of its parent entity.
+    """
+
+    urdf_path: str | os.PathLike[str]
     root_path: str
+    parent_frame: str | None = None
     _robot: Any = field(default=None, init=False, repr=False)
 
     def __call__(self, rr: Any) -> list[tuple[str, Any]]:
@@ -135,8 +178,13 @@ class UrdfRobotStaticRerunFactory:
             str(robot.base_link),
             list(robot.robot.joints),
         )
+        root = (
+            rr.Transform3D()
+            if self.parent_frame is None
+            else rr.Transform3D(parent_frame=self.parent_frame)
+        )
         entities: list[tuple[str, Any]] = [
-            (self.root_path, rr.Transform3D()),
+            (self.root_path, root),
             (link_paths[str(robot.base_link)], rr.Transform3D()),
         ]
 
@@ -171,7 +219,7 @@ class UrdfRobotStaticRerunFactory:
 class UrdfRobotJointStateRerunFactory:
     """Convert JointState-like messages into animated URDF link transforms."""
 
-    urdf_path: str | Path
+    urdf_path: str | os.PathLike[str]
     root_path: str
     joint_name_mapper: JointNameMapper = default_joint_name_mapper
     clamp_joint_limits: bool = False

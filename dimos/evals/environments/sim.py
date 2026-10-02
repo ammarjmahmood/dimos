@@ -46,6 +46,10 @@ class SimConfig(BaseConfig):
     disable: tuple[str, ...] = ()
     # Also expose the robot as plain Zenoh topics (raw-robot-bridge) for agents without dimOS.
     raw_bridge: bool = False
+    # Compose the Rerun bridge and open its viewer. Off, nothing is drawn: the
+    # grader reads the recording, and the bridge would otherwise buffer every
+    # image and point cloud of the run.
+    rerun: bool = False
     attach: bool = False
     launch_timeout_s: float = 1200.0
     at_rest_m: float = 0.05
@@ -122,8 +126,16 @@ class Sim(Environment):
         if not self.config.attach:
             proc = DimosCliCall()
             self.configure_launch(proc)
+            disable = list(self.config.disable)
+            if not self.config.rerun:
+                proc.global_args += ["--viewer", "none", "--rerun-open", "none"]
+                if "rerun-bridge-module" not in disable:
+                    disable.append("rerun-bridge-module")
+                # torch.compile otherwise forks one compile worker per core,
+                # ~0.5 GB of resident memory and two dozen processes per case.
+                proc.extra_env.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
             proc.global_args.append("--record")
-            disabled = [arg for name in self.config.disable for arg in ("--disable", name)]
+            disabled = [arg for name in disable for arg in ("--disable", name)]
             bridge = ["raw-robot-bridge"] if self.config.raw_bridge else []
             if self.config.raw_bridge:
                 self._raw_endpoint = f"tcp/127.0.0.1:{_free_port()}"  # one bridge per run

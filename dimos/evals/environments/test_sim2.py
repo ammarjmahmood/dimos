@@ -177,6 +177,8 @@ def test_launch_and_cleanup(tmp_path, mocker):
             "mcp-server",
             "manipulation-skills",
             "observe-skill",
+            "--disable",
+            "rerun-bridge-module",
         ]
         truth_on.assert_called_once()
         ready.assert_called_once()

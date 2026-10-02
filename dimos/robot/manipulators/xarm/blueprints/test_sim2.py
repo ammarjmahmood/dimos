@@ -101,3 +101,42 @@ def test_the_plain_simulation_keeps_the_planner_coordinator_camera_and_tf() -> N
     assert camera.module is SimRGBDCameraModule
     assert "pointcloud" not in {stream.name for stream in camera.streams}
     assert plain.model.tf_extra_links == ["link7"]
+
+
+def test_viewer_none_composes_no_bridge_at_all() -> None:
+    from dimos.robot.manipulators.xarm.blueprints.sim2 import rerun_bridge
+
+    assert rerun_bridge("none") == ()
+
+
+def test_the_bridge_draws_the_arm_and_skips_the_intermediate_clouds() -> None:
+    from dimos.robot.manipulators.xarm.blueprints.sim2 import XARM7_RERUN_ROOT, rerun_bridge
+    from dimos.visualization.rerun.bridge import RerunBridgeModule
+    from dimos.visualization.rerun.urdf_robot import (
+        UrdfRobotJointStateRerunFactory,
+        UrdfRobotStaticRerunFactory,
+    )
+
+    (bridge,) = rerun_bridge("rerun")
+    (atom,) = bridge.blueprints
+    assert atom.module is RerunBridgeModule
+    overrides = atom.kwargs["visual_override"]
+    # Every full point cloud on the way to the voxel map stays off the wire to Rerun.
+    for topic in (
+        "wrist_camera/pointcloud",
+        "filtered_pointcloud",
+        "voxel_clear_mask",
+        "local_map",
+    ):
+        assert overrides[f"world/{topic}"] is None
+    assert "world/global_map" not in overrides
+    assert atom.kwargs["max_hz"]["world/global_map"] > 0
+    # The arm is its URDF, standing on the planner's base frame and posed by the
+    # coordinator's joint state.
+    meshes = atom.kwargs["static"][XARM7_RERUN_ROOT]
+    assert isinstance(meshes, UrdfRobotStaticRerunFactory)
+    assert meshes.parent_frame == "tf#/link_base"
+    assert "link_base" in XARM7_COLLISION_LINKS, "the planner must publish the frame"
+    posed = overrides["world/coordinator_joint_state"]
+    assert isinstance(posed, UrdfRobotJointStateRerunFactory)
+    assert posed.joint_name_mapper("arm/joint1") == "joint1"

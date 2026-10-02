@@ -231,11 +231,32 @@ class Config(ModuleConfig):
     tf_axes: float = 0.0
     topic_to_entity: Callable[[Any], str] | None = None
     connect_url: str | None = None
-    memory_limit: str = "25%"
+    # How much logged data this process keeps so a viewer that connects later still
+    # sees history: an absolute size ("512MB") or a share of RAM ("25%"). Past it
+    # the oldest data is dropped. This is what the bridge's memory grows to, with
+    # or without a viewer attached, so it stays fixed and modest by default; the
+    # process settles at roughly 0.5 GB plus 1.3 times this value above its base.
+    # The native viewer it spawns gets the same cap for its own copy.
+    memory_limit: str = "512MB"
+    # Left unset, these follow the --rerun-open and --rerun-web flags.
     rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT
     rerun_web: bool = RERUN_ENABLE_WEB
     web_port: int = RERUN_WEB_VIEWER_PORT
     blueprint: BlueprintFactory | None = _default_blueprint
+
+
+def viewer_open_mode(config: Config) -> RerunOpenOption:
+    """Which viewer to open: the blueprint's explicit choice, else the --rerun-open flag."""
+    if "rerun_open" in config.model_fields_set:
+        return config.rerun_open
+    return config.g.rerun_open
+
+
+def serve_web_viewer(config: Config) -> bool:
+    """Whether to serve the web viewer: the blueprint's explicit choice, else --rerun-web."""
+    if "rerun_web" in config.model_fields_set:
+        return config.rerun_web
+    return config.g.rerun_web
 
 
 class RerunBridgeModule(Module):
@@ -441,18 +462,18 @@ class RerunBridgeModule(Module):
         parsed = urlparse(connect_url.replace("rerun+", "", 1))
         grpc_port = parsed.port or RERUN_GRPC_PORT
 
-        if self.config.rerun_open not in get_args(RerunOpenOption):
+        rerun_open = viewer_open_mode(self.config)
+        if rerun_open not in get_args(RerunOpenOption):
             logger.warning(
-                f"rerun_open was {self.config.rerun_open} which is not one of "
-                f"{get_args(RerunOpenOption)}"
+                f"rerun_open was {rerun_open} which is not one of {get_args(RerunOpenOption)}"
             )
 
         spawned = False
-        if self.config.rerun_open in ("native", "both"):
+        if rerun_open in ("native", "both"):
             spawned = spawn_viewer(server_uri, self.config.memory_limit)
 
-        open_web = self.config.rerun_open == "web" or self.config.rerun_open == "both"
-        if open_web or self.config.rerun_web:
+        open_web = rerun_open == "web" or rerun_open == "both"
+        if open_web or serve_web_viewer(self.config):
             rr.serve_web_viewer(
                 connect_to=server_uri,
                 open_browser=open_web,
@@ -461,8 +482,8 @@ class RerunBridgeModule(Module):
 
         # TODO: `spawned` is supposed to be false when run on the G1 (because viewer doesn't have a display) somehow it returns true
         if (
-            self.config.rerun_open == "none"
-            or (self.config.rerun_open == "native" and not spawned)
+            rerun_open == "none"
+            or (rerun_open == "native" and not spawned)
             or self.host == "0.0.0.0"
         ):
             self._log_connect_hints(grpc_port)
@@ -650,7 +671,7 @@ class RerunBridgeModule(Module):
 
 
 def run_bridge(
-    memory_limit: str = "25%",
+    memory_limit: str = "512MB",
     rerun_open: RerunOpenOption = RERUN_OPEN_DEFAULT,
     rerun_web: bool = RERUN_ENABLE_WEB,
 ) -> None:

@@ -155,6 +155,8 @@ def test_launch_and_cleanup(tmp_path, mocker):
         result = env.start(("speak-skill",))
         assert proc.simulator == "mujoco"
         assert proc.global_args[0] == "--record-topics" and proc.global_args[-1] == "--record"
+        # Nothing is drawn during an eval: no viewer, and no bridge buffering the run.
+        assert proc.global_args[-5:-1] == ["--viewer", "none", "--rerun-open", "none"]
         assert proc.demo_args == [
             "run",
             "xarm-perception-sim",
@@ -164,6 +166,7 @@ def test_launch_and_cleanup(tmp_path, mocker):
             "rerun-bridge-module",
         ]
         assert "MUJOCOSIMMODULE__HEADLESS" in proc.extra_env
+        assert proc.extra_env["TORCHINDUCTOR_COMPILE_THREADS"] == "1"
         ready.assert_called_once()
         assert set(result.artifacts) == {"recording"}
         assert result.grader_only == {"recording"}, "the agent must not be handed the recording"
@@ -171,3 +174,23 @@ def test_launch_and_cleanup(tmp_path, mocker):
         env.stop()
     proc.stop.assert_called_once()
     store.stop.assert_called_once()
+
+
+def test_rerun_can_be_asked_for(tmp_path, mocker):
+    proc = mocker.patch("dimos.evals.environments.sim.DimosCliCall").return_value
+    proc.extra_env = {}
+    proc.global_args = []
+    mocker.patch(
+        "dimos.evals.environments.sim.McpAdapter"
+    ).return_value.wait_for_ready.return_value = True
+    mocker.patch("dimos.memory.store.sqlite.SqliteStore")
+    env = environment(rerun=True)
+    mocker.patch.object(env, "_wait_recording", return_value=tmp_path / "memory.db")
+    mocker.patch.object(env, "wait_ready")
+    try:
+        env.start(())
+        assert "--viewer" not in proc.global_args
+        assert "--disable" not in proc.demo_args
+        assert "TORCHINDUCTOR_COMPILE_THREADS" not in proc.extra_env
+    finally:
+        env.stop()

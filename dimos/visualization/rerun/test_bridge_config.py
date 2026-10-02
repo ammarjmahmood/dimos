@@ -65,3 +65,20 @@ def test_parsed_bridge_config_rejects_dictionary_callbacks(field_name: str) -> N
 
     with pytest.raises(BlueprintConfigError, match="callable"):
         BlueprintConfigParser(blueprint).parse(environ={})
+
+
+def test_the_bridge_keeps_a_fixed_modest_history_by_default() -> None:
+    """A share of RAM scales with the machine; on a 30 GB desktop 25% was 7.5 GB per run."""
+    assert Config(pubsubs=[]).memory_limit == "512MB"
+
+
+def test_unset_viewer_options_follow_the_global_flags() -> None:
+    from dimos.core.global_config import GlobalConfig
+    from dimos.visualization.rerun.bridge import serve_web_viewer, viewer_open_mode
+
+    flags = GlobalConfig(rerun_open="none", rerun_web=True)
+    assert viewer_open_mode(Config(pubsubs=[], g=flags)) == "none"
+    assert serve_web_viewer(Config(pubsubs=[], g=flags)) is True
+    # A blueprint's explicit choice still wins over the flags.
+    assert viewer_open_mode(Config(pubsubs=[], g=flags, rerun_open="web")) == "web"
+    assert serve_web_viewer(Config(pubsubs=[], g=flags, rerun_web=False)) is False

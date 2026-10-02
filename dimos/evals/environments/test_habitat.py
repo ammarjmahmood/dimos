@@ -109,6 +109,8 @@ def test_launch_and_cleanup(tmp_path, mocker):
             "mcp-server",
             "observe-skill",
             "speak-skill",
+            "--disable",
+            "rerun-bridge-module",
         ]
         assert proc.extra_env["DIMOS_TRANSPORT"] == "zenoh"
         ready.assert_called_once()

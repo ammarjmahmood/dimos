@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from dimos.control.coordinator import TaskConfig
-from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.global_config import global_config
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
@@ -31,6 +31,13 @@ from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_t
 from dimos.robot.manipulators.xarm.config import XARM7_COLLISION_LINKS
 from dimos.robot.manipulators.xarm.sim2 import XARM7_MAPPING, xarm7_simulation
 from dimos.visualization.rerun.bridge import RerunBridgeModule
+from dimos.visualization.rerun.constants import ViewerBackend
+from dimos.visualization.rerun.urdf_robot import (
+    RobotModelUrdf,
+    UrdfRobotJointStateRerunFactory,
+    UrdfRobotStaticRerunFactory,
+    bare_joint_name_mapper,
+)
 
 if global_config.simulation and global_config.simulation != "mujoco":
     raise ValueError("xarm-perception-sim2 supports --simulation mujoco")
@@ -51,6 +58,58 @@ _xarm7 = xarm7_simulation(
     robot=XARM7_MAPPING,
     tf_extra_links=XARM7_COLLISION_LINKS,
 )
+
+# Where the arm's URDF meshes live in Rerun, under the same root as the tf tree.
+# The root follows the planner's "link_base" frame, which it publishes because
+# link_base is among the collision links above, so the meshes stand wherever the
+# scene spawns the arm. Nothing here is pickled into the bridge by reference:
+# a worker that imported this module would rebuild _xarm7 from its own, bare,
+# global config and get the small workbench's spawn instead of the scene's.
+XARM7_RERUN_ROOT = "world/xarm7"
+XARM7_RERUN_PARENT_FRAME = "tf#/link_base"
+_XARM7_URDF = RobotModelUrdf(_xarm7.model.model)
+_XARM7_JOINT_STATE_ENTITY = "world/coordinator_joint_state"
+
+
+def rerun_bridge(viewer: ViewerBackend) -> tuple[Blueprint, ...]:
+    """The Rerun bridge for this stack, or nothing at all under ``--viewer none``.
+
+    The arm is drawn from its URDF, posed by the coordinator's joint state. The
+    mapping chain's intermediate clouds are never logged: the raw wrist cloud,
+    the self filter's output and clear mask, and the mapper's local maps are
+    each a full point cloud at 10 Hz, and the voxel map already shows the result.
+    """
+    if viewer == "none":
+        return ()
+    return (
+        RerunBridgeModule.blueprint(
+            static={
+                XARM7_RERUN_ROOT: UrdfRobotStaticRerunFactory(
+                    urdf_path=_XARM7_URDF,
+                    root_path=XARM7_RERUN_ROOT,
+                    parent_frame=XARM7_RERUN_PARENT_FRAME,
+                )
+            },
+            visual_override={
+                _XARM7_JOINT_STATE_ENTITY: UrdfRobotJointStateRerunFactory(
+                    urdf_path=_XARM7_URDF,
+                    root_path=XARM7_RERUN_ROOT,
+                    joint_name_mapper=bare_joint_name_mapper,
+                ),
+                "world/wrist_camera/pointcloud": None,
+                "world/filtered_pointcloud": None,
+                "world/voxel_clear_mask": None,
+                "world/local_map": None,
+                "world/local_map_fine": None,
+            },
+            max_hz={
+                _XARM7_JOINT_STATE_ENTITY: 20.0,
+                "world/global_map": 2.0,
+                "world/depth_image": 2.0,
+            },
+        ),
+    )
+
 
 # xarm-perception-sim on sim2 devices. The wrist camera stamps its images and
 # cloud with the "arm/wrist_camera_optical" frame and publishes world -> that
@@ -108,7 +167,7 @@ xarm_perception_sim2 = autoconnect(
             ),
         ],
     ),
-    RerunBridgeModule.blueprint(),
+    *rerun_bridge(global_config.viewer),
 ).remappings(
     [
         # The camera's cloud gets its own topic: scene registration also
