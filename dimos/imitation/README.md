@@ -1,5 +1,7 @@
 # Imitation learning
 
+See [Collection profiles](/dimos/imitation/collection/README.md) for the recording contract, feature fields and executable custom-robot examples.
+
 Collection uses ordinary DimOS Blueprints. The graph owns robot hardware,
 cameras, transports, and runtime lifecycle. A `CollectionProfile` declares
 typed inputs and dataset projections; `collection_recorder(profile=...)`
