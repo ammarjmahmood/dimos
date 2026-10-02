@@ -107,7 +107,16 @@ def inspect(dataset: Path | None, output_format: Literal["lerobot", "hdf5"] | No
         raise typer.Exit(2)
 
     try:
-        info = inspect_dataset(dataset, output_format)
+        if output_format is None:
+            info = inspect_dataset(dataset)
+        elif output_format == "lerobot":
+            from dimos.imitation.dataprep.lerobot import inspect_lerobot_dataset
+
+            info = inspect_lerobot_dataset(dataset)
+        else:
+            from dimos.imitation.dataprep.formats.hdf5.reader import inspect as inspect_hdf5
+
+            info = inspect_hdf5(dataset)
     except Exception as e:
         # CLI boundary: surface failures as a message + non-zero exit, not a traceback.
         typer.echo(f"dataprep inspect failed: {e}", err=True)
