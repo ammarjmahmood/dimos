@@ -149,7 +149,7 @@ class R1ProConnectionConfig(ModuleConfig):
     # Wrist depth is raw 16-bit at up to 30 Hz per wrist — too heavy for the
     # on-robot CPU budget by default; enable when manipulation needs it.
     enable_wrist_depth: bool = Field(default=False)
-    # Each wrist costs a JPEG decode per frame even when unread; turn off if nothing reads them.
+    # Each wrist copies and publishes JPEG frames even when unread; turn off if nothing reads them.
     enable_wrist_color: bool = Field(default=True)
     # Max Hz per color camera (0 = no cap); the cameras arrive at ~28 Hz, so 30 passes every frame.
     color_publish_hz: float = Field(default=30.0)
