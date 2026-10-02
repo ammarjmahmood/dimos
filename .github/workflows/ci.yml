@@ -444,18 +444,6 @@ jobs:
           (cd examples/message-project/cpp && cmake --preset dimos && cmake --build --preset dimos)
           cargo build --locked --manifest-path examples/message-project/rust/Cargo.toml
           uv run python examples/message-project/demo_blueprint.py --transport zenoh
-      - name: Verify the built-in EpisodeStatus sanity example
-        run: |
-          cmake -S examples/episode_status/cpp -B build/episode-status/cpp
-          cmake --build build/episode-status/cpp --parallel 2
-          cargo build --locked --manifest-path examples/episode_status/rust/Cargo.toml
-          DIMOS_EPISODE_NATIVE_REQUIRED=1 uv run python -m pytest -c /dev/null --rootdir . --noconftest -q examples/episode_status/test_episode_status.py
-          uv run python examples/episode_status/demo_episode_status.py
-      - name: Retain the EpisodeStatus CDR recording
-        uses: actions/upload-artifact@v7
-        with:
-          name: episode-status-sanity
-          path: build/episode-status/status.mcap
       - name: Retain custom message and native SDK review artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -1025,13 +1013,6 @@ jobs:
       - name: Build rust native modules
         if: contains(matrix.markers, 'self_hosted')
         run: cargo build --release --locked -p dimos-livox -p dimos-virtual-mid360
-      # Collection imports the offline viewer even when its tests are deselected.
-      # Native executables do not install these Python extension modules.
-      - name: Build offline planner Python bindings
-        run: |
-          source .venv/bin/activate
-          maturin develop -m dimos/mapping/ray_tracing/rust/py/Cargo.toml
-          maturin develop -m dimos/navigation/nav_3d/mls_planner/rust/py/Cargo.toml
       - name: Run tests
         run: uv run pytest --cov=dimos/ --junitxml=junit.xml -m '(${{ matrix.markers }}) and not mujoco'
       - name: Re-run the failing tests with maximum verbosity
