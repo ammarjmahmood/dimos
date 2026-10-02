@@ -44,10 +44,11 @@ from dimos.experimental.memory.rust_recorder import (
     RustSqliteStoreConfig,
 )
 from dimos.imitation.collection.episode import EpisodeStatus
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.imitation.dataprep.core import EpisodeExtractor, SyncConfig, extract_episodes
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.memory.codecs.lcm import LcmCodec
 from dimos.memory.codecs.lz4 import Lz4Codec
 from dimos.memory.replay_module import ReplayModule
@@ -167,7 +168,7 @@ def test_native_collection_directory_preserves_schema_and_messages(
     store_kind,
     monkeypatch,
 ):
-    camera = CollectionFeature(
+    camera = FeatureSpec(
         stream="color_image",
         message_type=Image,
         field="data",
@@ -175,7 +176,7 @@ def test_native_collection_directory_preserves_schema_and_messages(
         shape=(16, 16, 3),
         names=["height", "width", "channels"],
     )
-    state = CollectionFeature(
+    state = FeatureSpec(
         stream="imu",
         message_type=Imu,
         field="angular_velocity",

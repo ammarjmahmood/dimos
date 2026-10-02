@@ -21,10 +21,24 @@ import pytest
 from typer.testing import CliRunner
 
 from dimos.cli.commands.imitation import imitation_app
+from dimos.cli.dimos import main
 from dimos.imitation.collection.episode import EpisodeStatus
 from dimos.imitation.collection.recording import RecordingSchema
 from dimos.robot.manipulators.openyam.collection import OPENYAM_TEACH_COLLECTION
 from dimos.utils.data import get_project_root
+
+
+def test_root_registers_imitation_when_removing_the_legacy_dataprep_command():
+    runner = CliRunner()
+
+    replacement = runner.invoke(main, ["imitation", "--help"])
+    removed = runner.invoke(main, ["dataprep", "--help"])
+
+    assert replacement.exit_code == 0, replacement.output
+    assert "prepare" in replacement.output
+    assert "inspect" in replacement.output
+    assert removed.exit_code == 2
+    assert "No such command" in removed.output
 
 
 def test_help_exposes_attached_controls_and_no_workflow_launcher():

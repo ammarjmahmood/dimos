@@ -21,7 +21,7 @@ from typing import Any
 from pydantic import Field, field_validator, model_validator
 
 from dimos.imitation.collection.recording import RecordingSchema
-from dimos.imitation.dataprep.core import (
+from dimos.imitation.dataprep.schema import (
     DataPrepConfig,
     FeatureSpec,
     OutputConfig,
@@ -33,30 +33,19 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.protocol.service.spec import BaseConfig
 
 
-class CollectionFeature(FeatureSpec):
-    """A dataset projection and the raw message type needed to record its stream.
-
-    ``message_type`` describes the input, not the exported feature. ``field``,
-    ``dtype``, and ``shape`` select its dataset representation: for example,
-    Image data as video or JointState positions converted to float32.
-    """
-
-    message_type: type[Any]
-
-
 class CollectionProfile(BaseConfig):
     """One recording contract, independent of camera hardware and policy backends."""
 
     name: str = Field(min_length=1)
     robot_type: str = Field(min_length=1)
-    observations: dict[str, CollectionFeature] = Field(min_length=1)
-    actions: dict[str, CollectionFeature] = Field(min_length=1)
+    observations: dict[str, FeatureSpec] = Field(min_length=1)
+    actions: dict[str, FeatureSpec] = Field(min_length=1)
     sync: SyncConfig
     quality: QualityConfig = QualityConfig()
 
     @field_validator("observations", "actions")
     @classmethod
-    def _feature_names(cls, value: dict[str, CollectionFeature]) -> dict[str, CollectionFeature]:
+    def _feature_names(cls, value: dict[str, FeatureSpec]) -> dict[str, FeatureSpec]:
         if any(not key.strip() for key in value):
             raise ValueError("feature names must not be blank")
         return value
@@ -75,12 +64,13 @@ class CollectionProfile(BaseConfig):
         validate_source_kinds((*self.observations.values(), *self.actions.values()))
         inputs: dict[str, type[Any]] = {}
         for feature in (*self.observations.values(), *self.actions.values()):
-            if feature.source_kind == "joint_position_updates" and not issubclass(
-                feature.message_type, JointState
-            ):
+            kind = feature.message_type
+            if kind is None:
+                raise ValueError(f"Collection stream {feature.stream!r} requires message_type")
+            if feature.source_kind == "joint_position_updates" and not issubclass(kind, JointState):
                 raise ValueError("joint_position_updates requires JointState messages")
-            previous = inputs.setdefault(feature.stream, feature.message_type)
-            if previous is not feature.message_type:
+            previous = inputs.setdefault(feature.stream, kind)
+            if previous is not kind:
                 raise ValueError(f"stream {feature.stream!r} has conflicting message types")
         return inputs
 
@@ -90,12 +80,11 @@ class CollectionProfile(BaseConfig):
             name=self.name,
             robot_type=self.robot_type,
             observation={
-                key: FeatureSpec(**feature.model_dump(exclude={"message_type"}))
+                key: FeatureSpec(**feature.model_dump())
                 for key, feature in self.observations.items()
             },
             action={
-                key: FeatureSpec(**feature.model_dump(exclude={"message_type"}))
-                for key, feature in self.actions.items()
+                key: FeatureSpec(**feature.model_dump()) for key, feature in self.actions.items()
             },
             sync=self.sync.model_copy(deep=True),
             quality=self.quality.model_copy(deep=True),

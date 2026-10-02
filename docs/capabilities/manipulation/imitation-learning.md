@@ -132,7 +132,7 @@ consistency. Recorder wiring checks required inputs; preparation validates the
 actual recorded values.
 
 One `CollectionProfile` declares the typed source streams and their dataset
-interpretation. A `CollectionFeature` adds a Python `message_type` to the
+interpretation. A `FeatureSpec` adds a Python `message_type` to the
 dataprep feature fields: `stream`, `source_kind`, `field`, `dtype`, `shape`, and `names`.
 Several features can project different fields or joint subsets from one source;
 the recorder captures that source once.

@@ -14,8 +14,9 @@
 
 """Dual-arm collection preset, independent of policy backends and hardware."""
 
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.dataprep.core import QualityConfig, SyncConfig
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.robot.manipulators.dual_openyam.joints import DUAL_OPENYAM_JOINTS
@@ -25,7 +26,7 @@ DUAL_OPENYAM_COLLECTION = CollectionProfile(
     robot_type="dual_openyam",
     observations={
         **{
-            f"observation.images.{side}_wrist": CollectionFeature(
+            f"observation.images.{side}_wrist": FeatureSpec(
                 stream=f"{side}_wrist_image",
                 message_type=Image,
                 field="data",
@@ -35,7 +36,7 @@ DUAL_OPENYAM_COLLECTION = CollectionProfile(
             )
             for side in ("left", "right")
         },
-        "observation.state": CollectionFeature(
+        "observation.state": FeatureSpec(
             stream="coordinator_joint_state",
             message_type=JointState,
             field="position",
@@ -45,7 +46,7 @@ DUAL_OPENYAM_COLLECTION = CollectionProfile(
         ),
     },
     actions={
-        "action": CollectionFeature(
+        "action": FeatureSpec(
             stream="applied_joint_position_command",
             source_kind="joint_position_updates",
             message_type=JointState,

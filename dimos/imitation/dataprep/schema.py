@@ -28,6 +28,7 @@ from typing import Annotated, Any, Literal
 import numpy as np
 from numpy.typing import NDArray
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from dimos.constants import STATE_DIR
 from dimos.protocol.service.spec import BaseConfig
@@ -64,13 +65,18 @@ def _validate_dtype(value: str) -> str:
 
 
 class FeatureSpec(BaseConfig):
-    """Explicit dataset feature and its recorded source."""
+    """A dataset projection, optionally bound to a live input message class.
+
+    Offline declarations need no Python class. Live collection supplies
+    ``message_type`` for capture; serialization always omits that runtime type.
+    """
 
     stream: str
     field: str | None = None
     dtype: Annotated[str, AfterValidator(_validate_dtype)]
     shape: Annotated[tuple[Annotated[int, Field(gt=0)], ...], Field(min_length=1)]
     names: list[Annotated[str, Field(pattern=r"\S")]]
+    message_type: SkipJsonSchema[type[Any] | None] = Field(default=None, exclude=True)
     source_kind: SourceKind = Field(
         default="snapshot",
         description=(

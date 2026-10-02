@@ -28,9 +28,10 @@ from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.hardware.sensors.camera.spec import CameraConfig
 from dimos.imitation.collection.episode_monitor import EpisodeMonitorModule
-from dimos.imitation.collection.profile import CollectionFeature, CollectionProfile
+from dimos.imitation.collection.profile import CollectionProfile
 from dimos.imitation.collection.recorder import collection_recorder
 from dimos.imitation.dataprep.core import SyncConfig
+from dimos.imitation.dataprep.schema import FeatureSpec
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.teleop.webxr.blueprints import (
@@ -62,7 +63,7 @@ def _collection_components(robot: str, teleop: Blueprint) -> tuple[Blueprint, ..
         )
     )
     camera_config = cast("CameraConfig", module_config_cls(camera)(**camera.kwargs))
-    state = CollectionFeature(
+    state = FeatureSpec(
         stream="coordinator_joint_state",
         message_type=JointState,
         field="position",
@@ -74,7 +75,7 @@ def _collection_components(robot: str, teleop: Blueprint) -> tuple[Blueprint, ..
         name=f"{robot}-webxr",
         robot_type=robot,
         observations={
-            "camera": CollectionFeature(
+            "camera": FeatureSpec(
                 stream="color_image",
                 message_type=Image,
                 field="data",
