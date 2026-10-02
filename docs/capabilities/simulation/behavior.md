@@ -258,7 +258,7 @@ python -m dimos.simulation.behavior.demo_radio --stage serve --report radio-deve
 `serve` leaves the coordinator running so a separate Python policy can use
 `Dimos.connect()` and `Arm.from_app(app, group="left_arm")`. Dimcode's ordinary
 write/edit/bash tools can write that policy and execute it with the selected
-DimOS environment's Python; this path needs no MCP wrapper. An SDK error is
+dimOS environment's Python; this path needs no MCP wrapper. An SDK error is
 feedback for the policy, not proof that the remote motion has stopped. Confirm
 cancellation before dispatching a recovery motion.
 
