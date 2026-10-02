@@ -481,12 +481,12 @@ starts a fresh environment.
 
 | Scene tag | Task | Success check |
 | --- | --- | --- |
-| `lift` | Lift and hold the red cube by at least 5 cm | Height above its resting position and robot contact |
+| `lift` | Lift and hold the red cube by at least 5 cm | Recorded height increase, using `lifted()` |
 | `door` | Open and release the door | Panel rotated at least 0.3 rad relative to the frame |
-| `pick_place` | Place the can upright at its matching marker | Destination position, resting height, upright orientation and release |
-| `stack` | Stack red on green, then release | Alignment, resting heights, cube contact and release |
-| `tool_hang` | Assemble the frame and hang the wrench | Stand/frame assembly, hook threaded through the larger hole, contact and release |
-| `nut_assembly` | Seat the square nut on its peg | Peg contained in the hole, table contact, resting height and release |
+| `pick_place` | Place the can upright at its matching marker | Final position and upright orientation relative to the marker |
+| `stack` | Stack red on green, then release | Relative position and height, using `stacked_on()` |
+| `tool_hang` | Assemble the frame and hang the wrench | Frame/stand alignment and larger-hole pose relative to the hook |
+| `nut_assembly` | Seat the square nut on its peg | Final position relative to the peg and flat orientation |
 
 ```bash skip
 dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi
@@ -494,22 +494,19 @@ dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi
 dimos evals run dimos.evals.suites.robosuite_xarm --agent dimos.evals.agents.pi --tags door
 ```
 
-Grading is binary and requires success throughout the final second, with no more
-than 5 mm translation or 0.05 rad rotation drift. Prompts ask the agent to hold
-the result steady for two seconds. Missing, nonfinite, stale or incomplete
-terminal evidence fails. The Lift threshold uses the table surface plus the
-cube's half-height, avoiding a baseline taken while the initial cube is falling.
-The can must be within 5 cm / 7.5 cm of its marker in X/Y and within 5 mm of its
-resting height. Stack and nut seating use 4 mm height tolerances. These are
-task checks for the fixed exports, not an exact reproduction of robosuite scores.
+Grading reuses `tracked_bodies` and the existing recorded `tf` poses. Lift and
+Stack reuse the default xArm suite's graders; the other cases have small
+pose-based checks in the suite file. Lift compares the first and last recorded
+heights. Stack accepts a 4.1-4.9 cm centre-height difference and passes at a score
+of 0.5 (up to 1.5 cm horizontal offset). The can must finish within 5 cm / 7.5 cm
+of its marker in X/Y and within 5 mm in Z. Nut seating checks alignment within
+7 mm and resting height within 4 mm. Door and ToolHang use relative body poses.
 
-The suite enables a 10 Hz `evaluation_state` recording from the simulator's
-post-step hook. It captures selected bodies, sites, geoms and contact pairs in
-one physics-thread snapshot. `evaluation_robot_body="link_base"` enables it;
-`evaluation_sites` and `evaluation_geoms` select additional names. Tracking
-includes contact with compound-object descendants. These are internal grading
-records, not additional agent tools. Default simulation blueprints leave this
-recording disabled. The suite waits for it before starting the agent.
+These geometric checks do not verify physical contact, gripper release, or
+sustained stability; ToolHang in particular is a pose-based proxy for assembly
+and hanging. They are task checks for the fixed exports, not an exact
+reproduction of robosuite scores. Recording and readiness use the existing
+MuJoCo environment defaults.
 
 #### Scene placement
 

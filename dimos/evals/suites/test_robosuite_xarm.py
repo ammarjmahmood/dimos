@@ -14,9 +14,10 @@
 
 """Static MJCF/goal checks: compile and forward kinematics only, never step or render."""
 
-import json
+from contextlib import nullcontext
 import math
 from pathlib import Path
+from unittest.mock import Mock
 
 import mujoco
 import numpy as np
@@ -24,34 +25,45 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
-from dimos.evals.environments.lib import robosuite_grading as grading
 from dimos.evals.suites.robosuite_xarm import SUITE
-from dimos.simulation.engines.mujoco_evaluation import MujocoEvaluationRecorder
+from dimos.evals.types import Outcome
+from dimos.memory.store.memory import MemoryStore
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 
 
 @pytest.mark.mujoco
 @pytest.mark.parametrize("case", SUITE, ids=lambda case: case.id)
-def test_exported_scene_names_initial_failure_and_goal_geometry(case) -> None:
+def test_exported_scene_names_initial_failure_and_goal_geometry(case, monkeypatch) -> None:
     config = case.environment.config
     proc = DimosCliCall()
     case.environment.configure_launch(proc)
     assert proc.global_args[-2:] == ["--xarm7-sim-base-height", "0.912"]
-    assert "evaluation_state" in config.ready_streams
-    assert "evaluation_state" in config.recorded_topics
     assert not config.raw_bridge
     scene = Path(config.scene.resolve())
     model = mujoco.MjModel.from_xml_path(str(scene))
     data = mujoco.MjData(model)
-    recorder = MujocoEvaluationRecorder(
-        model,
-        bodies=list(config.tracked_bodies),
-        sites=json.loads(config.module_env["MUJOCOSIMMODULE__EVALUATION_SITES"]),
-        geoms=json.loads(config.module_env["MUJOCOSIMMODULE__EVALUATION_GEOMS"]),
-        robot_body="link_base",
-    )
-    predicate = getattr(grading, scene.parent.name)
+
+    def poses(ts: float) -> TFMessage:
+        return TFMessage(
+            *(
+                Transform(
+                    translation=Vector3(*data.xpos[model.body(name).id]),
+                    rotation=Quaternion.from_rotation_matrix(
+                        data.xmat[model.body(name).id].reshape(3, 3)
+                    ),
+                    frame_id="world",
+                    child_frame_id=name,
+                    ts=ts,
+                )
+                for name in config.tracked_bodies
+            )
+        )
+
     mujoco.mj_forward(model, data)
-    assert not predicate(recorder.capture(data, 0))
+    initial = poses(1.0)
 
     def place(body: str, xyz, rotation=None) -> None:
         joint = model.body_jntadr[model.body(body).id]
@@ -63,8 +75,10 @@ def test_exported_scene_names_initial_failure_and_goal_geometry(case) -> None:
         )
 
     if scene.parent.name == "lift":
-        return  # Robot support is checked separately; don't fabricate a grasp here.
-    if scene.parent.name == "door":
+        target = data.body("cube_main").xpos.copy()
+        target[2] += 0.06
+        place("cube_main", target)
+    elif scene.parent.name == "door":
         data.joint("Door_hinge").qpos[0] = 0.35
     elif scene.parent.name == "pick_place":
         place("Can_main", data.body("VisualCan_main").xpos)
@@ -84,4 +98,30 @@ def test_exported_scene_names_initial_failure_and_goal_geometry(case) -> None:
         center = hole - rotation.apply([-0.093532843272420993, 0, 0])
         place("tool_root", center, rotation)
     mujoco.mj_forward(model, data)
-    assert predicate(recorder.capture(data, 1))
+    with MemoryStore() as store:
+        for module in ("mujoco_xarm", "robosuite_xarm"):
+            monkeypatch.setattr(
+                f"dimos.evals.suites.{module}.recording", lambda _: nullcontext(store)
+            )
+        outcome = Mock(spec=Outcome)
+        assert case.grade(outcome) == 0.0  # Missing poses.
+        stream = store.stream("tf", TFMessage)
+        stream.append(initial)
+        assert case.grade(outcome) == 0.0
+        stream.append(poses(2.0))
+        assert case.grade(outcome) >= case.threshold
+        stream.append(
+            TFMessage(
+                *(
+                    Transform(
+                        translation=pose.translation,
+                        rotation=pose.rotation,
+                        frame_id=pose.frame_id,
+                        child_frame_id=pose.child_frame_id,
+                        ts=3.0,
+                    )
+                    for pose in initial.transforms
+                )
+            )
+        )
+        assert case.grade(outcome) == 0.0  # An earlier successful pose is not the final result.
