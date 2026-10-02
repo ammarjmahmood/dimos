@@ -162,11 +162,11 @@ pub(super) fn pooled_normal(
     let r = NORMAL_NEIGHBOR_RADIUS;
     let mut nbs: ArrayVec<Neighbor, NEIGHBORHOOD_CAP> = ArrayVec::new();
     let mut n_raw: u32 = 0;
+    let near = voxels.neighborhood(key, r);
     for dx in -r..=r {
         for dy in -r..=r {
             for dz in -r..=r {
-                let nk = (key.0 + dx, key.1 + dy, key.2 + dz);
-                let Some(v) = voxels.get(&nk) else {
+                let Some(v) = near.get((key.0 + dx, key.1 + dy, key.2 + dz)) else {
                     continue;
                 };
                 if v.num_pts == 0 {
@@ -230,15 +230,8 @@ pub(super) fn pooled_normal(
 pub(super) fn mark_stale(map: &mut VoxelMap, changed: &AHashSet<VoxelKey>, removed: &[VoxelKey]) {
     let r = NORMAL_NEIGHBOR_RADIUS;
     for &c in changed.iter().chain(removed.iter()) {
-        for dx in -r..=r {
-            for dy in -r..=r {
-                for dz in -r..=r {
-                    if let Some(v) = map.voxels.get_mut(&(c.0 + dx, c.1 + dy, c.2 + dz)) {
-                        v.normal = NormalFit::Stale;
-                    }
-                }
-            }
-        }
+        map.voxels
+            .for_each_near_mut(c, r, |_, v, _| v.normal = NormalFit::Stale);
     }
 }
 

@@ -158,7 +158,7 @@ pub struct VoxelMap {
 
 impl VoxelMap {
     pub fn healthy_count(&self) -> usize {
-        self.voxels.values().filter(|c| c.health > 0).count()
+        self.voxels.healthy_len()
     }
 
     /// Add a return to its voxel's accumulated moments, marking its fine cell
@@ -196,6 +196,7 @@ impl VoxelMap {
     /// Count of a key's 26 neighbors that currently exist and are healthy.
     /// Called once per voxel, at creation, to seed its `support` field.
     fn count_healthy_neighbors(&self, key: VoxelKey) -> u32 {
+        let near = self.voxels.neighborhood(key, 1);
         let mut n = 0;
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -203,8 +204,7 @@ impl VoxelMap {
                     if (dx, dy, dz) == (0, 0, 0) {
                         continue;
                     }
-                    let nk = (key.0 + dx, key.1 + dy, key.2 + dz);
-                    if self.voxels.get(&nk).is_some_and(|c| c.health > 0) {
+                    if near.is_healthy((key.0 + dx, key.1 + dy, key.2 + dz)) {
                         n += 1;
                     }
                 }
@@ -217,24 +217,17 @@ impl VoxelMap {
     /// `key`'s health crossed the healthy boundary. Absent neighbors pick up
     /// the right count from `count_healthy_neighbors` at creation.
     fn propagate_neighbor_support(&mut self, key: VoxelKey, delta: i32) {
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    if (dx, dy, dz) == (0, 0, 0) {
-                        continue;
-                    }
-                    let nk = (key.0 + dx, key.1 + dy, key.2 + dz);
-                    if let Some(c) = self.voxels.get_mut(&nk) {
-                        let updated = c.support as i32 + delta;
-                        debug_assert!(
-                            (0..=26).contains(&updated),
-                            "support count out of range: {updated}"
-                        );
-                        c.support = updated as u32;
-                    }
-                }
+        self.voxels.for_each_near_mut(key, 1, |nk, _, support| {
+            if nk == key {
+                return;
             }
-        }
+            let updated = *support as i32 + delta;
+            debug_assert!(
+                (0..=26).contains(&updated),
+                "support count out of range: {updated}"
+            );
+            *support = updated as u8;
+        });
     }
 
     /// Register a ray hit: create the voxel at `min_health` if new, then bump its
@@ -253,17 +246,12 @@ impl VoxelMap {
         } else {
             let support = self.count_healthy_neighbors(key);
             let health = (min_health + 1).min(max_health);
-            self.voxels.insert(
-                key,
-                Voxel {
-                    health,
-                    support,
-                    ..Default::default()
-                },
-            );
+            self.voxels.insert(key, Voxel::with_health(health));
+            self.voxels.set_support(key, support as u8);
             (true, false, health > 0)
         };
         if was_healthy != now_healthy {
+            self.voxels.set_healthy(key, now_healthy);
             self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
         }
         created
@@ -284,6 +272,7 @@ impl VoxelMap {
             self.voxels.remove(&key);
         }
         if was_healthy != now_healthy {
+            self.voxels.set_healthy(key, now_healthy);
             self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
         }
         removed
@@ -323,18 +312,13 @@ impl VoxelMap {
             was_healthy
         } else {
             let support = self.count_healthy_neighbors(key);
-            self.voxels.insert(
-                key,
-                Voxel {
-                    health,
-                    support,
-                    ..Default::default()
-                },
-            );
+            self.voxels.insert(key, Voxel::with_health(health));
+            self.voxels.set_support(key, support as u8);
             false
         };
         let now_healthy = health > 0;
         if was_healthy != now_healthy {
+            self.voxels.set_healthy(key, now_healthy);
             self.propagate_neighbor_support(key, if now_healthy { 1 } else { -1 });
         }
     }
@@ -372,9 +356,6 @@ impl VoxelMap {
 #[derive(Clone)]
 pub struct Voxel {
     pub health: VoxelHealth,
-    /// Count of this voxel's 26 neighbors that currently exist and are healthy,
-    /// maintained incrementally by `VoxelMap` instead of rescanned per query.
-    support: u32,
     /// Occupancy bitmask of this voxel's fine cells.
     fine: u64,
     num_pts: u32,
@@ -390,7 +371,6 @@ impl Default for Voxel {
     fn default() -> Self {
         Self {
             health: 0,
-            support: 0,
             fine: 0,
             num_pts: 0,
             next_fit_pts: NORMAL_MIN_POINTS,
@@ -692,8 +672,8 @@ fn flatten_with_capacity(parts: Vec<Vec<f32>>, extra: usize) -> Vec<f32> {
     out
 }
 
-fn voxel_supported(v: &Voxel, support_min: i32) -> bool {
-    support_min <= 0 || v.support >= support_min as u32
+fn voxel_supported(support: u8, support_min: i32) -> bool {
+    support_min <= 0 || support as i32 >= support_min
 }
 
 /// Scan the healthy voxels of every chunk overlapping `bounds` (all chunks
@@ -708,7 +688,7 @@ fn scan_chunks<F>(
     emit: F,
 ) -> Vec<f32>
 where
-    F: Fn(VoxelKey, &Voxel, bool, &mut Vec<f32>) + Sync,
+    F: Fn(VoxelKey, u8, &Voxel, bool, &mut Vec<f32>) + Sync,
 {
     let chunk_edge = CHUNK_EDGE as f32 * voxel_size;
     let chunks: Vec<(ChunkKey, &Chunk)> = match bounds {
@@ -728,11 +708,9 @@ where
                 }
                 None => true,
             };
-            let mut part = Vec::with_capacity(3 * points_per_voxel * chunk.len());
-            for (key, v) in chunk.iter(ck) {
-                if v.health > 0 {
-                    emit(key, v, chunk_inside, &mut part);
-                }
+            let mut part = Vec::with_capacity(3 * points_per_voxel * chunk.healthy_len());
+            for (key, support, v) in chunk.healthy(ck) {
+                emit(key, support, v, chunk_inside, &mut part);
             }
             Some(part)
         })
@@ -756,8 +734,8 @@ pub fn emit_points(
         bounds,
         1,
         live.len(),
-        |key, v, chunk_inside, part| {
-            if !voxel_supported(v, support_min) {
+        |key, support, _, chunk_inside, part| {
+            if !voxel_supported(support, support_min) {
                 return;
             }
             let (x, y, z) = voxel_center(key, voxel_size);
@@ -801,8 +779,8 @@ pub fn emit_points_fine(
         bounds,
         4,
         live_fine.len(),
-        |key, v, chunk_inside, part| {
-            if !voxel_supported(v, support_min) {
+        |key, support, v, chunk_inside, part| {
+            if !voxel_supported(support, support_min) {
                 return;
             }
             // Boundary chunks test each voxel's box. Boundary voxels fall back

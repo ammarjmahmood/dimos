@@ -811,7 +811,7 @@ fn emit_points_naive(
         if !in_bounds(x, y, z) {
             continue;
         }
-        if support_min > 0 && c.support < support_min as u32 {
+        if support_min > 0 && (map.voxels.support(&key).unwrap() as i32) < support_min {
             continue;
         }
         out.push((x, y, z));
@@ -979,12 +979,17 @@ fn support_field_matches_neighbor_scan_after_random_transitions() {
             let keys: Vec<VoxelKey> = map.voxels.keys().collect();
             for k in keys {
                 let want = map.count_healthy_neighbors(k);
-                let got = map.voxels[&k].support;
+                let got = u32::from(map.voxels.support(&k).unwrap());
                 assert_eq!(
                     got, want,
                     "trial {trial} step {step}: support({k:?}) = {got}, want {want}"
                 );
             }
+            assert_eq!(
+                map.healthy_count(),
+                map.voxels.values().filter(|v| v.health > 0).count(),
+                "trial {trial} step {step}: healthy mask out of sync with health"
+            );
         }
     }
 }
@@ -1001,7 +1006,7 @@ fn new_voxel_seeds_support_from_existing_healthy_neighbors() {
     map.set_health((0, 0, 0), 1);
 
     assert_eq!(
-        map.voxels[&(0, 0, 0)].support,
+        map.voxels.support(&(0, 0, 0)).unwrap(),
         3,
         "new voxel must count its 3 pre-existing healthy neighbors"
     );
@@ -1257,7 +1262,7 @@ fn emit_points_fine_naive(
         if v.health <= 0 {
             continue;
         }
-        if support_min > 0 && v.support < support_min as u32 {
+        if support_min > 0 && (map.voxels.support(&key).unwrap() as i32) < support_min {
             continue;
         }
         let mut bits = v.fine;
@@ -1396,13 +1401,13 @@ fn clear_voxels_decrements_neighbor_support() {
     map.set_health((0, 0, 0), 1);
     map.set_health((1, 0, 0), 1);
     map.set_health((0, 1, 0), 1);
-    assert_eq!(map.voxels[&(1, 0, 0)].support, 2);
-    assert_eq!(map.voxels[&(0, 1, 0)].support, 2);
+    assert_eq!(map.voxels.support(&(1, 0, 0)).unwrap(), 2);
+    assert_eq!(map.voxels.support(&(0, 1, 0)).unwrap(), 2);
 
     assert_eq!(map.clear_voxels([(0, 0, 0)]), 1);
 
-    assert_eq!(map.voxels[&(1, 0, 0)].support, 1);
-    assert_eq!(map.voxels[&(0, 1, 0)].support, 1);
+    assert_eq!(map.voxels.support(&(1, 0, 0)).unwrap(), 1);
+    assert_eq!(map.voxels.support(&(0, 1, 0)).unwrap(), 1);
 }
 
 /// An unhealthy voxel was never counted in its neighbors' support, so removing
@@ -1412,11 +1417,11 @@ fn clear_voxels_leaves_support_alone_for_an_unhealthy_voxel() {
     let mut map = VoxelMap::default();
     map.set_health((1, 0, 0), 1);
     map.set_health((0, 0, 0), 0);
-    assert_eq!(map.voxels[&(1, 0, 0)].support, 0);
+    assert_eq!(map.voxels.support(&(1, 0, 0)).unwrap(), 0);
 
     assert_eq!(map.clear_voxels([(0, 0, 0)]), 1);
 
-    assert_eq!(map.voxels[&(1, 0, 0)].support, 0);
+    assert_eq!(map.voxels.support(&(1, 0, 0)).unwrap(), 0);
 }
 
 #[test]
