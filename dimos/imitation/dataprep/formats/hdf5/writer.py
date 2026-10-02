@@ -41,8 +41,12 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.imitation.dataprep.core import DEFAULT_FPS, OutputConfig, Sample
 from dimos.imitation.dataprep.formats._stats import stats_from_metadata
+from dimos.imitation.dataprep.schema import (
+    DEFAULT_FPS,
+    OutputConfig,
+    Sample,
+)
 
 
 class _Hdf5Writer:
