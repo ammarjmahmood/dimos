@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790924624674,
+  "lastUpdate": 1790950633040,
   "repoUrl": "https://github.com/dimensionalOS/dimos",
   "entries": {
     "go2 replay realtime": [
@@ -2053,6 +2053,102 @@ window.BENCHMARK_DATA = {
           {
             "name": "network (transport)",
             "value": 2728.796,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "network (external rx)",
+            "value": 0.059,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "network (external tx)",
+            "value": 0.147,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "69774903+aclauer@users.noreply.github.com",
+            "name": "Andrew Lauer",
+            "username": "aclauer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a50665fe89a8f2c6f67a48393710e6ab23eb034",
+          "message": "feat: navigation relocalization (#4382)",
+          "timestamp": "2026-10-02T14:13:09Z",
+          "tree_id": "c5f3da3fec711da23542e311e1c450f5e3466112",
+          "url": "https://github.com/dimensionalOS/dimos/commit/8a50665fe89a8f2c6f67a48393710e6ab23eb034"
+        },
+        "date": 1790950631902,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "first frame wall",
+            "value": 10.533,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "first frame cpu",
+            "value": 22.082,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "run cpu",
+            "value": 31.983,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "run cpu (user)",
+            "value": 24.685,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "run cpu (system)",
+            "value": 7.298,
+            "unit": "s",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "peak memory",
+            "value": 2705.816,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "peak threads",
+            "value": 394,
+            "unit": "threads",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "disk read",
+            "value": 21.375,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "disk write",
+            "value": 11.164,
+            "unit": "MB",
+            "extra": "cpu: AMD EPYC 7763 64-Core Processor"
+          },
+          {
+            "name": "network (transport)",
+            "value": 2714.306,
             "unit": "MB",
             "extra": "cpu: AMD EPYC 7763 64-Core Processor"
           },
