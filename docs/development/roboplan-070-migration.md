@@ -71,5 +71,12 @@ Lock generation and pre-commit used the repository-supported uv 0.9.25. uv
 constraint admits Python 3.10/3.11 while its available wheel is cp312-only.
 No unrelated constraint was changed.
 
-Hardware, GPU, Windows, macOS, ARM, MuJoCo and the full self-hosted suite were not
-run. The selected native tests marked self_hosted were explicitly run on CPU.
+A bounded synthetic MuJoCo depth-frame smoke used llvmpipe software rendering:
+576 robot surface returns were removed and all 175 nearby obstacle returns retained,
+with colors intact. This tests the camera conversion and native filtering path.
+The full xArm grasp room scene remains blocked locally by missing GitHub CLI OAuth
+for its custom LFS archive. The simulation blueprint was checked with asset
+resolution stubbed; it selects only MuJoCo/sim adapters and native filtering.
+
+Hardware, GPU execution, Windows, macOS, ARM and the full self-hosted suite were not
+run locally. Selected native tests marked self_hosted were explicitly run on CPU.

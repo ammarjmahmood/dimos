@@ -287,6 +287,8 @@ class ManipulationModule(Module):
             if self.coordinator_joint_state is not None:
                 self.coordinator_joint_state.subscribe(self._on_joint_state)
                 logger.info("Subscribed to coordinator_joint_state port")
+            if self.config.filter_robot_points:
+                self.process_observable(self.pointcloud.pure_observable(), self._handle_pointcloud)
             logger.info("ManipulationModule started")
         except BaseException:
             self._started = False
@@ -1306,7 +1308,7 @@ class ManipulationModule(Module):
         )
         return self._world_monitor.update_obstacle(obstacle)
 
-    async def handle_pointcloud(self, cloud: PointCloud2) -> None:
+    async def _handle_pointcloud(self, cloud: PointCloud2) -> None:
         """Exclude robot surface returns before they reach the mapper."""
         await asyncio.to_thread(self._publish_filtered_pointcloud, cloud)
 
