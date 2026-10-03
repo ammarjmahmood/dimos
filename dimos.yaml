@@ -4,11 +4,11 @@ version: "0.0.14"
 requires:
   dimos-desktop: ">=0.2 <0.3"
   dimcode: ">=0.1 <0.2"
-# env: REF (this tag/branch), DIMOS_DIR (checkout to create), NON_INTERACTIVE=1 when no one can answer prompts
+# env: REF (this tag/branch), COMMIT (its commit), DIMOS_DIR (checkout to create), NON_INTERACTIVE=1 when no one can answer prompts
 install: |
   set -euo pipefail
   script="$(mktemp)"
-  curl -fsSL "https://raw.githubusercontent.com/dimensionalOS/dimos/$REF/scripts/install.sh" -o "$script"
+  curl -fsSL "https://raw.githubusercontent.com/dimensionalOS/dimos/${COMMIT:-$REF}/scripts/install.sh" -o "$script"
   bash "$script" --mode dev --branch "$REF" --project-dir "$DIMOS_DIR" --skip-tests ${NON_INTERACTIVE:+--non-interactive}
   "$DIMOS_DIR/.venv/bin/python" -c "import dimos" && echo "dimos is installed in $DIMOS_DIR"
 # The dimos server (blueprints, runs, logs, global config at /dimos/). For now Desktop ships it; it moves here later.
