@@ -95,6 +95,7 @@ class RoboPlanWorld:
     """WorldSpec implementation backed by RoboPlan scene and collision queries."""
 
     def __init__(self, enable_viz: bool = False, **_: object) -> None:
+        self._body_filter: Any | None = None
         self._scene: Any | None = None
         self._model: RoboPlanModel | None = None
         self._enable_viz = enable_viz
@@ -303,6 +304,31 @@ class RoboPlanWorld:
         if not len(q):
             q = np.zeros(len(model_data.config.joint_names), dtype=np.float64)
         return JointState(name=model_data.config.joint_names, position=q.astype(float).tolist())
+
+    def robot_body_mask(
+        self,
+        ctx: RoboPlanContext,
+        points: NDArray[np.float64],
+        *,
+        padding: float = 0.01,
+        extra_padding: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.bool_]:
+        """Classify world-frame points with upstream geometry and consumer state."""
+        with self._lock:
+            self._require_finalized()
+            if self._body_filter is None or self._body_filter.getOptions().padding != padding:
+                self._body_filter = roboplan_core.RobotBodyFilter(
+                    self._require_scene(),
+                    roboplan_core.RobotBodyFilterOptions(
+                        padding=padding,
+                        method=roboplan_core.RobotBodyFilterMethod.Narrowphase,
+                        num_threads=1,
+                    ),
+                )
+            return np.asarray(
+                self._body_filter.computeMask(self._full_scene_q(ctx), points, extra_padding),
+                dtype=bool,
+            )
 
     # Collision Checking
 

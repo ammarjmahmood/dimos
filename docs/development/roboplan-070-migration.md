@@ -8,31 +8,33 @@ URDF parser ignores nonstandard acceleration attributes.
 
 ## Point clouds
 
-`PointCloudSelfFilter` uses `RobotBodyFilter.computeMask` with `Narrowphase` and
-one native worker. Its existing cloud and clear-mask outputs remain unchanged.
-The added `coordinator_joint_state` input receives canonical model joint names.
-States are copied into a bounded time window and matched to the capture timestamp
-within `state_tolerance_s`; there is no fallback to the latest configuration.
-Missing, malformed or stale state drops the whole capture. Fixed robots do not
-need joint state. Out-of-order captures do not replace map-clear history.
+The old `point_cloud_self_filter.py` utility and its blueprint are removed.
+`ManipulationModule` optionally filters camera returns before mapping, calling
+`RoboPlanWorld.robot_body_mask` and upstream `RobotBodyFilter.computeMask` with
+`Narrowphase`. It reuses the prepared Scene, model limits, base pose and full-q
+conversion; no second URDF parser, trimesh geometry tests, primitive sampling or
+collision-link geometry cache remains.
 
-Scalar joints map to full native configuration indices; continuous joints use
-cosine/sine coordinates. Pinocchio derives mimic joints from their source.
-Planar/floating joints use capture-time parent-to-child TF after removing the
-joint origin. Capture-time TF also maps sensor points into the URDF root frame
-and maps clear-mask samples into the configured world frame. The grasp blueprint
-uses a 100 ms state tolerance alongside its existing 100 ms TF tolerances.
+Canonical JointState messages keep their original timestamps in a bounded buffer.
+Each capture matches state and sensor-to-world TF within the configured tolerance;
+missing, malformed or stale alignment drops the capture. There is no latest-state
+fallback. Continuous, mimic and supported prepared planar-base models reuse the
+planning model's native configuration conversion. Raw floating/planar URDF joints
+remain subject to the existing prepared-model validation rules.
 
-A lock covers native filter scratch, history and paired output publication.
-Per-point ancillary fields retain their order and values. World voxels use floor
-quantization and cell centers; clearing still includes the current and previous
-robot volume. Volume samples remain separate from sensor classification.
+The native filter is serialized with scene queries/updates. A consumer lock keeps
+capture order and output publication consistent. Original sensor coordinates,
+intensities and ancillary fields survive in `filtered_pointcloud`; the grasp
+blueprint connects that output to the mapper's lidar input. Only the wrist camera's
+attachment link needs extra TF publication.
 
-Coal's triangle-mesh Narrowphase query removes points near mesh surfaces, but
-does not classify a closed mesh's entire interior as solid. Mesh volume sampling
-is retained for clear masks so this upstream behavior does not leave interior
-map cells uncleared. PaddedObb is not enabled; it can remove nearby obstacles at
-bounding-box corners.
+Solid-volume samples, current/previous volume clearing, and the unused Python/Rust
+clear-mask transport are removed. This intentionally changes map cleanup: the
+filter excludes observed surface returns before insertion, and the mapper retains
+ordinary ray-tracing cleanup. Existing deep occupied cells inside triangle meshes
+are not explicitly erased. Coal triangle-mesh Narrowphase classifies proximity to
+surfaces, so this follows the user-approved surface filtering semantics. PaddedObb
+remains disabled because its box corners can erase nearby real obstacles.
 
 ## Planning contexts
 
@@ -50,26 +52,19 @@ throughput while those consistency locks remain.
 
 CPU validation on Linux x86_64 / Python 3.12.14 / AMD Ryzen 7 8700F:
 
-- 103 focused tests: world/planner adapters, point-cloud alignment and fields,
-  geometry refresh, native RRT, Cartesian and TOPPRA, and parametrizer validation.
-- 5 blueprint generation tests; generated registry unchanged.
-- Focused mypy for the three changed production adapters; changed-file pre-commit
-  checks, including lock, LFS and branch checks.
-- Real STL surface filtering and interior clearing; synthetic fixed, prismatic,
-  continuous, mimic, planar and floating models; real xArm Cartesian fixtures.
+- 125 CPU tests: planning, native RRT/Cartesian/TOPPRA, manipulation-module behavior,
+  direct point-cloud filtering, blueprint registry and documentation branding.
+- Native surface-filter tests cover STL and primitives, capture-time state/TF,
+  fields, nonzero base poses, continuous/mimic/fixed joints and prepared planar bases.
+- Blueprint registry and wiring checks, focused mypy and changed-file pre-commit.
+- 88 Rust mapper tests after removing its obsolete self-filter clear-mask pipeline.
 
-For a fixed sphere fixture with 100,000 uniformly distributed points (seed 7),
-radius 0.1 m, padding 0.01 m and voxel pitch 0.05 m, full filtering and mask
-construction were measured over 50 iterations after five warmups. Both versions
-removed the same 69 points and produced identical clear masks.
-
-| Version | p50 (ms) | p95 (ms) |
-| --- | ---: | ---: |
-| main 943ce13c | 2.11 | 2.37 |
-| migration, one native worker | 2.85 | 3.23 |
-
-This simple primitive fixture is slower after migration. It does not establish
-performance for dense real robot mesh scenes or hardware streams.
+A fixed-seed 100,000-point sphere fixture compares filtering against main 943ce13c.
+Both versions removed the same 69 points over 50 iterations after five warmups.
+The old path also builds solid clear masks, so timings measure different cleanup
+semantics. The observed p50/p95 was 2.08/2.66 ms on main and 2.79/3.69 ms for the
+direct native integration. No speedup claim is made. Evidence is kept in the
+isolated validation directory.
 
 Lock generation and pre-commit used the repository-supported uv 0.9.25. uv
 0.12.21 rejected a fresh universal resolution because the existing a750-control
