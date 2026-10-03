@@ -18,12 +18,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import attrs
-import numpy as np
 
-from dimos.control.task import CoordinatorState, JointCommandOutput
+from dimos.control.task import CoordinatorState
 from dimos.control.tasks.pose_target_ik import (
     FrameTargetSnapshot,
     PinkPoseTargetSolver,
@@ -34,8 +33,6 @@ from dimos.control.tasks.pose_target_ik import (
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 if TYPE_CHECKING:
     from dimos.control.coordinator import TaskConfig
@@ -51,7 +48,6 @@ class CartesianIKTaskConfig(PoseTargetIKTaskConfig):
         converter=string_tuple_converter,
         validator=[attrs.validators.min_len(1), attrs.validators.max_len(1)],
     )
-    feedback_correction: bool = False
 
 
 class CartesianIKTask(PoseTargetIKTask):
@@ -68,8 +64,6 @@ class CartesianIKTask(PoseTargetIKTask):
         self._target_pose: PoseStamped | None = None
         self._last_update_time = 0.0
         self._active = False
-        self._feedback_correction = config.feedback_correction
-        self._commanded: JointState | None = None
         super().__init__(name, config, solver=solver)
 
     def is_active(self) -> bool:
@@ -97,89 +91,25 @@ class CartesianIKTask(PoseTargetIKTask):
     def stop(self) -> None:
         with self._lock:
             self._active = False
-            self._commanded = None
         self._reset_command_state()
 
     def clear(self) -> None:
         with self._lock:
             self._target_pose = None
             self._active = False
-            self._commanded = None
         self._reset_command_state()
 
     def is_tracking(self) -> bool:
         return self.is_active()
 
-    def cancel(self) -> bool:
-        """Clear the target without requiring joint feedback or an IK update."""
-        self.clear()
-        return True
-
-    def get_control_info(self) -> dict[str, Any]:
-        """Describe the configured robot without exposing the model to input sources."""
-        model = self._config.robot_model
-        loaded = model.model.load()
-        limits = []
-        for name in self._joint_names:
-            joint = loaded.get_joint(name)
-            if joint is None or joint.lower is None or joint.upper is None:
-                raise ValueError(f"Controlled joint {name!r} needs position limits")
-            limits.append((joint.lower, joint.upper))
-        return {
-            "joint_names": self._joint_names,
-            "joint_limits": limits,
-            "base_frame": model.base_link,
-            "base_pose": model.base_pose,
-            "ee_frame": self._config.target_frames[0],
-            "max_joint_velocity_rad_s": self._config.max_joint_velocity_rad_s,
-        }
-
-    def get_feedback(self, state: CoordinatorState) -> dict[str, Any]:
-        """Measured state and FK from this task's existing solver, even while idle."""
-        poses = self.current_frame_poses(state, self._config.target_frames)
-        return {
-            "t": state.joints.timestamp,
-            "positions": state.joints.joint_positions,
-            "velocities": state.joints.joint_velocities,
-            "ee_pose": None if poses is None else poses[self._config.target_frames[0]],
-            "tracking": self.is_tracking(),
-        }
-
     def _frame_target_snapshot(self, state: CoordinatorState) -> FrameTargetSnapshot | None:
         with self._lock:
             if not self._active or self._target_pose is None:
                 return None
-            target, commanded, updated = self._target_pose, self._commanded, self._last_update_time
-        frame = self._config.target_frames[0]
-        if self._feedback_correction and commanded is not None:
-            measured = self.current_frame_poses(state, self._config.target_frames)
-            if measured is not None:
-                measured_matrix = pose_to_matrix(measured[frame])
-                commanded_matrix = pose_to_matrix(
-                    self._solver.frame_poses(commanded, self._config.target_frames)[frame]
-                )
-                corrected = np.array(pose_to_matrix(target), copy=True)
-                corrected[:3, 3] += commanded_matrix[:3, 3] - measured_matrix[:3, 3]
-                corrected[:3, :3] = (
-                    corrected[:3, :3] @ measured_matrix[:3, :3].T @ commanded_matrix[:3, :3]
-                )
-                pose = matrix_to_pose(corrected)
-                target = PoseStamped(
-                    position=pose.position, orientation=pose.orientation, frame_id=target.frame_id
-                )
-        return FrameTargetSnapshot(targets={frame: target}, last_update_time=updated)
-
-    def compute(self, state: CoordinatorState) -> JointCommandOutput | None:
-        output = super().compute(state)
-        if not self._feedback_correction:
-            return output
-        with self._lock:
-            self._commanded = (
-                JointState(name=output.joint_names, position=output.positions)
-                if output is not None and output.positions is not None
-                else None
+            return FrameTargetSnapshot(
+                targets={self._config.target_frames[0]: self._target_pose},
+                last_update_time=self._last_update_time,
             )
-        return output
 
     def _on_target_timeout(self) -> None:
         self.clear()
@@ -192,7 +122,6 @@ class CartesianIKTaskParams(PoseTargetIKTaskParams):
     """Task-owned parameters carried inside the generic task envelope."""
 
     target_frame: str
-    feedback_correction: bool = False
 
 
 def create_task(
@@ -207,7 +136,6 @@ def create_task(
             joint_names=tuple(cfg.joint_names),
             robot_model=params.robot_model,
             target_frames=(params.target_frame,),
-            feedback_correction=params.feedback_correction,
             pink=params.pink,
             priority=cfg.priority,
             timeout=params.timeout,

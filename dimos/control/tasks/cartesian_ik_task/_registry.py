@@ -23,5 +23,5 @@ TASK_CONSUMES = {
 }
 
 TASK_EXPOSES = {
-    "cartesian_ik": ["start", "on_cartesian_command", "cancel", "get_control_info", "get_feedback"],
+    "cartesian_ik": ["start"],
 }

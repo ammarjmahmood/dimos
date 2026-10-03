@@ -50,6 +50,8 @@ from dimos.evals.constants import (
     RAW_MANIPULATION_README,
     RAW_MAX_ANGULAR_RPS,
     RAW_MAX_CMD_S,
+    RAW_MAX_EE_ANGULAR_RPS,
+    RAW_MAX_EE_LINEAR_MPS,
     RAW_MAX_LINEAR_MPS,
     RAW_README,
 )
@@ -298,6 +300,8 @@ class PiAdapter(Agent):
                     max_cmd_s=RAW_MAX_CMD_S,
                     max_linear=RAW_MAX_LINEAR_MPS,
                     max_angular=RAW_MAX_ANGULAR_RPS,
+                    max_ee_linear=RAW_MAX_EE_LINEAR_MPS,
+                    max_ee_angular=RAW_MAX_EE_ANGULAR_RPS,
                 )
             )
             files["robot"] = readme

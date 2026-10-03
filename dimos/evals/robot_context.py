@@ -16,10 +16,18 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import shutil
 
 _REQUIRED = {"README.md", "robot.urdf", "gripper.urdf", "robot_info.json"}
+ROBOT_CONTEXT_DIR_ENV = "DIMOS_ROBOT_CONTEXT_DIR"
+
+
+def local_robot_context(name: str) -> Path | None:
+    """``$DIMOS_ROBOT_CONTEXT_DIR/<name>``; None (no robot context) when the variable is unset."""
+    root = os.environ.get(ROBOT_CONTEXT_DIR_ENV)
+    return Path(root).expanduser() / name if root else None
 
 
 def robot_context_files(source: Path) -> dict[str, Path]:

@@ -115,8 +115,8 @@ def test_raw_manipulation_appends_transport_and_keeps_control_in_robot_blueprint
     assert env._raw_module == "raw-manipulation-bridge"
     parsed = BlueprintConfigParser(xarm_sim).parse(environ={})
     tasks = parsed.module_kwargs("ControlCoordinator")["tasks"]
-    cartesian = next(task for task in tasks if task["type"] == "cartesian_ik")
-    assert cartesian["params"]["robot_model"] is not None
+    twist = next(task for task in tasks if task["type"] == "eef_twist")
+    assert twist["params"]["robot_model"] is not None
 
 
 def test_no_dimos_guidance_selects_manipulation_protocol(tmp_path):
@@ -135,7 +135,8 @@ def test_no_dimos_guidance_selects_manipulation_protocol(tmp_path):
     assert "arm/command/json" in guide
     assert "tcp/127.0.0.1:12345" in guide
     assert "cmd_vel/json" not in guide
-    assert '"kind":"delta"' in guide
+    assert '"kind":"twist"' in guide
+    assert '"kind":"delta"' not in guide
     assert "camera/depth_f32" in guide
     assert 'np.frombuffer(payload, dtype="<f4")' in guide
     assert "robot/overview/jpeg" in guide

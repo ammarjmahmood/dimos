@@ -173,10 +173,6 @@ class GripperControlTask(BaseControlTask):
                 return None
             return [self._measured[n] for n in self._joint_names]
 
-    def get_limits(self) -> dict[str, tuple[float, float]]:
-        """Native command/feedback ranges, keyed by the joints this task owns."""
-        return dict(zip(self._joint_names, self._limits, strict=True))
-
     def get_normalized(self) -> list[float] | None:
         """Measured positions as 0.0-1.0 of travel; 0.0 closed, 1.0 open."""
         positions = self.get_position()

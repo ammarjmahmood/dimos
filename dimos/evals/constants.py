@@ -50,6 +50,8 @@ RAW_TOPIC_PREFIX = "robot"
 RAW_MAX_CMD_S = 2.0
 RAW_MAX_LINEAR_MPS = 1.0
 RAW_MAX_ANGULAR_RPS = 1.5
+RAW_MAX_EE_LINEAR_MPS = 0.1
+RAW_MAX_EE_ANGULAR_RPS = 0.5
 RAW_DRIVE_HZ = 10.0
 RAW_JPEG_QUALITY = 90
 
@@ -93,22 +95,20 @@ Subscribe before commanding. Topics:
                            depth in metres; attachment {{"t": unix_seconds}}
   robot/camera/depth_info/json  {{"t", "width", "height", "dtype":"<f4", "unit":"metres", "frame_id"}}
   robot/camera_info/json   {{"width", "height", "K"}}: camera intrinsics
-  robot/camera_pose/json   {{"t", "frame":"base", "xyz", "quaternion_xyzw"}}:
+  robot/camera_pose/json   {{"t", "frame":"world", "xyz", "quaternion_xyzw"}}:
                            camera optical pose; +Z forward, +X right, +Y down
   robot/overview/jpeg      RGB-only fixed env_camera overview; attachment {{"t": unix_seconds}}
   robot/overview/camera_info/json  {{"width", "height", "K"}}: overview's own intrinsics
-  robot/overview/camera_pose/json  {{"t", "frame":"base", "xyz", "quaternion_xyzw"}}:
-                           overview optical pose relative to robot base
-  robot/arm/info/json      static info at 1 Hz: joint_names in command order, joint_limits in radians,
-                           base_frame, ee_frame, max_delta_m, max_delta_rad,
-                           max_joint_velocity_rad_s, gripper joint/unit/position_limits
-  robot/arm/state/json     {{"t", "frame":"base", "joint_names", "positions", "velocities",
-                           "ee_pose":{{"xyz", "quaternion_xyzw"}}, "gripper_position"}}
+  robot/overview/camera_pose/json  {{"t", "frame":"world", "xyz", "quaternion_xyzw"}}:
+                           overview optical pose in the world frame
+  robot/arm/info/json      static info at 1 Hz: commands, twist_frame, max_linear_mps,
+                           max_angular_rps, max_cmd_s, gripper units
+  robot/arm/state/json     {{"t", "joint_names", "positions", "velocities", "gripper_opening"}}
+                           measured arm joints (radians, rad/s) and gripper opening 0..1
 
-Primary controls are delta EE XYZ/RPY and native gripper position. Joint-angle targets
-are optional advanced control; stop is always available. If robot context files
-are listed, read robot/README.md and robot/robot_info.json once for URDFs,
-joint/frame conventions, jaw-gap estimates and TCP-to-finger-pad offsets.
+There is no end-effector pose topic: infer progress from joints and the cameras.
+If robot context files are listed, read robot/README.md and robot/robot_info.json
+once for URDFs, joint/frame conventions and gripper geometry.
 Keep the latest sensor message per topic rather than printing every frame.
 Use compact state snapshots to decide whether the robot reached your intended target.
 Save JPEG/depth bytes to files instead of printing binary payloads or entire arrays.
@@ -130,43 +130,25 @@ Ignore non-finite/nonpositive depths; distant background can have very large
 depths. Depth contains the visible robot/gripper as well as scene surfaces.
 Save the numeric array as .npy if needed; JPEG or a colorized preview loses depth.
 
-Publish JSON to robot/arm/command/json. Commands are fire-and-forget inputs:
-  {{"kind":"delta", "xyz":[0,0,0.05], "rpy":[0,0,0], "frame":"base"}}
-  {{"kind":"delta", "xyz":[0,0,0], "rpy":[0,0,0.1]}}
-  {{"kind":"gripper", "position":0.85}}
-  {{"kind":"stop"}}
+Publish JSON to robot/arm/command/json. Commands are fire-and-forget:
+  {{"kind":"twist", "linear":[0,0,0.05], "angular":[0,0,0], "t":1.0}}
+  {{"kind":"gripper", "opening":1.0}}
 
-Optional joint-target command:
-  {{"kind":"joints", "positions":[0,-0.247,0,0.909,0,1.15644,0], "timeout_s":10}}
+twist moves the end effector (tool centre point) at the given velocity: linear in m/s,
+angular in rad/s about fixed world X/Y/Z axes, both expressed in the world frame
+(the robot base is unrotated in this scene). The robot holds that velocity for t seconds
+(max {max_cmd_s:g}), then stops. Republish to keep moving; a new twist replaces the
+previous one, and a zero twist (or t=0) stops the arm. Components are clamped to
+{max_ee_linear:g} m/s and {max_ee_angular:g} rad/s. Omitted linear/angular mean zero.
+Motion is local IK tracking, not obstacle-aware planning: move in small steps and check.
 
-Positions are radians for joints, metres for xyz. Delta rpy is radians, interpreted
-as extrinsic rotations around fixed base X/Y/Z axes: Rz(yaw) Ry(pitch) Rx(roll)
-left-multiplies the measured EE rotation. Deltas are applied ONCE to the measured
-pose when accepted, not repeatedly or as velocity. Omitted xyz/rpy means zero.
-The base frame is the robot mounting frame, not necessarily the world's origin.
-Points below the mounting height have negative base-frame Z coordinates.
-Gripper position is in the native units/range advertised by arm/info/json.
-For this simulator: 0 closed, 0.85 open, in the adapter's radian opening coordinate.
-This is not jaw width and is opposite to the URDF driver angle (q_driver=0.85-position).
-
-Joint targets must give every arm joint, in arm/info/json order (no gripper entry).
-The joint controller bounds velocity. Cartesian deltas use local IK tracking,
-not obstacle-aware motion planning. Inspect the scene and choose your increments.
-Translation norm and rpy-vector norm must be within the limits in arm/info/json;
-out-of-range/non-finite inputs are rejected, not silently clamped.
+gripper opening is normalized: 0.0 closed, 1.0 fully open. It is independent of the arm
+and persists until changed. A gripper blocked by an object holds its target; inspect
+measured gripper_opening and object motion rather than treating closure as grasp success.
 
 There are no command IDs, acknowledgements or execution-status messages. Publishing
 does not mean the motion finished. Observe measured robot state and camera images.
-The latest arm input replaces the previous target; gripper input is independent.
-If inputs arrive faster than the bridge services them, intermediate inputs can be
-replaced. Each new delta input uses the current measured pose: do not repeatedly
-publish a delta while waiting for the original movement to finish.
-Arm timeout_s is a target lease: default 10 seconds, maximum 30. The bridge may
-refresh the SAME absolute pose internally, but never extends that lease or reapplies
-the delta. Stop/lease expiry retains gripper intent and never zeros joint angles.
-Task watchdogs still apply if target refresh or robot feedback is lost.
-A gripper blocked by an object holds its requested target; inspect measured position
-and object motion rather than treating full closure as grasp success.
+Invalid or non-finite commands are dropped.
 
 Only these robot observations and commands are available. The full internal TF
 tree, object ground-truth poses, and higher-level manipulation tools are not exposed.

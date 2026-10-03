@@ -18,6 +18,7 @@ dimos evals run dimos.evals.suites.mujoco_xarm_raw --agent dimos.evals.agents.pi
 """
 
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
+from dimos.evals.robot_context import local_robot_context
 from dimos.evals.suites.mujoco_xarm import lifted
 from dimos.evals.types import EvalCase, Suite
 from dimos.utils.data import LfsPath
@@ -33,7 +34,7 @@ SUITE: Suite = [
             blueprint=["xarm-sim", "mcp-server"],
             raw_bridge=True,
             raw_interface="manipulation",
-            robot_context=LfsPath("xarm7_agent_context"),
+            robot_context=local_robot_context("xarm7"),
             ready_streams=("color_image", "overview_image", "coordinator_joint_state"),
             scene=LfsPath("xarm7/scene.xml"),
             tracked_bodies=("cup",),

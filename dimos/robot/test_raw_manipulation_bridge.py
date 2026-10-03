@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import io
 import json
 import time
@@ -20,239 +21,142 @@ from unittest.mock import MagicMock
 import numpy as np
 from PIL import Image as PILImage
 import pytest
-from scipy.spatial.transform import Rotation
 
-from dimos.control.tasks.trajectory_task.trajectory_task import (
-    TrajectoryCancellationResult,
-    TrajectoryCancellationStatus,
-    TrajectoryExecutionResult,
-    TrajectoryExecutionStatus,
-)
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.robot.raw_manipulation_bridge import RawManipulationBridge, depth_f32
-from dimos.utils.transform_utils import pose_to_matrix
 
 
 @pytest.fixture
 def bridge():
     module = RawManipulationBridge()
     module._topics = MagicMock()
-    module.coordinator = MagicMock()
-    feedback = {
-        "t": time.time(),
-        "positions": {"j1": 0.1, "j2": 0.2, "arm/gripper": 0.85},
-        "velocities": {},
-        "ee_pose": PoseStamped(position=(0.4, 0.2, 0.6)),
-        "tracking": False,
-    }
-    targets = []
-
-    def invoke(task, method, kwargs=None):
-        if method == "get_control_info":
-            return {
-                "joint_names": ["j1", "j2"],
-                "joint_limits": [(-1, 1), (-2, 2)],
-                "base_frame": "base_link",
-                "base_pose": PoseStamped(position=(0.1, 0.2, 0.3)),
-                "ee_frame": "tool",
-                "max_joint_velocity_rad_s": 0.5,
-            }
-        if method == "get_limits":
-            return {"arm/gripper": (0.0, 0.85)}
-        if method == "get_feedback":
-            assert kwargs == {"state": None}
-            return feedback
-        if method == "cancel":
-            feedback["tracking"] = False
-            return True
-        if method == "on_cartesian_command":
-            targets.append(kwargs["pose"])
-            feedback["tracking"] = True
-            return True
-        if method == "set_position":
-            return True
-        raise AssertionError(method)
-
-    module.coordinator.task_invoke.side_effect = invoke
-    module.coordinator.cancel_trajectory.return_value = TrajectoryCancellationResult(
-        TrajectoryCancellationStatus.CANCELLED
-    )
-    module.coordinator.execute_trajectory.return_value = TrajectoryExecutionResult(
-        TrajectoryExecutionStatus.ACCEPTED
-    )
-    module._load_info()
-    yield module, feedback, targets
+    module.ee_twist_command = MagicMock()
+    module.gripper_command = MagicMock()
+    yield module
     module.stop()
 
 
-def send(module, **command):
-    module._on_command(json.dumps(command).encode(), None)
+def _command(module, **payload):
+    module._on_command(json.dumps(payload).encode(), None)
+
+
+def _drive(module, ticks):
+    """Run the deadman loop for a fixed number of ticks."""
+    stop = module._stop
+    module._stop = MagicMock()
+    module._stop.wait.side_effect = [False] * ticks + [True]
+    module._drive()
+    module._stop = stop
+
+
+def _twists(module):
+    return [
+        (*call.args[0].linear.to_numpy(), *call.args[0].angular.to_numpy())
+        for call in module.ee_twist_command.publish.call_args_list
+    ]
+
+
+def _published(module, key):
+    return [
+        json.loads(call.args[1])
+        for call in module._topics.put.call_args_list
+        if call.args[0] == key
+    ]
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"kind": "delta", "xyz": [0, 0, float("nan")]},
-        {"kind": "delta", "rpy": [0, float("inf"), 0]},
-        {"kind": "delta", "xyz": [0, 1]},
-        {"kind": "delta", "xyz": [0, 0, 0.21]},
-        {"kind": "delta", "rpy": [0, 0, 2]},
-        {"kind": "delta", "frame": "tool"},
-        {"kind": "joints", "positions": ["0.1", "0.2"]},
-        {"kind": "joints", "positions": [True, 0]},
-        {"kind": "joints", "positions": [0]},
-        {"kind": "joints", "positions": [2, 0]},
-        {"kind": "gripper", "position": 1.0},
-        {"kind": "gripper", "opening": 0.5},
-        {"kind": "delta", "timeout_s": 31},
-        {"kind": "stop", "xyz": [0, 0, 1]},
-        {"kind": "delta", "id": "old-protocol"},
+        b"not json",
+        b'{"kind":"delta","xyz":[0,0,0.1]}',
+        b'{"kind":"joints","positions":[0,0]}',
+        b'{"kind":"stop"}',
+        b'{"kind":"twist","linear":[0,0],"t":1}',
+        b'{"kind":"twist","linear":[0,0,1],"t":-1}',
+        b'{"kind":"twist","linear":[0,0,1]}',
+        b'{"kind":"twist","linear":[0,0,1],"t":1,"id":"x"}',
+        b'{"kind":"gripper","opening":1.5}',
+        b'{"kind":"gripper","position":0.4}',
     ],
 )
-def test_invalid_inputs_are_dropped_without_command_replies(bridge, payload):
-    module, _, _ = bridge
-    module.coordinator.reset_mock()
-    send(module, **payload)
-    assert module._pending_arm is None and module._pending_gripper is None
-    module.coordinator.task_invoke.assert_not_called()
-    module._topics.put.assert_not_called()
+def test_invalid_inputs_are_dropped(bridge, payload):
+    bridge._on_command(payload, None)
+    _drive(bridge, 3)
+    bridge.ee_twist_command.publish.assert_not_called()
+    bridge.gripper_command.publish.assert_not_called()
 
 
-def test_delta_is_resolved_once_and_refreshes_same_target(bridge):
-    module, feedback, targets = bridge
-    send(module, kind="delta", xyz=[0, 0, 0.05])
-    module._tick()
-    assert targets[-1].z == pytest.approx(0.65)
-    feedback["ee_pose"] = PoseStamped(position=(0.4, 0.2, 0.63))
-    module._tick()
-    assert len(targets) == 2 and targets[-1].z == pytest.approx(0.65)
-    module.coordinator.execute_trajectory.assert_not_called()
-    assert all(call.args[0] != "arm/status/json" for call in module._topics.put.call_args_list)
+def test_twist_is_held_clamped_then_one_zero(bridge, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    _command(bridge, kind="twist", linear=[0.05, 0, 9], angular=[0, 0, -9], t=1.0)
+    _drive(bridge, 2)
+    assert _twists(bridge) == [(0.05, 0, 0.1, 0, 0, -0.5)] * 2
+    now[0] += 1.0
+    _drive(bridge, 3)
+    assert _twists(bridge)[2:] == [(0, 0, 0, 0, 0, 0)]
 
 
-def test_rotated_base_deltas_use_base_axes(bridge):
-    module, feedback, targets = bridge
-    module._base[:3, :3] = Rotation.from_euler("z", np.pi / 2).as_matrix()
-    module._base_inv = np.linalg.inv(module._base)
-    feedback["ee_pose"] = PoseStamped(
-        position=(0.1, 0.2, 0.3), orientation=Quaternion.from_euler(Vector3(0, 0.7, 0))
-    )
-    send(module, kind="delta", xyz=[0.05, 0, 0], rpy=[0.2, 0, 0])
-    module._tick()
-    target = pose_to_matrix(targets[-1])
-    np.testing.assert_allclose(target[:3, 3], [0.1, 0.25, 0.3])
-    base = module._base[:3, :3]
-    expected = (
-        base
-        @ Rotation.from_euler("x", 0.2).as_matrix()
-        @ base.T
-        @ Rotation.from_euler("y", 0.7).as_matrix()
-    )
-    np.testing.assert_allclose(target[:3, :3], expected, atol=1e-12)
+def test_hold_time_is_capped_and_latest_twist_wins(bridge, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    _command(bridge, kind="twist", linear=[0, 0, 0.01], t=60)
+    _command(bridge, kind="twist", linear=[0.02, 0, 0], t=60)
+    _drive(bridge, 1)
+    assert _twists(bridge) == [(0.02, 0, 0, 0, 0, 0)]
+    now[0] += bridge.config.max_cmd_s
+    _drive(bridge, 1)
+    assert _twists(bridge)[1:] == [(0, 0, 0, 0, 0, 0)]
 
 
-def test_latest_arm_input_replaces_target_using_current_measurement(bridge):
-    module, feedback, targets = bridge
-    send(module, kind="delta", xyz=[0, 0, 0.01])
-    send(module, kind="delta", xyz=[0, 0, 0.04])
-    module._tick()
-    assert len(targets) == 1 and targets[-1].z == pytest.approx(0.64)
-    feedback["ee_pose"] = PoseStamped(position=(0.4, 0.2, 0.62))
-    send(module, kind="delta", xyz=[0, 0, -0.02])
-    module._tick()
-    assert targets[-1].z == pytest.approx(0.60)
+def test_gripper_opening_is_forwarded_normalized(bridge):
+    _command(bridge, kind="gripper", opening=0.25)
+    assert bridge.gripper_command.publish.call_args.args[0].data == pytest.approx(0.25)
+    bridge.ee_twist_command.publish.assert_not_called()
 
 
-def test_joints_use_existing_trajectory_and_gripper_is_independent(bridge):
-    module, _, targets = bridge
-    send(module, kind="joints", positions=[0.3, 0.4])
-    module._tick()
-    trajectory = module.coordinator.execute_trajectory.call_args.args[0]
-    assert trajectory.joint_names == ["j1", "j2"]
-    assert trajectory.points[0].positions == [0.3, 0.4]
-    send(module, kind="delta", xyz=[0, 0, 0.02])
-    module._tick()
-    target = targets[-1]
-    send(module, kind="gripper", position=0.425)
-    module._tick()
-    module.coordinator.task_invoke.assert_any_call(
-        "arm_gripper", "set_position", {"values": [0.425]}
-    )
-    assert module._target is target
-
-
-def test_stop_is_serviced_without_info_or_feedback_and_clears_pending(bridge):
-    module, _, targets = bridge
-    for _ in range(100):
-        send(module, kind="delta", xyz=[0, 0, 0.02])
-    send(module, kind="gripper", position=0.4)
-    send(module, kind="stop")
-    module._info = None
-    module.coordinator.task_invoke.side_effect = (
-        lambda task, method, kwargs=None: True
-        if method == "cancel"
-        else pytest.fail("stop requested feedback")
-    )
-    module._tick()
-    assert not targets and module._pending_arm is None and module._pending_gripper is None
-    module.coordinator.cancel_trajectory.assert_called_once()
-
-
-def test_lease_is_not_extended_by_renewal(bridge, monkeypatch):
-    module, _, _ = bridge
-    clock = [10.0]
-    monkeypatch.setattr("dimos.robot.raw_manipulation_bridge.time.monotonic", lambda: clock[0])
-    send(module, kind="delta", xyz=[0, 0, 0.05], timeout_s=0.2)
-    module._tick()
-    clock[0] = 10.1
-    module._tick()
-    assert module._deadline == pytest.approx(10.2)
-    clock[0] = 10.3
-    module._tick()
-    assert module._target is None and module._deadline is None
-
-
-@pytest.mark.parametrize("failure", ["stale", "task_stopped"])
-def test_target_is_not_replayed_after_stale_feedback_or_task_stop(bridge, failure):
-    module, feedback, targets = bridge
-    send(module, kind="delta", xyz=[0, 0, 0.05])
-    module._tick()
-    if failure == "stale":
-        feedback["t"] -= 10
-    else:
-        feedback["tracking"] = False
-    module._tick()
-    assert module._target is None
-    feedback["t"] = time.time()
-    module._tick()
-    assert len(targets) == 1
-
-
-def test_native_feedback_and_only_camera_tfs_are_exported(bridge):
-    module, feedback, _ = bridge
-    ts = feedback["t"]
-    module._on_tf(
-        TFMessage(
-            Transform(
-                translation=Vector3(0.4, 0.2, 0.7),
-                frame_id="world",
-                child_frame_id="wrist_camera_color_optical_frame",
-                ts=ts,
-            ),
-            Transform(translation=Vector3(9, 9, 9), frame_id="world", child_frame_id="cup", ts=ts),
+def test_state_reports_arm_joints_and_normalized_gripper(bridge):
+    bridge._on_joint_state(
+        JointState(
+            name=["j1", "j2", "arm/gripper"],
+            position=[0.1, 0.2, 0.425],
+            velocity=[0.5, 0.0, 0.0],
+            ts=7.0,
         )
     )
-    module._tick()
-    messages = {c.args[0]: json.loads(c.args[1]) for c in module._topics.put.call_args_list}
-    assert messages["arm/state/json"]["gripper_position"] == 0.85
-    assert messages["arm/info/json"]["gripper"]["position_limits"] == [0, 0.85]
-    np.testing.assert_allclose(messages["camera_pose/json"]["xyz"], [0.3, 0, 0.4])
-    assert "cup" not in json.dumps(messages)
+    (state,) = _published(bridge, "arm/state/json")
+    assert state == {
+        "t": 7.0,
+        "joint_names": ["j1", "j2"],
+        "positions": [0.1, 0.2],
+        "velocities": [0.5, 0.0],
+        "gripper_opening": pytest.approx(0.5),
+    }
+
+
+def test_info_is_published_and_only_camera_tfs_are_exported(bridge):
+    _drive(bridge, 1)
+    (info,) = _published(bridge, "arm/info/json")
+    assert info["commands"] == ["twist", "gripper"]
+    assert info["gripper"] == {"unit": "normalized", "closed": 0.0, "open": 1.0}
+    camera = Transform(
+        translation=Vector3(1, 2, 3),
+        rotation=Quaternion(0, 0, 0, 1),
+        frame_id="world",
+        child_frame_id=bridge.config.camera_optical_frame,
+        ts=time.time(),
+    )
+    hidden = Transform(frame_id="world", child_frame_id="cup", ts=time.time())
+    bridge._on_tf(TFMessage(camera, hidden))
+    (pose,) = _published(bridge, "camera_pose/json")
+    assert pose["frame"] == "world" and pose["xyz"] == [1, 2, 3]
+    assert pose["quaternion_xyzw"] == [0, 0, 0, 1]
+    assert not _published(bridge, "cup")
 
 
 def test_depth_round_trip_preserves_metric_values_and_invalid_pixels():
@@ -264,7 +168,7 @@ def test_depth_round_trip_preserves_metric_values_and_invalid_pixels():
 
 
 def test_rgb_topics_and_depth_metadata_keep_capture_timestamps(bridge):
-    module, _, _ = bridge
+    module = bridge
     module._on_image(Image(data=np.zeros((4, 6, 3), dtype=np.uint8), format=ImageFormat.RGB, ts=10))
     module._on_overview_image(
         Image(data=np.zeros((8, 12, 3), dtype=np.uint8), format=ImageFormat.RGB, ts=20)

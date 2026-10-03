@@ -16,7 +16,6 @@
 
 from pathlib import Path
 
-import attrs
 import pytest
 from pytest_mock import MockerFixture
 
@@ -109,60 +108,3 @@ def test_cartesian_clear_reseeds_command_from_feedback(mocker: MockerFixture) ->
     assert task.compute(state) is not None
 
     assert solver.reset.call_count == 1
-
-
-def test_idle_feedback_uses_existing_solver_and_snapshot_timestamp(mocker: MockerFixture) -> None:
-    solver = mocker.Mock(spec=PinkPoseTargetSolver)
-    pose = PoseStamped(position=Vector3(0.4, 0.2, 0.1))
-    solver.frame_poses.return_value = {"tool": pose}
-    task = CartesianIKTask("cartesian", _config(), solver=solver)
-    state = CoordinatorState(
-        joints=JointStateSnapshot(
-            joint_positions={"arm/joint": 0.2},
-            timestamp=42.0,
-        )
-    )
-    feedback = task.get_feedback(state)
-    assert feedback["t"] == 42.0
-    assert feedback["ee_pose"] is pose
-    assert feedback["positions"] == {"arm/joint": 0.2}
-    assert feedback["tracking"] is False
-    measured, frames = solver.frame_poses.call_args.args
-    assert measured.position == [0.2] and frames == ("tool",)
-    solver.step.assert_not_called()
-
-
-def test_cancel_acknowledges_without_measured_state(mocker: MockerFixture) -> None:
-    solver = mocker.Mock(spec=PinkPoseTargetSolver)
-    task = CartesianIKTask("cartesian", _config(), solver=solver)
-    task.on_cartesian_command(PoseStamped(), t_now=1.0)
-    assert task.cancel()
-    assert not task.is_tracking()
-    solver.reset.assert_called_once()
-    solver.frame_poses.assert_not_called()
-
-
-def test_feedback_correction_stays_inside_task_and_preserves_requested_target(
-    mocker: MockerFixture,
-) -> None:
-    solver = mocker.Mock(spec=PinkPoseTargetSolver)
-    solver.step.return_value = JointState(name=["arm/joint"], position=[0.1])
-    solver.frame_poses.side_effect = lambda joints, frames: {
-        "tool": PoseStamped(position=Vector3(0, 0, 0.4 + joints.position[0]))
-    }
-    task = CartesianIKTask(
-        "cartesian", attrs.evolve(_config(), feedback_correction=True), solver=solver
-    )
-    target = PoseStamped(position=Vector3(0, 0, 0.6))
-    state = CoordinatorState(
-        joints=JointStateSnapshot(joint_positions={"arm/joint": 0}), t_now=1, dt=0.01
-    )
-    task.on_cartesian_command(target, t_now=1)
-    task.compute(state)
-    task.compute(state)
-    assert solver.step.call_args.args[0]["tool"].z == pytest.approx(0.7)
-    assert target.z == pytest.approx(0.6)
-    task.cancel()
-    task.on_cartesian_command(target, t_now=1.1)
-    task.compute(state)
-    assert solver.step.call_args.args[0]["tool"].z == pytest.approx(0.6)

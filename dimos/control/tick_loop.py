@@ -116,7 +116,6 @@ class TickLoop:
         self._tick_thread: threading.Thread | None = None
         self._last_tick_time: float = 0.0
         self._tick_count: int = 0
-        self.latest_state: CoordinatorState | None = None
 
     @property
     def tick_count(self) -> int:
@@ -137,7 +136,6 @@ class TickLoop:
         self._stop_event.clear()
         self._last_tick_time = time.perf_counter()
         self._tick_count = 0
-        self.latest_state = None
 
         self._tick_thread = threading.Thread(
             target=self._loop,
@@ -275,7 +273,6 @@ class TickLoop:
         results: list[tuple[ControlTask, ResourceClaim, JointCommandOutput | None]] = []
 
         with self._task_lock:
-            self.latest_state = state
             for task in self._tasks.values():
                 if not task.is_active():
                     continue

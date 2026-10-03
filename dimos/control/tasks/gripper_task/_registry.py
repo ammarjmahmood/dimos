@@ -29,7 +29,6 @@ TASK_EXPOSES: dict[str, list[str]] = {
         "set_position",
         "set_normalized",
         "get_position",
-        "get_limits",
         "get_normalized",
     ],
 }

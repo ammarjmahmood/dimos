@@ -94,4 +94,4 @@ def test_agent_receives_context_inside_its_workspace_without_recording_access(tm
     assert str(source) not in prompt
     assert "private.db" not in prompt
     assert (run_dir / "robot/robot_info.json").is_file()
-    assert "Primary controls are delta EE XYZ/RPY" in (run_dir / "ROBOT.md").read_text()
+    assert "read robot/README.md and robot/robot_info.json" in (run_dir / "ROBOT.md").read_text()
