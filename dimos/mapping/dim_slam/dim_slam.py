@@ -122,9 +122,7 @@ class SourceConfig(BaseModel):
 class DimSlamConfig(NativeModuleConfig):
     cwd: str | None = "rust"
     executable: str = "result/bin/dim_slam"
-    # `.`, not path:. : the flake reads ../../../../native, so it must enter through the git
-    # tree, and so builds see tracked files only. The default carries every SDK variant for
-    # the system and its launcher picks the host's at startup.
+    # Not path:. because the flake reads ../../../../native.
     build_command: str | None = "nix build -L ."
     stdin_config: bool = True
     extra_env: dict[str, str] = Field(default_factory=driver_env)

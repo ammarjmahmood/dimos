@@ -33,9 +33,6 @@
           cp ${./Cargo.lock} $out/dimos/mapping/dim_slam/rust/Cargo.lock
           cp ${./build.rs} $out/dimos/mapping/dim_slam/rust/build.rs
 
-          # Path literals, so only these two directories key the build. They resolve when the
-          # flake is entered through the repo's git tree (`nix build .` from here); the devShell
-          # never touches them, so `nix develop path:<this dir>` still works.
           mkdir -p $out/native/rust
           cp -r ${../../../../native/rust/dimos-module} $out/native/rust/dimos-module
           cp -r ${../../../../native/rust/dimos-module-macros} $out/native/rust/dimos-module-macros
@@ -62,8 +59,7 @@
             };
           }).rootCrate.build;
 
-        # One build per variant, and a launcher that execs the one this host needs: no single
-        # binary can serve both Jetsons, since JetPack 6's driver cannot load a CUDA 13 runtime.
+        # JetPack 6 can't load CUDA 13, so one build per variant and a launcher picks.
         variantBuilds = pkgs.linkFarm "dim-slam-variants"
           (nixpkgs.lib.mapAttrsToList (name: _: { inherit name; path = packageFor name; }) cu-vslam-rs.bundledVariants.${system});
         launcher = pkgs.writeShellScriptBin "dim_slam" ''

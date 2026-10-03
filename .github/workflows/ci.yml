@@ -254,10 +254,7 @@ jobs:
           key: cachix-published-${{ runner.os }}-${{ runner.arch }}-${{ needs.cachix-build-check.outputs.inputs-hash }}
 
   cachix-build-linux-arm:
-    # ⚠️ NEVER RUN ON UNTRUSTED (fork) CODE ⚠️ — holds CACHIX_AUTH_TOKEN, same
-    # as cachix-build. Its own job for the same reasons as cachix-build-macos.
-    # Jetsons are aarch64-linux, so without this leg every robot compiles its
-    # native modules (dim_slam's cuVSLAM SDKs included) from source.
+    # Jetsons. Same fork guard as cachix-build.
     if: |
       !cancelled() &&
       (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -282,7 +279,6 @@ jobs:
           INPUT_SET_AS_TRUSTED_USER: "true"
         run: bash docker/ros/install-nix.sh
       - name: Cache Nix fetcher + eval cache
-        # runner.arch in the key keeps this apart from the x86 Linux entry.
         uses: actions/cache@v6
         with:
           path: |
