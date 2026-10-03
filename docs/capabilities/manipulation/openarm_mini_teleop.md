@@ -7,7 +7,7 @@ depend on LeRobot at runtime.
 ## Install optional dependencies
 
 ```bash
-uv sync --extra openarm-mini-teleop
+uv sync --extra openarm-mini-teleop --inexact
 # Or, outside a source checkout:
 pip install 'dimos[openarm-mini-teleop]'
 ```
