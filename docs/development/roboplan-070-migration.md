@@ -36,7 +36,7 @@ bounding-box corners.
 
 ## Planning contexts
 
-Each DimOS scratch context owns a native `SceneContext` for FK, collision queries
+Each dimOS scratch context owns a native `SceneContext` for FK, collision queries
 and partial-to-full configuration conversion. Geometry changes recreate stale
 contexts; placement-only updates keep them. These queries no longer change the
 Scene's current configuration. Contexts cannot be reused across worlds.

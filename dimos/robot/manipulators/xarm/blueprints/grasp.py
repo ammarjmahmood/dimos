@@ -45,7 +45,6 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
-    XARM7_COLLISION_LINKS,
     make_xarm7_model_config,
     make_xarm7_sim_hardware,
     make_xarm7_sim_module_kwargs,
@@ -124,7 +123,7 @@ if SIMULATED:
         base_pose=PoseStamped(frame_id="world"),
         # The self filter needs a capture-time transform for every collision link
         # and drops the whole cloud when one is missing.
-        tf_extra_links=XARM7_COLLISION_LINKS,
+        tf_extra_links=["link7"],
     )
     _hardware = make_xarm7_sim_hardware(XARM_GRASP_SCENE_PATH, home_joints=XARM_GRASP_SCAN_JOINTS)
 else:
@@ -134,7 +133,7 @@ else:
         base_pose=PoseStamped(frame_id="world"),
         # The self filter needs a capture-time transform for every collision link
         # and drops the whole cloud when one is missing.
-        tf_extra_links=XARM7_COLLISION_LINKS,
+        tf_extra_links=["link7"],
     )
     _hardware = xarm7_hardware("arm", gripper=True)
 
