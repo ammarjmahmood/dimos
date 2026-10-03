@@ -11,8 +11,12 @@ not moved before a session (fiducial markers on the table are a good check).
 
 ## Run
 
-One camera plus `SceneOverlayModule`. The module subscribes to `color_image`
-and publishes `overlay_image`, which the viewer shows like any other image.
+One camera, `SceneOverlayModule` and a Rerun bridge. The module subscribes to
+`color_image` and publishes `overlay_image`; Rerun opens with the camera's 3D
+view on the left and the overlay full size on the right. Hide either side
+with its eye icon. On a robot computer without a display, pass
+`--rerunbridgemodule.rerun-open none` and connect `dimos-viewer` from your
+laptop using the addresses the bridge prints.
 
 ```bash
 # fixed RealSense over the table
