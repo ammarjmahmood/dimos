@@ -2,6 +2,11 @@
 
 ## Detections
 
+## Scene overlay
+
+Rebuild a benchmark scene by lining objects up with a saved reference image
+drawn over the live camera view: [Scene overlay](/docs/capabilities/perception/scene_overlay.md).
+
 ## Experimental WorldBelief
 
 The experimental xArm6 WorldBelief stack records RGB-D observations and processes
