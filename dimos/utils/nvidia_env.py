@@ -36,9 +36,6 @@ _HOST_LIB_DIRS = (
     Path("/usr/lib/x86_64-linux-gnu"),
     Path("/usr/lib/aarch64-linux-gnu"),
 )
-# nixpkgs tracks a newer CUDA than JetPack ships and the mismatch fails at
-# cusolverDnCreate, so the host's own runtime goes first where it exists.
-_HOST_CUDA_LIB_DIR = Path("/usr/local/cuda/lib64")
 _DRIVER_LIBS = (
     "libcuda.so.1",
     "libnvidia-ptxjitcompiler.so.1",
@@ -77,12 +74,10 @@ def driver_library_dir() -> Path | None:
 def driver_env() -> dict[str, str]:
     if sys.platform == "darwin":
         return {"CUMETAL_USE_METAL_DEVICE_ADDRESSES": "1"}
-    parts = [str(_HOST_CUDA_LIB_DIR)] if _HOST_CUDA_LIB_DIR.is_dir() else []
     driver_dir = driver_library_dir()
-    if driver_dir is not None:
-        parts.append(str(driver_dir))
-    if not parts:
+    if driver_dir is None:
         return {}
+    parts = [str(driver_dir)]
     existing = os.environ.get("LD_LIBRARY_PATH", "")
     if existing:
         parts.append(existing)
