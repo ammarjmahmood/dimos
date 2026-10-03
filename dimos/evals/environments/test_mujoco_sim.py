@@ -114,7 +114,9 @@ def test_raw_manipulation_appends_transport_and_keeps_control_in_robot_blueprint
     assert env._bridge_modules == ["raw-manipulation-bridge"]
     assert env._raw_module == "raw-manipulation-bridge"
     parsed = BlueprintConfigParser(xarm_sim).parse(environ={})
-    assert parsed.module_kwargs("manipulationcontrol")["model"] is not None
+    tasks = parsed.module_kwargs("ControlCoordinator")["tasks"]
+    cartesian = next(task for task in tasks if task["type"] == "cartesian_ik")
+    assert cartesian["params"]["robot_model"] is not None
 
 
 def test_no_dimos_guidance_selects_manipulation_protocol(tmp_path):

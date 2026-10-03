@@ -770,7 +770,8 @@ class ControlCoordinator(Module):
     def task_invoke(
         self, task_name: TaskName, method: str, kwargs: dict[str, Any] | None = None
     ) -> Any:
-        """Invoke a task command. Pass t_now=None to auto-inject current time.
+        """Invoke a task command. Pass t_now=None to inject current time, or
+        state=None to inject the latest control-tick snapshot (None if unavailable).
 
         Commands declared in the task's TASK_EXPOSES card are validated
         against the method's own signature before dispatch; a bad kwarg name
@@ -788,6 +789,11 @@ class ControlCoordinator(Module):
             # Auto-inject t_now if requested (None means "use current time")
             if "t_now" in kwargs and kwargs["t_now"] is None:
                 kwargs["t_now"] = time.perf_counter()
+            if "state" in kwargs and kwargs["state"] is None:
+                state = self._tick_loop.latest_state if self._tick_loop else None
+                if state is None:
+                    return None
+                kwargs["state"] = state
 
             if method in self._task_commands.get(task_name, frozenset()):
                 return self._invoke_declared(task, task_name, method, kwargs)

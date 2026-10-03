@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from dimos.control.coordinator import TaskConfig
-from dimos.control.manipulation_control import ManipulationControl
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
@@ -25,7 +24,12 @@ from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
-from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
+from dimos.robot.manipulators.common.blueprints import (
+    cartesian_ik_task,
+    coordinator,
+    trajectory_task,
+)
+from dimos.robot.manipulators.common.coordinators import ArmPoseCoordinator
 from dimos.robot.manipulators.xarm.config import (
     XARM7_SIM_PATH,
     make_xarm7_sim_hardware,
@@ -74,6 +78,8 @@ xarm_perception_sim = autoconnect(
 # Robot-only stack: low-level control and sensors, reusable with any transport.
 _bounded_trajectory = trajectory_task(_xarm7_sim_hw)
 _bounded_trajectory.params["velocity_limits"] = dict.fromkeys(_xarm7_sim_hw.joints, 0.5)
+_cartesian = cartesian_ik_task(_xarm7_sim_hw, robot_model=_xarm7_sim_model, target_frame="link_tcp")
+_cartesian.params.update(max_joint_velocity_rad_s=0.5, timeout=0.5, feedback_correction=True)
 
 xarm_sim = autoconnect(
     MujocoSimModule.blueprint(
@@ -83,6 +89,7 @@ xarm_sim = autoconnect(
         hardware=[_xarm7_sim_hw],
         tasks=[
             _bounded_trajectory,
+            _cartesian,
             TaskConfig(
                 name="arm_gripper",
                 type="gripper",
@@ -90,6 +97,7 @@ xarm_sim = autoconnect(
                 priority=20,
             ),
         ],
+        cls=ArmPoseCoordinator,
+        instance_name="ControlCoordinator",
     ),
-    ManipulationControl.blueprint(model=_xarm7_sim_model),
 )

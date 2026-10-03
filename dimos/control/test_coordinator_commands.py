@@ -29,6 +29,7 @@ the command table exists.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -39,6 +40,7 @@ from dimos.control.task import (
     BaseControlTask,
     CoordinatorState,
     JointCommandOutput,
+    JointStateSnapshot,
     ResourceClaim,
 )
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
@@ -122,6 +124,22 @@ class CommandRecordingTask(BaseControlTask):
     def record_time(self, t_now: float | None = None) -> float | None:
         self.t_now_seen = t_now
         return t_now
+
+    def read_feedback(self, state: CoordinatorState) -> CoordinatorState:
+        return state
+
+
+def test_task_command_injects_tick_snapshot_without_reading_hardware(coordinator, mocker):
+    task = CommandRecordingTask("feedback")
+    coordinator.add_task(task)
+    read_hardware = mocker.patch.object(coordinator, "get_joint_positions")
+    assert coordinator.task_invoke("feedback", "read_feedback", {"state": None}) is None
+    state = CoordinatorState(
+        joints=JointStateSnapshot(joint_positions={"arm/joint1": 0.4}, timestamp=42)
+    )
+    coordinator._tick_loop = SimpleNamespace(latest_state=state, stop=lambda: None)
+    assert coordinator.task_invoke("feedback", "read_feedback", {"state": None}) is state
+    read_hardware.assert_not_called()
 
 
 def _trajectory() -> JointTrajectory:

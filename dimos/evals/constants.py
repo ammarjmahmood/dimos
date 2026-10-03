@@ -74,6 +74,11 @@ Robot interface: a Zenoh peer at {endpoint}. Use a plain Zenoh client, for examp
 directly to this endpoint. Explicitly close the session before your script exits.
 
 Python connection setup (use the same Python environment for installing and running):
+If pip is unavailable, create a client environment with:
+  uv venv .clientenv
+  uv pip install --python .clientenv/bin/python eclipse-zenoh numpy pillow
+Then run your scripts with .clientenv/bin/python.
+
   import json, zenoh
   config = zenoh.Config()
   config.insert_json5("mode", '"peer"')
@@ -96,17 +101,16 @@ Subscribe before commanding. Topics:
                            overview optical pose relative to robot base
   robot/arm/info/json      static info at 1 Hz: joint_names in command order, joint_limits in radians,
                            base_frame, ee_frame, max_delta_m, max_delta_rad,
-                           max_joint_velocity_rad_s
+                           max_joint_velocity_rad_s, gripper joint/unit/position_limits
   robot/arm/state/json     {{"t", "frame":"base", "joint_names", "positions", "velocities",
-                           "ee_pose":{{"xyz", "quaternion_xyzw"}}, "gripper_opening"}}
-  robot/arm/status/json    {{"id", "status", "reason", "t"}}; changes immediately, latest repeated at 1 Hz
+                           "ee_pose":{{"xyz", "quaternion_xyzw"}}, "gripper_position"}}
 
-Primary controls are delta EE XYZ/RPY and gripper opening. Joint-angle targets
+Primary controls are delta EE XYZ/RPY and native gripper position. Joint-angle targets
 are optional advanced control; stop is always available. If robot context files
 are listed, read robot/README.md and robot/robot_info.json once for URDFs,
 joint/frame conventions, jaw-gap estimates and TCP-to-finger-pad offsets.
 Keep the latest sensor message per topic rather than printing every frame.
-Print command status only when its id/status changes; use compact state snapshots.
+Use compact state snapshots to decide whether the robot reached your intended target.
 Save JPEG/depth bytes to files instead of printing binary payloads or entire arrays.
 Use a depth neighborhood or compact numeric summary for the region being inspected.
 
@@ -126,14 +130,14 @@ Ignore non-finite/nonpositive depths; distant background can have very large
 depths. Depth contains the visible robot/gripper as well as scene surfaces.
 Save the numeric array as .npy if needed; JPEG or a colorized preview loses depth.
 
-Publish JSON to robot/arm/command/json. Main commands (unique id per command):
-  {{"id":"up", "kind":"delta", "xyz":[0,0,0.05], "rpy":[0,0,0], "frame":"base"}}
-  {{"id":"turn", "kind":"delta", "xyz":[0,0,0], "rpy":[0,0,0.1]}}
-  {{"id":"open", "kind":"gripper", "opening":1.0}}
-  {{"id":"halt", "kind":"stop"}}
+Publish JSON to robot/arm/command/json. Commands are fire-and-forget inputs:
+  {{"kind":"delta", "xyz":[0,0,0.05], "rpy":[0,0,0], "frame":"base"}}
+  {{"kind":"delta", "xyz":[0,0,0], "rpy":[0,0,0.1]}}
+  {{"kind":"gripper", "position":0.85}}
+  {{"kind":"stop"}}
 
 Optional joint-target command:
-  {{"id":"j1", "kind":"joints", "positions":[0,-0.247,0,0.909,0,1.15644,0], "timeout_s":10}}
+  {{"kind":"joints", "positions":[0,-0.247,0,0.909,0,1.15644,0], "timeout_s":10}}
 
 Positions are radians for joints, metres for xyz. Delta rpy is radians, interpreted
 as extrinsic rotations around fixed base X/Y/Z axes: Rz(yaw) Ry(pitch) Rx(roll)
@@ -141,7 +145,9 @@ left-multiplies the measured EE rotation. Deltas are applied ONCE to the measure
 pose when accepted, not repeatedly or as velocity. Omitted xyz/rpy means zero.
 The base frame is the robot mounting frame, not necessarily the world's origin.
 Points below the mounting height have negative base-frame Z coordinates.
-The gripper opening is normalized: 0 closed, 1 open; it is not a distance in metres.
+Gripper position is in the native units/range advertised by arm/info/json.
+For this simulator: 0 closed, 0.85 open, in the adapter's radian opening coordinate.
+This is not jaw width and is opposite to the URDF driver angle (q_driver=0.85-position).
 
 Joint targets must give every arm joint, in arm/info/json order (no gripper entry).
 The joint controller bounds velocity. Cartesian deltas use local IK tracking,
@@ -149,16 +155,18 @@ not obstacle-aware motion planning. Inspect the scene and choose your increments
 Translation norm and rpy-vector norm must be within the limits in arm/info/json;
 out-of-range/non-finite inputs are rejected, not silently clamped.
 
-Only one command executes at a time. Wait for status succeeded, timed_out, error,
-cancelled, or rejected before the next move. running means accepted, not completed.
-Completion checks measured feedback. A gripper blocked by an object may time out
-before reaching its requested opening; inspect its measured state and the image.
-timeout_s defaults to 10 seconds for arm moves and 5 for gripper; maximum is 30.
-Stop/timeout stops arm motion and retains gripper intent; it never zeros joint angles.
-Repeated identical ids return their recorded status without moving again; reusing
-an id with a different command is rejected. Use new ids after a rejection.
-Malformed commands may return id=null. Retry an identical valid command if its
-status was missed. Do not assume a completed trajectory means the object moved.
+There are no command IDs, acknowledgements or execution-status messages. Publishing
+does not mean the motion finished. Observe measured robot state and camera images.
+The latest arm input replaces the previous target; gripper input is independent.
+If inputs arrive faster than the bridge services them, intermediate inputs can be
+replaced. Each new delta input uses the current measured pose: do not repeatedly
+publish a delta while waiting for the original movement to finish.
+Arm timeout_s is a target lease: default 10 seconds, maximum 30. The bridge may
+refresh the SAME absolute pose internally, but never extends that lease or reapplies
+the delta. Stop/lease expiry retains gripper intent and never zeros joint angles.
+Task watchdogs still apply if target refresh or robot feedback is lost.
+A gripper blocked by an object holds its requested target; inspect measured position
+and object motion rather than treating full closure as grasp success.
 
 Only these robot observations and commands are available. The full internal TF
 tree, object ground-truth poses, and higher-level manipulation tools are not exposed.

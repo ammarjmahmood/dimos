@@ -289,7 +289,6 @@ all_modules = {
     "loop-feeder": "dimos.perception.localize.demo_blueprints.go2_localize_live.LoopFeeder",
     "m20-camera-relay": "dimos.robot.deeprobotics.m20.camera.M20CameraRelay",
     "m20-connection": "dimos.robot.deeprobotics.m20.connection.M20Connection",
-    "manipulation-control": "dimos.control.manipulation_control.ManipulationControl",
     "manipulation-module": "dimos.manipulation.manipulation_module.ManipulationModule",
     "manipulation-skills": "dimos.manipulation.manipulation_skills.ManipulationSkills",
     "map": "dimos.robot.unitree.type.map.Map",
