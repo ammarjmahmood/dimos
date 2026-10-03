@@ -32,7 +32,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-25T22:32:17.299676289Z"
+exclude-newer = "2026-09-26T04:39:24.134005379Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
@@ -2367,6 +2367,7 @@ tests = [
     { name = "python-lsp-ruff" },
     { name = "python-lsp-server", extra = ["all"] },
     { name = "requests-mock" },
+    { name = "roboplan-core" },
     { name = "sentencepiece" },
     { name = "tensorboard" },
     { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux') or (sys_platform != 'linux' and sys_platform != 'win32')" },
@@ -2422,6 +2423,7 @@ tests-self-hosted = [
     { name = "python-lsp-ruff" },
     { name = "python-lsp-server", extra = ["all"] },
     { name = "requests-mock" },
+    { name = "roboplan-core" },
     { name = "sentencepiece" },
     { name = "tensorboard" },
     { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux') or (sys_platform != 'linux' and sys_platform != 'win32')" },
@@ -2699,6 +2701,7 @@ tests = [
     { name = "python-lsp-ruff", specifier = "==2.3.0" },
     { name = "python-lsp-server", extras = ["all"], specifier = "==1.14.0" },
     { name = "requests-mock", specifier = "==1.12.1" },
+    { name = "roboplan-core", specifier = ">=0.7.0,<0.8.0" },
     { name = "sentencepiece", specifier = ">=0.2.0" },
     { name = "tensorboard", specifier = "==2.20.0" },
     { name = "torch", marker = "(platform_machine != 'x86_64' and sys_platform == 'linux') or (sys_platform != 'linux' and sys_platform != 'win32')", specifier = ">=2.1,<2.8" },
@@ -2756,6 +2759,7 @@ tests-self-hosted = [
     { name = "python-lsp-ruff", specifier = "==2.3.0" },
     { name = "python-lsp-server", extras = ["all"], specifier = "==1.14.0" },
     { name = "requests-mock", specifier = "==1.12.1" },
+    { name = "roboplan-core", specifier = ">=0.7.0,<0.8.0" },
     { name = "sentencepiece", specifier = ">=0.2.0" },
     { name = "tensorboard", specifier = "==2.20.0" },
     { name = "torch", marker = "(platform_machine != 'x86_64' and sys_platform == 'linux') or (sys_platform != 'linux' and sys_platform != 'win32')", specifier = ">=2.1,<2.8" },

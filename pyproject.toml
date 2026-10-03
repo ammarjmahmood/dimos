@@ -442,6 +442,8 @@ tests = [
     # extra can't be included: usd-core ships no linux-aarch64 wheel.
     "coacd>=1.0.0",
     "trimesh>=4.0.0",
+    # Point-cloud self-filter tests exercise native Narrowphase queries.
+    "roboplan-core>=0.7.0,<0.8.0",
     "mujoco>=3.3.4",
     "pygame>=2.6.1",
     "python-can>=4",
