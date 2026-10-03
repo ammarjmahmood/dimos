@@ -46,16 +46,21 @@ SCENE_OVERLAY_DIR = STATE_DIR / "scene_overlay"
 OverlayMode = Literal["blend", "edges"]
 _SCENE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EDGE_COLOR = (0, 255, 0)
+_CHANGE_THRESHOLD = 30
+_MIN_OBJECT_AREA = 400
 
 
 class SceneOverlayConfig(ModuleConfig):
     scenes_dir: Path = SCENE_OVERLAY_DIR
     scene: str = "scene-01"
-    opacity: float = Field(default=0.5, ge=0.0, le=1.0)
+    opacity: float = Field(default=0.35, ge=0.0, le=1.0)
     mode: OverlayMode = "blend"
     # 0 publishes every frame.
     max_fps: float = Field(default=10.0, ge=0.0)
     label: bool = True
+    # Snapshot of the empty table; with it each object's ghost gets an alignment score.
+    background: str = "background"
+    alignment: bool = True
 
 
 def scene_paths(scenes_dir: Path, scene: str) -> tuple[Path, Path]:
@@ -89,6 +94,72 @@ def edge_overlay(live: np.ndarray, reference: np.ndarray) -> np.ndarray:
     return out
 
 
+def foreground_mask(image: np.ndarray, background: np.ndarray) -> np.ndarray:
+    """Pixels that differ from the empty table, cleaned of speckle."""
+    import cv2
+
+    diff = cv2.absdiff(
+        cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
+    )
+    diff = cv2.GaussianBlur(diff, (7, 7), 0)
+    changed = (diff > _CHANGE_THRESHOLD).astype(np.uint8)
+    kernel = np.ones((5, 5), np.uint8)
+    opened = cv2.morphologyEx(changed, cv2.MORPH_OPEN, kernel)
+    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel)
+    return np.asarray(closed, dtype=bool)
+
+
+def segment_objects(mask: np.ndarray) -> list[np.ndarray]:
+    """Connected foreground blobs large enough to be objects, left to right."""
+    import cv2
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=8
+    )
+    blobs = [
+        (int(stats[index, cv2.CC_STAT_LEFT]), labels == index)
+        for index in range(1, count)
+        if stats[index, cv2.CC_STAT_AREA] >= _MIN_OBJECT_AREA
+    ]
+    return [blob for _, blob in sorted(blobs, key=lambda item: item[0])]
+
+
+def alignment_scores(live_mask: np.ndarray, object_masks: list[np.ndarray]) -> list[float]:
+    """Per object: overlap between the live foreground near its ghost and the ghost itself."""
+    scores: list[float] = []
+    height, width = live_mask.shape
+    for ghost in object_masks:
+        ys, xs = np.nonzero(ghost)
+        pad_y = int(0.3 * (ys.max() - ys.min() + 1))
+        pad_x = int(0.3 * (xs.max() - xs.min() + 1))
+        roi = np.zeros_like(ghost)
+        roi[
+            max(0, ys.min() - pad_y) : min(height, ys.max() + pad_y + 1),
+            max(0, xs.min() - pad_x) : min(width, xs.max() + pad_x + 1),
+        ] = True
+        live_near = live_mask & roi
+        union = int((live_near | ghost).sum())
+        scores.append(float((live_near & ghost).sum()) / union if union else 0.0)
+    return scores
+
+
+def draw_alignment(frame: np.ndarray, object_masks: list[np.ndarray], scores: list[float]) -> None:
+    """Outline each ghost red to green by score and print the percentage beside it."""
+    import cv2
+
+    for ghost, score in zip(object_masks, scores, strict=True):
+        color = (0, int(255 * score), int(255 * (1.0 - score)))
+        contours, _ = cv2.findContours(
+            ghost.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        cv2.drawContours(frame, contours, -1, color, 2)
+        ys, xs = np.nonzero(ghost)
+        origin = (int(xs.min()), max(14, int(ys.min()) - 6))
+        text = f"{score:.0%}"
+        cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+
 class SceneOverlayModule(Module):
     """Publish the live camera image with the current scene's reference drawn over it."""
 
@@ -104,10 +175,14 @@ class SceneOverlayModule(Module):
         self._opacity = self.config.opacity
         self._mode: OverlayMode = self.config.mode
         self._reference: np.ndarray | None = None
+        self._background: np.ndarray | None = None
+        self._object_masks: list[np.ndarray] = []
+        self._scores: list[float] = []
         self._latest: Image | None = None
         self._last_publish = 0.0
         self._frames = 0
         self._resize_warned = False
+        self._load_background()
         self._load_reference(self._scene)
 
     @rpc
@@ -153,8 +228,42 @@ class SceneOverlayModule(Module):
             self._scene = name
             self._reference = frame
             self._resize_warned = False
+            self._update_object_masks()
         logger.info("Saved scene reference %s", image_path)
         return str(image_path)
+
+    @rpc
+    def capture_background(self) -> str:
+        """Save the latest live frame as the empty table every scene is compared against."""
+        image_path, _ = scene_paths(self.config.scenes_dir, self.config.background)
+        with self._lock:
+            latest = self._latest
+        if latest is None:
+            raise RuntimeError("No camera frame received yet")
+        import cv2
+
+        frame = latest.to_opencv()
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(image_path), frame):
+            raise RuntimeError(f"Could not write {image_path}")
+        with self._lock:
+            self._background = frame
+            self._update_object_masks()
+        logger.info("Saved scene background %s", image_path)
+        return str(image_path)
+
+    @rpc
+    def get_alignment(self) -> dict[str, Any]:
+        """Per-object alignment of the live scene to the current reference, 0.0 to 1.0."""
+        with self._lock:
+            scores = list(self._scores)
+            return {
+                "scene": self._scene,
+                "objects": len(self._object_masks),
+                "scores": scores,
+                "mean": sum(scores) / len(scores) if scores else None,
+                "has_background": self._background is not None,
+            }
 
     @rpc
     def set_scene(self, scene: str) -> bool:
@@ -195,6 +304,8 @@ class SceneOverlayModule(Module):
                 "scenes_dir": str(self.config.scenes_dir),
                 "frames": self._frames,
                 "last_frame_ts": self._latest.ts if self._latest is not None else None,
+                "has_background": self._background is not None,
+                "objects": len(self._object_masks),
             }
 
     def _load_reference(self, scene: str) -> bool:
@@ -208,6 +319,7 @@ class SceneOverlayModule(Module):
             self._scene = scene
             self._reference = reference
             self._resize_warned = False
+            self._update_object_masks()
         if reference is None:
             logger.warning(
                 "Scene %s has no reference at %s; publishing the live image until one is captured",
@@ -216,6 +328,24 @@ class SceneOverlayModule(Module):
             )
             return False
         return True
+
+    def _load_background(self) -> None:
+        image_path, _ = scene_paths(self.config.scenes_dir, self.config.background)
+        if not image_path.is_file():
+            return
+        import cv2
+
+        with self._lock:
+            self._background = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+
+    def _update_object_masks(self) -> None:
+        """Ghost footprints of the current reference; caller holds the lock."""
+        self._scores = []
+        if self._reference is None or self._background is None or not self.config.alignment:
+            self._object_masks = []
+            return
+        background = fit_reference(self._background, self._reference.shape[:2])
+        self._object_masks = segment_objects(foreground_mask(self._reference, background))
 
     def _on_frame(self, image: Image) -> None:
         with self._lock:
@@ -237,9 +367,16 @@ class SceneOverlayModule(Module):
             live = image.to_opencv()
             with self._lock:
                 reference = self._reference
+                background = self._background
+                object_masks = self._object_masks
                 opacity = self._opacity
                 mode = self._mode
                 scene = self._scene
+            scores: list[float] = []
+            if object_masks and background is not None and reference is not None:
+                if reference.shape[:2] == live.shape[:2]:
+                    live_mask = foreground_mask(live, fit_reference(background, live.shape[:2]))
+                    scores = alignment_scores(live_mask, object_masks)
             if reference is not None:
                 if reference.shape[:2] != live.shape[:2] and not self._resize_warned:
                     logger.warning(
@@ -259,8 +396,12 @@ class SceneOverlayModule(Module):
                 )
             else:
                 live = live.copy()
+            if scores:
+                draw_alignment(live, object_masks, scores)
+                with self._lock:
+                    self._scores = scores
             if self.config.label:
-                self._draw_label(live, scene, reference is not None, opacity, mode)
+                self._draw_label(live, scene, reference is not None, opacity, mode, scores)
             return Image.from_opencv(live, frame_id=image.frame_id, ts=image.ts)
         except Exception:
             logger.exception("Scene overlay failed for one frame")
@@ -268,12 +409,19 @@ class SceneOverlayModule(Module):
 
     @staticmethod
     def _draw_label(
-        frame: np.ndarray, scene: str, has_reference: bool, opacity: float, mode: OverlayMode
+        frame: np.ndarray,
+        scene: str,
+        has_reference: bool,
+        opacity: float,
+        mode: OverlayMode,
+        scores: list[float],
     ) -> None:
         import cv2
 
         if has_reference:
             text = f"{scene}  {mode}" + (f" {opacity:.0%}" if mode == "blend" else "")
+            if scores:
+                text += f"  aligned {sum(scores) / len(scores):.0%}"
         else:
             text = f"{scene}  no reference, call capture_reference"
         cv2.putText(frame, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)

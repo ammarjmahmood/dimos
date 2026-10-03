@@ -25,10 +25,13 @@ import pytest
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.perception.scene_overlay.module import (
     SceneOverlayModule,
+    alignment_scores,
     blend,
     edge_overlay,
     fit_reference,
+    foreground_mask,
     scene_paths,
+    segment_objects,
 )
 
 
@@ -96,7 +99,7 @@ def test_without_reference_the_live_frame_passes_through(tmp_path: Path, mocker:
 def test_capture_reference_writes_files_and_blends_following_frames(
     tmp_path: Path, mocker: Any
 ) -> None:
-    with _module(tmp_path) as module:
+    with _module(tmp_path, opacity=0.5) as module:
         publish = mocker.patch.object(module.overlay_image, "publish")
         module._on_frame(_frame(200))
 
@@ -175,3 +178,48 @@ def test_max_fps_drops_frames_but_keeps_the_latest(tmp_path: Path, mocker: Any) 
         publish.assert_called_once()
         assert module.get_status()["frames"] == 2
         assert module._latest is not None and (module._latest.data == 2).all()
+
+
+def _table(*squares: tuple[int, int], width: int = 160, height: int = 120) -> Image:
+    """A grey table with 30 px white squares at the given top-left corners."""
+    data = np.full((height, width, 3), 90, dtype=np.uint8)
+    for x, y in squares:
+        data[y : y + 30, x : x + 30] = 255
+    return Image(data=data, format=ImageFormat.BGR, frame_id="camera_link", ts=1.0)
+
+
+def test_objects_are_segmented_against_the_empty_table_and_scored() -> None:
+    background = _table().to_opencv()
+    reference = _table((10, 10), (100, 60)).to_opencv()
+    masks = segment_objects(foreground_mask(reference, background))
+    assert len(masks) == 2
+
+    same = alignment_scores(foreground_mask(reference, background), masks)
+    assert all(score > 0.9 for score in same)
+
+    shifted = _table((25, 10), (100, 60)).to_opencv()
+    scores = alignment_scores(foreground_mask(shifted, background), masks)
+    assert 0.1 < scores[0] < 0.5 and scores[1] > 0.9
+
+    missing = _table((100, 60)).to_opencv()
+    assert alignment_scores(foreground_mask(missing, background), masks)[0] == 0.0
+
+
+def test_background_capture_enables_alignment_in_the_stream(tmp_path: Path, mocker: Any) -> None:
+    with _module(tmp_path, label=True) as module:
+        publish = mocker.patch.object(module.overlay_image, "publish")
+        module._on_frame(_table())
+        assert Path(module.capture_background()) == tmp_path / "background.png"
+        module._on_frame(_table((10, 10), (100, 60)))
+        module.capture_reference("scene-01")
+        assert module.get_status()["objects"] == 2
+
+        module._on_frame(_table((25, 10), (100, 60)))
+        alignment = module.get_alignment()
+        assert alignment["objects"] == 2 and 0.1 < alignment["scores"][0] < 0.5
+        assert alignment["scores"][1] > 0.9 and alignment["mean"] is not None
+        assert publish.call_args.args[0].to_opencv().shape == (120, 160, 3)
+
+    with _module(tmp_path, scene="scene-01") as fresh:
+        status = fresh.get_status()
+        assert status["has_background"] is True and status["objects"] == 2
