@@ -46,8 +46,8 @@ SCENE_OVERLAY_DIR = STATE_DIR / "scene_overlay"
 OverlayMode = Literal["blend", "edges"]
 _SCENE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EDGE_COLOR = (0, 255, 0)
-_CHANGE_THRESHOLD = 30
-_MIN_OBJECT_AREA = 400
+_CHANGE_THRESHOLD = 35
+_MIN_OBJECT_AREA = 300
 
 
 class SceneOverlayConfig(ModuleConfig):
@@ -95,17 +95,15 @@ def edge_overlay(live: np.ndarray, reference: np.ndarray) -> np.ndarray:
 
 
 def foreground_mask(image: np.ndarray, background: np.ndarray) -> np.ndarray:
-    """Pixels that differ from the empty table, cleaned of speckle."""
+    """Pixels whose colour differs from the empty table, cleaned of speckle."""
     import cv2
 
     diff = cv2.absdiff(
-        cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
-    )
-    diff = cv2.GaussianBlur(diff, (7, 7), 0)
+        cv2.GaussianBlur(image, (5, 5), 0), cv2.GaussianBlur(background, (5, 5), 0)
+    ).max(axis=2)
     changed = (diff > _CHANGE_THRESHOLD).astype(np.uint8)
-    kernel = np.ones((5, 5), np.uint8)
-    opened = cv2.morphologyEx(changed, cv2.MORPH_OPEN, kernel)
-    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel)
+    opened = cv2.morphologyEx(changed, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
     return np.asarray(closed, dtype=bool)
 
 
@@ -128,6 +126,9 @@ def alignment_scores(live_mask: np.ndarray, object_masks: list[np.ndarray]) -> l
     """Per object: overlap between the live foreground near its ghost and the ghost itself."""
     scores: list[float] = []
     height, width = live_mask.shape
+    every_ghost = np.zeros_like(live_mask)
+    for ghost in object_masks:
+        every_ghost |= ghost
     for ghost in object_masks:
         ys, xs = np.nonzero(ghost)
         pad_y = int(0.3 * (ys.max() - ys.min() + 1))
@@ -137,7 +138,8 @@ def alignment_scores(live_mask: np.ndarray, object_masks: list[np.ndarray]) -> l
             max(0, ys.min() - pad_y) : min(height, ys.max() + pad_y + 1),
             max(0, xs.min() - pad_x) : min(width, xs.max() + pad_x + 1),
         ] = True
-        live_near = live_mask & roi
+        # A neighbour sitting on its own ghost must not count against this one.
+        live_near = live_mask & roi & ~(every_ghost & ~ghost)
         union = int((live_near | ghost).sum())
         scores.append(float((live_near & ghost).sum()) / union if union else 0.0)
     return scores
