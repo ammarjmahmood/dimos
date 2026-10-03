@@ -16,6 +16,7 @@
 
 import importlib
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 from open3d.core import Tensor
@@ -24,6 +25,7 @@ import trimesh
 
 pytest.importorskip("roboplan.core")
 
+from dimos.core.stream import Out
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
@@ -35,6 +37,7 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.tf.tf import MultiTBuffer
 from dimos.robot.assets.model import PlanarBaseDefinition, RobotModel
 
@@ -149,6 +152,43 @@ def test_capture_state_is_used_instead_of_latest_state(make_module):
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.6, 0, 0]])
     assert module._pointcloud_states.find_closest(1.0, 0.001).ts == 1.0
+
+
+def test_capture_tf_is_received_from_camera_transport(make_module, monkeypatch):
+    module = make_module()
+    monkeypatch.setattr(module, "_tf", None)
+    transport = MagicMock()
+    callbacks = []
+
+    def subscribe(callback, _stream):
+        callbacks.append(callback)
+        return lambda: callbacks.remove(callback)
+
+    transport.subscribe.side_effect = subscribe
+    transport.broadcast.side_effect = lambda _stream, msg: [cb(msg) for cb in callbacks]
+    module.tf.transport = transport
+    camera_tf = Out(TFMessage, "tf")
+    camera_tf.transport = transport
+    _state(module)
+    # Subscribe before the independent camera publishes its capture transform.
+    assert module.tfbuffer.get("world", "camera", time_point=1.0) is None
+    camera_tf.publish(
+        TFMessage(
+            Transform(
+                frame_id="world",
+                child_frame_id="camera",
+                ts=1.0,
+                translation=Vector3(1, 0, 0),
+                rotation=Quaternion(),
+            )
+        )
+    )
+
+    filtered = module._filter_pointcloud(_cloud([[0.1, 0, 0], [0.2, 0, 0]]))
+
+    assert filtered is not None
+    np.testing.assert_allclose(filtered.points_f32(), [[0.2, 0, 0]])
+    module.tfbuffer.dispose()
 
 
 @pytest.mark.parametrize("missing", ["state", "tf", "stale_state", "stale_tf"])

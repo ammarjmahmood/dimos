@@ -18,7 +18,8 @@ collision-link geometry cache remains.
 Canonical JointState messages keep their original timestamps in a bounded buffer.
 Each capture matches state and sensor-to-world TF within the configured tolerance;
 missing, malformed or stale alignment drops the capture. There is no latest-state
-fallback. Continuous, mimic and supported prepared planar-base models reuse the
+fallback. The bidirectional TF port receives camera transforms as well as
+publishing planning transforms. Continuous, mimic and supported prepared planar-base models reuse the
 planning model's native configuration conversion. Raw floating/planar URDF joints
 remain subject to the existing prepared-model validation rules.
 
@@ -74,9 +75,14 @@ No unrelated constraint was changed.
 A bounded synthetic MuJoCo depth-frame smoke used llvmpipe software rendering:
 576 robot surface returns were removed and all 175 nearby obstacle returns retained,
 with colors intact. This tests the camera conversion and native filtering path.
-The full xArm grasp room scene remains blocked locally by missing GitHub CLI OAuth
-for its custom LFS archive. The simulation blueprint was checked with asset
-resolution stubbed; it selects only MuJoCo/sim adapters and native filtering.
+After the room archive was fetched and its SHA256 verified, a bounded CPU launch
+of the actual `xarm-grasp` MuJoCo blueprint passed. The transport observer received
+247 raw captures, 228 filtered captures and 228 mapper outputs; each matched
+capture removed 263 points, and the map contained up to 1,338 occupied points.
+The camera TF reached the planning consumer and viser returned HTTP 200 on port
+8095. Early captures were dropped while consumers started. No grasp or motion
+command was issued. System configurators were skipped during the successful
+validation run; no driver or security setting was changed.
 
 Hardware, GPU execution, Windows, macOS, ARM and the full self-hosted suite were not
 run locally. Selected native tests marked self_hosted were explicitly run on CPU.

@@ -33,7 +33,7 @@ from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.control.coordinator import ControlCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import In, Out
+from dimos.core.stream import IO, In, Out
 from dimos.manipulation.execution_manager import PlanExecutionManager
 from dimos.manipulation.manipulation_spec import (
     UNCONFIRMED_STOP,
@@ -232,7 +232,7 @@ class ManipulationModule(Module):
     pointcloud: In[PointCloud2]
     filtered_pointcloud: Out[PointCloud2]
     objects: In[list[DetObject]]
-    tf: Out[TFMessage]
+    tf: IO[TFMessage]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
