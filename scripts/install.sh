@@ -528,7 +528,8 @@ install_system_deps() {
             local -a needed=() privilege=(/usr/bin/env)
             if [[ $(id -u) != 0 ]]; then privilege=(sudo); fi
             for pkg in $UBUNTU_PACKAGES; do
-                if [[ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || true)" != "install ok installed" ]]; then
+                # one status line per installed architecture (multiarch), and Ubuntu 24.04 renamed some to <name>t64
+                if ! dpkg-query -W -f='${Status}\n' "$pkg" "${pkg}t64" 2>/dev/null | grep -qx "install ok installed"; then
                     needed+=("$pkg")
                 fi
             done
