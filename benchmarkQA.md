@@ -26,7 +26,7 @@ Use the existing functions in `dimos/evals/scorers.py`. Parsing model text and s
 
 | Answer type | Requested response | Parsing and scoring |
 |---|---|---|
-| Single choice | One option letter, e.g. `B` | `exact(expected_letter, answer.strip().upper())` |
+| Single choice | One option letter, e.g. `B` | `exact(expected_letter, choice("ABCD", case_sensitive=True)(answer))` |
 | Boolean | `yes` or `no` | `exact(expected_yes_no, yes_no(answer))` |
 | Exact count | One number | `exact(reference_count, first_number(answer))` |
 | Numerical estimate | One number in the requested units | `numeric(reference, first_number(answer), tolerance=t, band=b)` |
@@ -36,7 +36,7 @@ Use the existing functions in `dimos/evals/scorers.py`. Parsing model text and s
 
 - List labeled options separately from the question and request only one letter.
 - Correct normalized letter scores **1**; incorrect or invalid replies score **0**.
-- Full option strings, explanations, JSON wrappers, and multiple selections are invalid under this response contract.
+- The parser takes the last uppercase option letter in the reply, so prose before the answer is tolerated; lowercase letters are ignored so the article "a" never counts.
 - Use plausible alternatives of the same kind and exactly one correct option. Use two or three choices when natural rather than padding to four.
 - Balance correct-answer positions across a suite. Keep option order identical across harnesses; reproducible shuffling must also update the reference-letter mapping.
 

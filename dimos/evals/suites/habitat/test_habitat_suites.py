@@ -72,7 +72,7 @@ def test_scene_contract(name, scene_id, size):
         ("hm3d_CFVBbU9Rsyb", "bunk_utility_height_difference", "5.6", 1),
         ("hm3d_CFVBbU9Rsyb", "bunk_utility_height_difference", "6.2", 0.5),
         ("hm3d_CFVBbU9Rsyb", "bunk_utility_height_difference", "6.7", 0),
-        ("hm3d_CFVBbU9Rsyb", "sofa_color", " c ", 1),
+        ("hm3d_CFVBbU9Rsyb", "sofa_color", "Answer: C", 1),
         ("hm3d_GLAQ4DNUx5U", "every_bedroom_tv", "no", 1),
         ("hm3d_GLAQ4DNUx5U", "every_bedroom_tv", "yes", 0),
         ("hm3d_GLAQ4DNUx5U", "every_desk_chair", "yes", 1),

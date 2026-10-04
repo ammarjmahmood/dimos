@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 import os
+from typing import TypeVar
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
-from dimos.evals.scorers import exact, first_number, numeric, rank_order, ranking, yes_no
-from dimos.evals.suites.lib.habitat_qa import parsed as _parsed
-from dimos.evals.types import EvalCase, Suite
+from dimos.evals.scorers import choice, exact, first_number, numeric, rank_order, ranking, yes_no
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "hssd_102344193"
 SCENE_NAME = "HSSD scene 1"
@@ -33,6 +36,22 @@ INSTRUCTION = (
     "Use observations rather than assumptions about a typical home. "
     "When you have enough evidence, return the answer in the requested format."
 )
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
 
 
 def _environment() -> HabitatEnvironment:
@@ -74,7 +93,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich room has the largest floor area? A) Bedroom; B) Living room; C) Kitchen; D) Bathroom. Return only A, B, C, or D.",
         environment=_environment(),
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "area", "single-choice"}),
     ),
@@ -101,7 +120,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich room contains the laptop? A) Living room; B) Kitchen; C) Bedroom; D) Bathroom. Return only A, B, C, or D.",
         environment=_environment(),
-        grade=lambda o: exact("C", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("C", value)),
         timeout_s=1200,
         tags=frozenset({"object-location", "single-choice"}),
     ),
@@ -137,7 +156,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nIs the refrigerator open or closed? A) Open; B) Closed. Return only A or B.",
         environment=_environment(),
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         timeout_s=1200,
         tags=frozenset({"object-state", "single-choice"}),
     ),

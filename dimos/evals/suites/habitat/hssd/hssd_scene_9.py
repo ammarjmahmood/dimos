@@ -12,21 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import partial
+from collections.abc import Callable
+import os
+from typing import TypeVar
 
-from dimos.evals.scorers import exact, first_number, numeric, rank_order, ranking
-from dimos.evals.suites.lib.habitat_qa import (
-    HSSD_DATASET,
-    INSTRUCTION,
-    environment,
-    parsed,
-)
-from dimos.evals.types import EvalCase, Suite
+from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.evals.environments.habitat import HabitatEnvironment
+from dimos.evals.scorers import choice, exact, first_number, numeric, rank_order, ranking
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "hssd_108736851_177263586"
 SCENE_NAME = "HSSD scene 9"
 
-_environment = partial(environment, "108736851_177263586", "HSSD_DATASET_CONFIG", HSSD_DATASET)
+INSTRUCTION = (
+    "You are answering questions about a live simulated home. You control the robot, "
+    "and its sensor recording grows as it observes the environment. Initial observations "
+    "do not cover the whole home. Move around to gather the evidence needed to answer "
+    "the question. Inspect relevant interior rooms for counts and absence claims. "
+    "Indoor areas, including an attached garage, are in scope. Exterior openings may "
+    "be observed from indoors; do not leave the home. Use observations rather than "
+    "assumptions about a typical home. Return the answer in the requested format."
+)
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
+
+
+def _environment() -> HabitatEnvironment:
+    return HabitatEnvironment(
+        scene_dataset_config=os.environ.get(
+            "HSSD_DATASET_CONFIG",
+            str(
+                DIMOS_PROJECT_ROOT
+                / "target/habitat/data/hssd-hab/hssd-hab.scene_dataset_config.json"
+            ),
+        ),
+        scene_id="108736851_177263586",
+        seed=0,
+        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+    )
+
+
 SUITE: Suite = [
     EvalCase(
         id=f"{SCENE_KEY}_dining_chairs",
@@ -35,7 +76,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "How many chairs are around the dining table? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(8, v)),
+        grade=_parsed(first_number, lambda value: exact(8, value)),
         tags=frozenset({"object-count", "count"}),
     ),
     EvalCase(
@@ -45,7 +86,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What shape is the tabletop between the two quarter-circle sofas? A) Circular; B) Square; C) Rectangular; D) Triangular. Return only A, B, C, or D.",
-        grade=lambda o: exact("A", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("A", value)),
         tags=frozenset({"visual-attribute", "single-choice"}),
     ),
     EvalCase(
@@ -55,7 +96,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "How many sides do the tabletops beside the blue sofa in the living room have? A) 4; B) 5; C) 6; D) 8. Return only A, B, C, or D.",
-        grade=lambda o: exact("C", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("C", value)),
         tags=frozenset({"visual-attribute", "single-choice"}),
     ),
     EvalCase(
@@ -63,7 +104,7 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "How many bedrooms are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(4, v)),
+        grade=_parsed(first_number, lambda value: exact(4, value)),
         tags=frozenset({"rooms", "count"}),
     ),
     EvalCase(
@@ -73,7 +114,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "How many kitchen areas are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(2, v)),
+        grade=_parsed(first_number, lambda value: exact(2, value)),
         tags=frozenset({"rooms", "count"}),
     ),
     EvalCase(
@@ -83,7 +124,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Which room contains the television? A) Living room; B) Office; C) Bedroom; D) Kitchen. Return only A, B, C, or D.",
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         tags=frozenset({"object-location", "single-choice"}),
     ),
     EvalCase(
@@ -93,7 +134,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the approximate living-room floor area, in square meters? Return only the number.",
-        grade=parsed(first_number, lambda v: numeric(123.96, v, tolerance=6, band=25)),
+        grade=_parsed(first_number, lambda value: numeric(123.96, value, tolerance=6, band=25)),
         tags=frozenset({"area", "numeric"}),
     ),
     EvalCase(
@@ -103,7 +144,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the approximate area of the largest bedroom, in square meters? Return only the number.",
-        grade=parsed(first_number, lambda v: numeric(37.23, v, tolerance=2.5, band=8)),
+        grade=_parsed(first_number, lambda value: numeric(37.23, value, tolerance=2.5, band=8)),
         tags=frozenset({"area", "numeric"}),
     ),
     EvalCase(
@@ -113,7 +154,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Order these rooms from smallest to largest area. A) Office; B) Living room; C) Dining room. Return all letters once in order, optionally separated by commas.",
-        grade=parsed(ranking, lambda v: rank_order("CAB", v)),
+        grade=_parsed(ranking, lambda value: rank_order("CAB", value)),
         tags=frozenset({"area", "ranking"}),
     ),
     EvalCase(
@@ -121,7 +162,7 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "How many beds are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(4, v)),
+        grade=_parsed(first_number, lambda value: exact(4, value)),
         tags=frozenset({"object-count", "count"}),
     ),
     EvalCase(
@@ -135,7 +176,7 @@ SUITE: Suite = [
         # Nearest sampled points inside region polygons: laundry 6.233,
         # dining 21.470, larger kitchen 21.595 m. The last two nearly tie;
         # this is a room-entry convention, not a center-distance ranking.
-        grade=parsed(ranking, lambda v: rank_order("CBA", v)),
+        grade=_parsed(ranking, lambda value: rank_order("CBA", value)),
         tags=frozenset({"distance", "ranking"}),
     ),
 ]

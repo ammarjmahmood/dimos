@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 import os
+from typing import TypeVar
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
-from dimos.evals.scorers import exact, first_number, numeric, yes_no
-from dimos.evals.suites.lib.habitat_qa import parsed as _parsed
-from dimos.evals.types import EvalCase, Suite
+from dimos.evals.scorers import choice, exact, first_number, numeric, yes_no
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "hssd_104348463_171513588"
 SCENE_NAME = "HSSD scene 5"
@@ -31,6 +34,22 @@ INSTRUCTION = (
     "Only indoor areas are in scope. Use observations rather than assumptions about "
     "a typical home. When you have enough evidence, return the answer in the requested format."
 )
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
 
 
 def _environment() -> HabitatEnvironment:
@@ -53,7 +72,7 @@ SUITE: Suite = [
         id="hssd_104348463_171513588_bedrooms",
         inputs=INSTRUCTION + "\n\nHow many bedrooms are in the home? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(1, v)),
+        grade=_parsed(first_number, lambda value: exact(1, value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "count"}),
     ),
@@ -61,7 +80,7 @@ SUITE: Suite = [
         id="hssd_104348463_171513588_bathrooms",
         inputs=INSTRUCTION + "\n\nHow many bathrooms are in the home? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(1, v)),
+        grade=_parsed(first_number, lambda value: exact(1, value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "count"}),
     ),
@@ -70,7 +89,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat is the approximate bedroom floor area, in square meters? Return only the number.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: numeric(29.78, v, tolerance=2, band=7)),
+        grade=_parsed(first_number, lambda value: numeric(29.78, value, tolerance=2, band=7)),
         timeout_s=1200,
         tags=frozenset({"area", "numeric"}),
     ),
@@ -79,7 +98,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat is the approximate perimeter of the living/dining area, excluding the kitchen zone, in meters? Return only the number.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: numeric(25.65, v, tolerance=1, band=4)),
+        grade=_parsed(first_number, lambda value: numeric(25.65, value, tolerance=1, band=4)),
         timeout_s=1200,
         tags=frozenset({"perimeter", "numeric"}),
     ),
@@ -88,7 +107,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich area contains the desktop computer? A) Kitchen; B) Bedroom; C) Bathroom; D) Living area. Return only A, B, C, or D.",
         environment=_environment(),
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         timeout_s=1200,
         tags=frozenset({"object-location", "single-choice"}),
     ),
@@ -96,7 +115,7 @@ SUITE: Suite = [
         id="hssd_104348463_171513588_televisions",
         inputs=INSTRUCTION + "\n\nHow many televisions are in the home? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(2, v)),
+        grade=_parsed(first_number, lambda value: exact(2, value)),
         timeout_s=1200,
         tags=frozenset({"object-count", "count"}),
     ),
@@ -105,7 +124,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nIs there a desktop computer in the bedroom? Return only yes or no.",
         environment=_environment(),
-        grade=_parsed(yes_no, lambda v: exact("yes", v)),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         timeout_s=1200,
         tags=frozenset({"existence", "boolean"}),
     ),
@@ -114,7 +133,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat is the approximate diameter of the round dining table, in meters? Return only the number.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: numeric(1.52, v, tolerance=0.1, band=0.35)),
+        grade=_parsed(first_number, lambda value: numeric(1.52, value, tolerance=0.1, band=0.35)),
         timeout_s=1200,
         tags=frozenset({"dimensions", "numeric"}),
     ),
@@ -123,7 +142,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nHow many chairs are at the kitchen island? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(3, v)),
+        grade=_parsed(first_number, lambda value: exact(3, value)),
         timeout_s=1200,
         tags=frozenset({"object-count", "count"}),
     ),
@@ -131,7 +150,7 @@ SUITE: Suite = [
         id="hssd_104348463_171513588_room_count",
         inputs=INSTRUCTION + "\n\nHow many rooms are in the home? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(3, v)),
+        grade=_parsed(first_number, lambda value: exact(3, value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "count"}),
     ),

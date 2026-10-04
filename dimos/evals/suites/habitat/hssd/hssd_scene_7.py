@@ -12,21 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import partial
+from collections.abc import Callable
+import os
+from typing import TypeVar
 
-from dimos.evals.scorers import exact, first_number, numeric, rank_order, ranking, yes_no
-from dimos.evals.suites.lib.habitat_qa import (
-    HSSD_DATASET,
-    INSTRUCTION,
-    environment,
-    parsed,
-)
-from dimos.evals.types import EvalCase, Suite
+from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.evals.environments.habitat import HabitatEnvironment
+from dimos.evals.scorers import choice, exact, first_number, numeric, rank_order, ranking, yes_no
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "hssd_106878858_174886965"
 SCENE_NAME = "HSSD scene 7"
 
-_environment = partial(environment, "106878858_174886965", "HSSD_DATASET_CONFIG", HSSD_DATASET)
+INSTRUCTION = (
+    "You are answering questions about a live simulated home. You control the robot, "
+    "and its sensor recording grows as it observes the environment. Initial observations "
+    "do not cover the whole home. Move around to gather the evidence needed to answer "
+    "the question. Inspect relevant interior rooms for counts and absence claims. "
+    "Indoor areas, including an attached garage, are in scope. Exterior openings may "
+    "be observed from indoors; do not leave the home. Use observations rather than "
+    "assumptions about a typical home. Return the answer in the requested format."
+)
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
+
+
+def _environment() -> HabitatEnvironment:
+    return HabitatEnvironment(
+        scene_dataset_config=os.environ.get(
+            "HSSD_DATASET_CONFIG",
+            str(
+                DIMOS_PROJECT_ROOT
+                / "target/habitat/data/hssd-hab/hssd-hab.scene_dataset_config.json"
+            ),
+        ),
+        scene_id="106878858_174886965",
+        seed=0,
+        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+    )
+
+
 SUITE: Suite = [
     EvalCase(
         id=f"{SCENE_KEY}_bathroom_floor_pattern_match",
@@ -35,7 +76,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Do all the bathrooms have the same floor pattern? Return only yes or no.",
-        grade=parsed(yes_no, lambda v: exact("yes", v)),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         tags=frozenset({"visual-attribute", "boolean"}),
     ),
     EvalCase(
@@ -43,7 +84,7 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "How many bedrooms are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(4, v)),
+        grade=_parsed(first_number, lambda value: exact(4, value)),
         tags=frozenset({"rooms", "count"}),
     ),
     EvalCase(
@@ -51,7 +92,7 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "How many bathrooms are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(2, v)),
+        grade=_parsed(first_number, lambda value: exact(2, value)),
         tags=frozenset({"rooms", "count"}),
     ),
     EvalCase(
@@ -61,7 +102,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the approximate area of the largest bedroom, in square meters? Return only the number.",
-        grade=parsed(first_number, lambda v: numeric(46.72, v, tolerance=3, band=10)),
+        grade=_parsed(first_number, lambda value: numeric(46.72, value, tolerance=3, band=10)),
         tags=frozenset({"area", "numeric"}),
     ),
     EvalCase(
@@ -71,7 +112,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the approximate dining-room perimeter, in meters? Return only the number.",
-        grade=parsed(first_number, lambda v: numeric(22.54, v, tolerance=1, band=4)),
+        grade=_parsed(first_number, lambda value: numeric(22.54, value, tolerance=1, band=4)),
         tags=frozenset({"perimeter", "numeric"}),
     ),
     EvalCase(
@@ -81,7 +122,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Which room contains the laptop? A) Bedroom; B) Office; C) Living room; D) Kitchen. Return only A, B, C, or D.",
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         tags=frozenset({"object-location", "single-choice"}),
     ),
     EvalCase(
@@ -89,7 +130,7 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "How many beds are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(4, v)),
+        grade=_parsed(first_number, lambda value: exact(4, value)),
         tags=frozenset({"object-count", "count"}),
     ),
     EvalCase(
@@ -99,7 +140,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the minimum number of doorways from the garage to the largest bedroom? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(4, v)),
+        grade=_parsed(first_number, lambda value: exact(4, value)),
         tags=frozenset({"connectivity", "count"}),
     ),
     EvalCase(
@@ -112,7 +153,7 @@ SUITE: Suite = [
         # Source Habitat (-9.217360,.158400,-4.237486), static navmesh .25/.60 m.
         # .15 m goal grid within 1.5 m of anchors: laptop 3.254, fridge 8.632,
         # mower 11.717 m; the other tested entryway openings preserve this order.
-        grade=parsed(ranking, lambda v: rank_order("ABC", v)),
+        grade=_parsed(ranking, lambda value: rank_order("ABC", value)),
         tags=frozenset({"distance", "ranking"}),
     ),
     EvalCase(
@@ -122,7 +163,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What color is the car in the garage? A) Blue; B) Red; C) White; D) Black. Return only A, B, C, or D.",
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         tags=frozenset({"visual-attribute", "single-choice"}),
     ),
     EvalCase(
@@ -132,7 +173,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Is there an open doorway or passage from the home to the outside? Return only yes or no.",
-        grade=parsed(yes_no, lambda v: exact("yes", v)),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         tags=frozenset({"object-state", "boolean"}),
     ),
 ]

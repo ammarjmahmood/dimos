@@ -12,35 +12,69 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import partial
+from collections.abc import Callable
+import os
+from typing import TypeVar
 
-from dimos.evals.suites.lib.habitat_qa import (
-    INSTRUCTION,
-    TEST_APARTMENT,
-    boolean,
-    choice,
-    count,
-    environment,
-)
-from dimos.evals.types import EvalCase, Suite
+from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.evals.environments.habitat import HabitatEnvironment
+from dimos.evals.scorers import choice, exact, first_number, yes_no
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "habitat_test_apartment_1"
 SCENE_NAME = "Habitat test scene 1"
 
-_environment = partial(
-    environment,
-    TEST_APARTMENT,
-    "HABITAT_TEST_DATASET_CONFIG",
-    "default",
-    scene_env="HABITAT_TEST_SCENE",
+INSTRUCTION = (
+    "You are answering questions about a live simulated home. You control the robot, "
+    "and its sensor recording grows as it observes the environment. Initial observations "
+    "do not cover the whole home. Move around to gather the evidence needed to answer "
+    "the question. Inspect relevant interior rooms for counts and absence claims. "
+    "Indoor areas, including an attached garage, are in scope. Exterior openings may "
+    "be observed from indoors; do not leave the home. Use observations rather than "
+    "assumptions about a typical home. Return the answer in the requested format."
 )
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
+
+
+def _environment() -> HabitatEnvironment:
+    return HabitatEnvironment(
+        scene_dataset_config=os.environ.get("HABITAT_TEST_DATASET_CONFIG", "default"),
+        scene_id=os.environ.get(
+            "HABITAT_TEST_SCENE",
+            str(
+                DIMOS_PROJECT_ROOT
+                / "target/habitat/data/versioned_data/habitat_test_scenes/apartment_1.glb"
+            ),
+        ),
+        seed=0,
+        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+    )
+
+
 SUITE: Suite = [
     EvalCase(
         id=f"{SCENE_KEY}_mirror_shape",
         inputs=INSTRUCTION
         + "\n\nWhat shape is the wall mirror above the dining-room sideboard? A) Rectangular; B) Circular; C) Triangular; D) Hexagonal. Return only the letter.",
         environment=_environment(),
-        grade=choice("B"),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         timeout_s=1200,
         tags=frozenset({"visual-attribute", "single-choice"}),
     ),
@@ -49,7 +83,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat type of window covering is used in the living room? A) Horizontal blinds; B) Fabric curtains; C) Exterior shutters; D) No covering. Return only the letter.",
         environment=_environment(),
-        grade=choice("A"),
+        grade=_parsed(_LETTER, lambda value: exact("A", value)),
         timeout_s=1200,
         tags=frozenset({"visual-attribute", "single-choice"}),
     ),
@@ -58,7 +92,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nIs the dining-room door open or closed? A) Closed; B) Open. Return only the letter.",
         environment=_environment(),
-        grade=choice("B"),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         timeout_s=1200,
         tags=frozenset({"object-state", "single-choice"}),
     ),
@@ -67,7 +101,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich room contains the wall-mounted television? A) Dining room; B) Bedroom; C) Living room; D) Bathroom. Return only the letter.",
         environment=_environment(),
-        grade=choice("C"),
+        grade=_parsed(_LETTER, lambda value: exact("C", value)),
         timeout_s=1200,
         tags=frozenset({"object-location", "single-choice"}),
     ),
@@ -76,7 +110,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nHow many oversized chess-piece decorations are on the console beneath the television? Return only the count.",
         environment=_environment(),
-        grade=count(2),
+        grade=_parsed(first_number, lambda value: exact(2, value)),
         timeout_s=1200,
         tags=frozenset({"object-count", "count"}),
     ),
@@ -85,7 +119,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nHow many tiers does the serving stand on the dining table have? Return only the count.",
         environment=_environment(),
-        grade=count(2),
+        grade=_parsed(first_number, lambda value: exact(2, value)),
         timeout_s=1200,
         tags=frozenset({"object-count", "count"}),
     ),
@@ -94,7 +128,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nIs there a coffee table between the sectional sofa and the television? Return only yes or no.",
         environment=_environment(),
-        grade=boolean("yes"),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         timeout_s=1200,
         tags=frozenset({"spatial-relation", "boolean"}),
     ),

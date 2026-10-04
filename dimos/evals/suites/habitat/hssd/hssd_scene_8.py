@@ -12,28 +12,69 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import partial
+from collections.abc import Callable
+import os
+from typing import TypeVar
 
-from dimos.evals.scorers import exact, first_number, numeric, yes_no
-from dimos.evals.suites.lib.habitat_qa import (
-    HSSD_DATASET,
-    INSTRUCTION,
-    environment,
-    parsed,
-)
-from dimos.evals.types import EvalCase, Suite
+from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.evals.environments.habitat import HabitatEnvironment
+from dimos.evals.scorers import choice, exact, first_number, numeric, yes_no
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "hssd_107734110_175999914"
 SCENE_NAME = "HSSD scene 8"
 
-_environment = partial(environment, "107734110_175999914", "HSSD_DATASET_CONFIG", HSSD_DATASET)
+INSTRUCTION = (
+    "You are answering questions about a live simulated home. You control the robot, "
+    "and its sensor recording grows as it observes the environment. Initial observations "
+    "do not cover the whole home. Move around to gather the evidence needed to answer "
+    "the question. Inspect relevant interior rooms for counts and absence claims. "
+    "Indoor areas, including an attached garage, are in scope. Exterior openings may "
+    "be observed from indoors; do not leave the home. Use observations rather than "
+    "assumptions about a typical home. Return the answer in the requested format."
+)
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
+
+
+def _environment() -> HabitatEnvironment:
+    return HabitatEnvironment(
+        scene_dataset_config=os.environ.get(
+            "HSSD_DATASET_CONFIG",
+            str(
+                DIMOS_PROJECT_ROOT
+                / "target/habitat/data/hssd-hab/hssd-hab.scene_dataset_config.json"
+            ),
+        ),
+        scene_id="107734110_175999914",
+        seed=0,
+        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+    )
+
+
 SUITE: Suite = [
     EvalCase(
         id=f"{SCENE_KEY}_bedrooms",
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "How many bedrooms are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(1, v)),
+        grade=_parsed(first_number, lambda value: exact(1, value)),
         tags=frozenset({"rooms", "count"}),
     ),
     EvalCase(
@@ -43,7 +84,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "How many separate closet spaces are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(2, v)),
+        grade=_parsed(first_number, lambda value: exact(2, value)),
         tags=frozenset({"rooms", "count"}),
     ),
     EvalCase(
@@ -53,7 +94,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Which room contains the piano? A) Bedroom; B) Office; C) Kitchen; D) Living room. Return only A, B, C, or D.",
-        grade=lambda o: exact("D", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("D", value)),
         tags=frozenset({"object-location", "single-choice"}),
     ),
     EvalCase(
@@ -63,7 +104,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "Which room contains the desktop computer? A) Office; B) Living room; C) Kitchen; D) Bedroom. Return only A, B, C, or D.",
-        grade=lambda o: exact("A", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("A", value)),
         tags=frozenset({"object-location", "single-choice"}),
     ),
     EvalCase(
@@ -71,7 +112,7 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "Is there a sofa in the office? Return only yes or no.",
-        grade=parsed(yes_no, lambda v: exact("yes", v)),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         tags=frozenset({"existence", "boolean"}),
     ),
     EvalCase(
@@ -81,7 +122,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "How many televisions are in the home? Return only the count.",
-        grade=parsed(first_number, lambda v: exact(3, v)),
+        grade=_parsed(first_number, lambda value: exact(3, value)),
         tags=frozenset({"object-count", "count"}),
     ),
     EvalCase(
@@ -91,7 +132,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the approximate living-room area, in square meters? Return only the number.",
-        grade=parsed(first_number, lambda v: numeric(51.53, v, tolerance=3, band=10)),
+        grade=_parsed(first_number, lambda value: numeric(51.53, value, tolerance=3, band=10)),
         tags=frozenset({"area", "numeric"}),
     ),
     EvalCase(
@@ -101,7 +142,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\n"
         + "What is the approximate width of the digital piano, in meters? Return only the number.",
-        grade=parsed(first_number, lambda v: numeric(1.33, v, tolerance=0.08, band=0.3)),
+        grade=_parsed(first_number, lambda value: numeric(1.33, value, tolerance=0.08, band=0.3)),
         tags=frozenset({"dimensions", "numeric"}),
     ),
     EvalCase(
@@ -113,7 +154,7 @@ SUITE: Suite = [
         + "What is the largest circular robot radius that fits through the office doorway in 2D, based on the structural opening width, in meters? Return only the number.",
         # Stage slice Y=1 m at X=-4.79/-4.85/-4.90: Z gap [-3.997643,-3.017643].
         # Width .98 m / 2 is structural clearance only, not a furnished-route guarantee.
-        grade=parsed(first_number, lambda v: numeric(0.49, v, tolerance=0.025, band=0.10)),
+        grade=_parsed(first_number, lambda value: numeric(0.49, value, tolerance=0.025, band=0.10)),
         tags=frozenset({"clearance", "numeric"}),
     ),
     EvalCase(
@@ -124,7 +165,7 @@ SUITE: Suite = [
         + "\n\n"
         + "How far is the piano from the office computer in a horizontal straight line, in meters? Return only the number.",
         # Horizontal visual-AABB centers including node transforms/instance scale: 11.635427 m.
-        grade=parsed(first_number, lambda v: numeric(11.64, v, tolerance=0.5, band=2)),
+        grade=_parsed(first_number, lambda value: numeric(11.64, value, tolerance=0.5, band=2)),
         tags=frozenset({"distance", "numeric"}),
     ),
 ]

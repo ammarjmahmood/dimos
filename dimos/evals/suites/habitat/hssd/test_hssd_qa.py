@@ -196,7 +196,7 @@ def test_remaining_scene_contracts(scene_id, suite, count):
         (GARAGE_HOME_SUITE, "beds", "4", 1),
         (GARAGE_HOME_SUITE, "garage_bedroom_doorways", "4", 1),
         (GARAGE_HOME_SUITE, "entryway_path_order", "A B C", 1),
-        (GARAGE_HOME_SUITE, "garage_car_color", " b ", 1),
+        (GARAGE_HOME_SUITE, "garage_car_color", "The car is blue.\n\n**B**", 1),
         (GARAGE_HOME_SUITE, "exterior_opening", "yes", 1),
         (GARAGE_HOME_SUITE, "bathroom_floor_pattern_match", "yes", 1),
         (TWO_KITCHEN_SUITE, "beds", "4", 1),

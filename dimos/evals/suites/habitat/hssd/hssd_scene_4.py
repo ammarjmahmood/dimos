@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 import os
+from typing import TypeVar
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
-from dimos.evals.scorers import exact, first_number, numeric, yes_no
-from dimos.evals.suites.lib.habitat_qa import parsed as _parsed
-from dimos.evals.types import EvalCase, Suite
+from dimos.evals.scorers import choice, exact, first_number, numeric, yes_no
+from dimos.evals.types import EvalCase, Outcome, Suite
+
+T = TypeVar("T")
 
 SCENE_KEY = "hssd_103997970_171031287"
 SCENE_NAME = "HSSD scene 4"
@@ -31,6 +34,22 @@ INSTRUCTION = (
     "Only indoor areas are in scope. Use observations rather than assumptions about "
     "a typical home. When you have enough evidence, return the answer in the requested format."
 )
+
+
+def _parsed(parser: Callable[[str], T], score: Callable[[T], float]) -> Callable[[Outcome], float]:
+    """Keep answer parsing separate from scoring; unparseable answers earn zero."""
+
+    def grade(o: Outcome) -> float:
+        try:
+            value = parser(o.trajectory.final_answer)
+        except ValueError:
+            return 0.0
+        return score(value)
+
+    return grade
+
+
+_LETTER = choice("ABCD", case_sensitive=True)
 
 
 def _environment() -> HabitatEnvironment:
@@ -53,7 +72,7 @@ SUITE: Suite = [
         id="hssd_103997970_171031287_bedrooms",
         inputs=INSTRUCTION + "\n\nHow many bedrooms are in the home? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(1, v)),
+        grade=_parsed(first_number, lambda value: exact(1, value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "count"}),
     ),
@@ -62,7 +81,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nIs there a separately enclosed dining room? Return only yes or no.",
         environment=_environment(),
-        grade=_parsed(yes_no, lambda v: exact("no", v)),
+        grade=_parsed(yes_no, lambda value: exact("no", value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "boolean"}),
     ),
@@ -71,7 +90,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich room is largest by floor area? A) Bedroom; B) Bathroom; C) Open-plan living/kitchen/dining room. Return only A, B, or C.",
         environment=_environment(),
-        grade=lambda o: exact("C", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("C", value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "area", "single-choice"}),
     ),
@@ -80,7 +99,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich room is smallest by floor area? A) Open-plan living/kitchen/dining room; B) Bathroom; C) Bedroom. Return only A, B, or C.",
         environment=_environment(),
-        grade=lambda o: exact("B", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("B", value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "area", "single-choice"}),
     ),
@@ -89,7 +108,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat is the approximate floor area of the kitchen area, in square meters? Return only the number.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: numeric(5.36, v, tolerance=0.4, band=1.5)),
+        grade=_parsed(first_number, lambda value: numeric(5.36, value, tolerance=0.4, band=1.5)),
         timeout_s=1200,
         tags=frozenset({"area", "numeric"}),
     ),
@@ -98,7 +117,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat is the approximate bedroom perimeter, in meters? Return only the number.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: numeric(18.49, v, tolerance=0.8, band=3)),
+        grade=_parsed(first_number, lambda value: numeric(18.49, value, tolerance=0.8, band=3)),
         timeout_s=1200,
         tags=frozenset({"perimeter", "numeric"}),
     ),
@@ -106,7 +125,7 @@ SUITE: Suite = [
         id="hssd_103997970_171031287_bathtub_exists",
         inputs=INSTRUCTION + "\n\nDoes the bathroom contain a bathtub? Return only yes or no.",
         environment=_environment(),
-        grade=_parsed(yes_no, lambda v: exact("yes", v)),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         timeout_s=1200,
         tags=frozenset({"existence", "boolean"}),
     ),
@@ -114,7 +133,7 @@ SUITE: Suite = [
         id="hssd_103997970_171031287_room_count",
         inputs=INSTRUCTION + "\n\nHow many rooms are in the home? Return only the count.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: exact(3, v)),
+        grade=_parsed(first_number, lambda value: exact(3, value)),
         timeout_s=1200,
         tags=frozenset({"rooms", "count"}),
     ),
@@ -122,7 +141,7 @@ SUITE: Suite = [
         id="hssd_103997970_171031287_laptop_exists",
         inputs=INSTRUCTION + "\n\nIs there a laptop anywhere in the home? Return only yes or no.",
         environment=_environment(),
-        grade=_parsed(yes_no, lambda v: exact("no", v)),
+        grade=_parsed(yes_no, lambda value: exact("no", value)),
         timeout_s=1200,
         tags=frozenset({"existence", "boolean"}),
     ),
@@ -131,7 +150,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhat is the approximate diameter of the round dining table, in meters? Return only the number.",
         environment=_environment(),
-        grade=_parsed(first_number, lambda v: numeric(1.60, v, tolerance=0.1, band=0.35)),
+        grade=_parsed(first_number, lambda value: numeric(1.60, value, tolerance=0.1, band=0.35)),
         timeout_s=1200,
         tags=frozenset({"dimensions", "numeric"}),
     ),
@@ -140,7 +159,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nWhich area contains the television? A) Bedroom; B) Bathroom; C) Living area; D) Kitchen area. Return only A, B, C, or D.",
         environment=_environment(),
-        grade=lambda o: exact("C", o.trajectory.final_answer.strip().upper()),
+        grade=_parsed(_LETTER, lambda value: exact("C", value)),
         timeout_s=1200,
         tags=frozenset({"object-location", "single-choice"}),
     ),
@@ -149,7 +168,7 @@ SUITE: Suite = [
         inputs=INSTRUCTION
         + "\n\nAre there plants in every room in the home? Return only yes or no.",
         environment=_environment(),
-        grade=_parsed(yes_no, lambda v: exact("yes", v)),
+        grade=_parsed(yes_no, lambda value: exact("yes", value)),
         timeout_s=1200,
         tags=frozenset({"spatial-relation", "boolean"}),
     ),
