@@ -62,7 +62,7 @@ def _environment() -> HabitatEnvironment:
             "HSSD_DATASET_CONFIG",
             str(
                 DIMOS_PROJECT_ROOT
-                / "target/habitat/data/hssd-hab/hssd-hab.scene_dataset_config.json"
+                / "target/habitat/data/versioned_data/hssd-hab/hssd-hab.scene_dataset_config.json"
             ),
         ),
         scene_id="106366410_174226806",

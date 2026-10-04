@@ -433,7 +433,15 @@ suite's docstring describes its scene:
 dimos evals run dimos.evals.suites.habitat.hm3d.hm3d_scene_3 --agent dimos.evals.agents.pi --limit 1
 ```
 
-Datasets are read from `target/habitat/data`; point elsewhere with
+The Habitat build downloads only the HM3D example. Fetch the others into the same
+`target/habitat/data` (HSSD requires accepting its terms on Hugging Face first):
+
+```bash
+cd target/habitat && ./env/bin/python -m habitat_sim.utils.datasets_download \
+    --uids hssd-hab replica_cad_dataset habitat_test_scenes --data-path ./data --no-replace
+```
+
+Datasets are read from `target/habitat/data/versioned_data`; point elsewhere with
 `HSSD_DATASET_CONFIG`, `HM3D_DATASET_CONFIG`, `HM3D_ANNOTATED_DATASET_CONFIG`,
 `REPLICACAD_DATASET_CONFIG`, or `HABITAT_TEST_SCENE`.
 
