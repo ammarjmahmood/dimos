@@ -31,6 +31,7 @@ from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.validation import prepare_robot_model
+from dimos.manipulation.pointcloud.robot_pointcloud_filter import RobotPointCloudFilter
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -38,7 +39,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.protocol.tf.tf import MultiTBuffer
+from dimos.protocol.tf.tf import TF, MultiTBuffer
 from dimos.robot.assets.model import PlanarBaseDefinition, RobotModel
 
 _URDF = """<robot name="test" version="1.0">
@@ -84,17 +85,25 @@ def make_module(tmp_path, monkeypatch):
         world.finalize()
         module = ManipulationModule(
             model=config,
-            filter_robot_points=True,
-            pointcloud_match_tolerance_s=0.001,
-            **overrides,
+            **{"filter_robot_points": True, **overrides},
         )
         monkeypatch.setattr(module, "_world_monitor", WorldMonitor(world))
         monkeypatch.setattr(module, "_tf", MultiTBuffer())
+        if module.config.filter_robot_points:
+            monkeypatch.setattr(
+                module,
+                "_pointcloud_filter",
+                RobotPointCloudFilter(
+                    world, module.tfbuffer, world_frame=module.config.world_frame
+                ),
+            )
         modules.append(module)
         return module
 
     yield make
     for module in modules:
+        if isinstance(module._tf, TF):
+            module._tf.dispose()
         monkeypatch.setattr(module, "_tf", None)
         module.dispose()
 
@@ -131,7 +140,7 @@ def test_surface_returns_are_removed_before_mapping_and_fields_survive(make_modu
     )
     cloud.pointcloud_tensor.point["labels"] = Tensor(np.array([[7], [8], [9], [10]], np.int32))
 
-    filtered = module._filter_pointcloud(cloud)
+    filtered = module._pointcloud_filter.filter(cloud)
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.2, 0, 0], [0.109, 0.109, 0]])
@@ -147,11 +156,10 @@ def test_capture_state_is_used_instead_of_latest_state(make_module):
     module._world_monitor.world.sync_from_joint_state(JointState(name=["slide"], position=[0.5]))
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0.1, 0, 0], [0.6, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.1, 0, 0], [0.6, 0, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.6, 0, 0]])
-    assert module._pointcloud_states.find_closest(1.0, 0.001).ts == 1.0
 
 
 def test_capture_tf_is_received_from_camera_transport(make_module, monkeypatch):
@@ -169,6 +177,14 @@ def test_capture_tf_is_received_from_camera_transport(make_module, monkeypatch):
     module.tf.transport = transport
     camera_tf = Out(TFMessage, "tf")
     camera_tf.transport = transport
+    monkeypatch.setattr(
+        module,
+        "_pointcloud_filter",
+        RobotPointCloudFilter(
+            module._world_monitor.world,
+            module.tfbuffer,
+        ),
+    )
     _state(module)
     # Subscribe before the independent camera publishes its capture transform.
     assert module.tfbuffer.get("world", "camera", time_point=1.0) is None
@@ -184,22 +200,21 @@ def test_capture_tf_is_received_from_camera_transport(make_module, monkeypatch):
         )
     )
 
-    filtered = module._filter_pointcloud(_cloud([[0.1, 0, 0], [0.2, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.1, 0, 0], [0.2, 0, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.2, 0, 0]])
-    module.tfbuffer.dispose()
 
 
 @pytest.mark.parametrize("missing", ["state", "tf", "stale_state", "stale_tf"])
 def test_missing_or_stale_capture_alignment_drops_the_capture(make_module, missing):
     module = make_module()
     if missing != "state":
-        _state(module, stamp=0.9 if missing == "stale_state" else 1.0)
+        _state(module, stamp=0.8 if missing == "stale_state" else 1.0)
     if missing != "tf":
-        _tf(module, stamp=0.9 if missing == "stale_tf" else 1.0)
+        _tf(module, stamp=0.8 if missing == "stale_tf" else 1.0)
 
-    assert module._filter_pointcloud(_cloud([[0.1, 0, 0]])) is None
+    assert module._pointcloud_filter.filter(_cloud([[0.1, 0, 0]])) is None
 
 
 def test_capture_rotation_and_prepared_base_pose_are_respected(make_module):
@@ -207,10 +222,29 @@ def test_capture_rotation_and_prepared_base_pose_are_respected(make_module):
     _state(module)
     _tf(module, rotation=Quaternion.from_euler(Vector3(0, 0, np.pi / 2)))
 
-    filtered = module._filter_pointcloud(_cloud([[0, -0.1, 0], [0, -0.2, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0, -0.1, 0], [0, -0.2, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0, -0.2, 0]])
+
+
+def test_capture_tf_uses_configured_world_frame(make_module):
+    module = make_module(world_frame="map")
+    _state(module)
+    module.tfbuffer.receive_transform(
+        Transform(
+            frame_id="map",
+            child_frame_id="camera",
+            ts=1.0,
+            translation=Vector3(1, 0, 0),
+            rotation=Quaternion(),
+        )
+    )
+
+    filtered = module._pointcloud_filter.filter(_cloud([[0.1, 0, 0], [0.2, 0, 0]]))
+
+    assert filtered is not None
+    np.testing.assert_allclose(filtered.points_f32(), [[0.2, 0, 0]])
 
 
 def test_surface_mesh_filter_needs_no_solid_volume_sampling(make_module, tmp_path):
@@ -222,19 +256,19 @@ def test_surface_mesh_filter_needs_no_solid_volume_sampling(make_module, tmp_pat
     _state(module)
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0.1, 0, 0], [0.105, 0, 0], [0.2, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.1, 0, 0], [0.105, 0, 0], [0.2, 0, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.2, 0, 0]])
 
 
 def test_late_state_cannot_resurrect_expired_capture(make_module):
-    module = make_module(pointcloud_state_history_s=1.0)
-    _state(module, stamp=3.0)
+    module = make_module()
+    _state(module, stamp=7.0)
     _state(module, stamp=1.0)
     _tf(module)
 
-    assert module._filter_pointcloud(_cloud([[0.1, 0, 0]])) is None
+    assert module._pointcloud_filter.filter(_cloud([[0.1, 0, 0]])) is None
 
 
 def test_corrected_state_replaces_same_timestamp(make_module):
@@ -243,7 +277,7 @@ def test_corrected_state_replaces_same_timestamp(make_module):
     _state(module, position=0.0)
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0.1, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.1, 0, 0]]))
 
     assert filtered is not None
     assert len(filtered) == 0
@@ -253,11 +287,11 @@ def test_out_of_order_cloud_cannot_publish_after_newer_capture(make_module):
     module = make_module()
     _state(module, stamp=2.0)
     _tf(module, stamp=2.0)
-    assert module._filter_pointcloud(_cloud([[0.2, 0, 0]], stamp=2.0)) is not None
+    assert module._pointcloud_filter.filter(_cloud([[0.2, 0, 0]], stamp=2.0)) is not None
     _state(module, stamp=1.0)
     _tf(module, stamp=1.0)
 
-    assert module._filter_pointcloud(_cloud([[0.2, 0, 0]], stamp=1.0)) is None
+    assert module._pointcloud_filter.filter(_cloud([[0.2, 0, 0]], stamp=1.0)) is None
 
 
 @pytest.mark.parametrize("positions", [[float("nan")], [], [0, 1]])
@@ -266,7 +300,7 @@ def test_malformed_joint_states_do_not_authorize_filtering(make_module, position
     module._on_joint_state(JointState(ts=1.0, name=["slide"], position=positions))
     _tf(module)
 
-    assert module._filter_pointcloud(_cloud([[0.1, 0, 0]])) is None
+    assert module._pointcloud_filter.filter(_cloud([[0.1, 0, 0]])) is None
 
 
 @pytest.mark.parametrize(
@@ -281,7 +315,7 @@ def test_native_primitives_exclude_surface_returns(make_module, shape, inside, o
     _state(module)
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([inside, outside]))
+    filtered = module._pointcloud_filter.filter(_cloud([inside, outside]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [outside])
@@ -298,7 +332,7 @@ def test_continuous_joint_maps_full_native_configuration(make_module):
     _state(module, position=np.pi / 2)
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0, 0.4, 0], [0.4, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0, 0.4, 0], [0.4, 0, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.4, 0, 0]])
@@ -320,7 +354,7 @@ def test_mimic_joint_is_derived_by_the_prepared_native_model(make_module):
     _state(module, position=0.1)
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0.2, 0, 0], [0.8, 0, 0], [1, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.2, 0, 0], [0.8, 0, 0], [1, 0, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[1, 0, 0]])
@@ -340,7 +374,7 @@ def test_fixed_collision_link_follows_its_moving_parent(make_module):
     _state(module, position=0.2)
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0.3, 0, 0], [0.8, 0, 0], [1, 0, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.3, 0, 0], [0.8, 0, 0], [1, 0, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[1, 0, 0]])
@@ -357,7 +391,7 @@ def test_prepared_planar_base_uses_capture_coordinates(make_module):
     )
     _tf(module)
 
-    filtered = module._filter_pointcloud(_cloud([[0.5, 0.3, 0], [0.5, 0.5, 0]]))
+    filtered = module._pointcloud_filter.filter(_cloud([[0.5, 0.3, 0], [0.5, 0.5, 0]]))
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.5, 0.5, 0]])
@@ -368,18 +402,29 @@ def test_empty_and_nonfinite_clouds_are_handled_without_updating_alignment(make_
     _state(module)
     _tf(module)
 
-    assert module._filter_pointcloud(_cloud([[float("nan"), 0, 0]])) is None
-    filtered = module._filter_pointcloud(_cloud([]))
+    assert module._pointcloud_filter.filter(_cloud([[float("nan"), 0, 0]])) is None
+    filtered = module._pointcloud_filter.filter(_cloud([]))
     assert filtered is not None and len(filtered) == 0
 
 
-def test_only_filtered_points_are_published_to_the_mapper(make_module, mocker):
+@pytest.mark.asyncio
+async def test_only_filtered_points_are_published_to_the_mapper(make_module, mocker):
     module = make_module()
     _state(module)
     _tf(module)
     publish = mocker.patch.object(module.filtered_pointcloud, "publish")
 
-    module._publish_filtered_pointcloud(_cloud([[0.1, 0, 0], [0.2, 0, 0]]))
+    await module._handle_pointcloud(_cloud([[0.1, 0, 0], [0.2, 0, 0]]))
 
     publish.assert_called_once()
     np.testing.assert_allclose(publish.call_args.args[0].points_f32(), [[0.2, 0, 0]])
+
+
+@pytest.mark.asyncio
+async def test_disabled_filter_keeps_the_optional_output_inactive(make_module, mocker):
+    module = make_module(filter_robot_points=False)
+    publish = mocker.patch.object(module.filtered_pointcloud, "publish")
+
+    await module._handle_pointcloud(_cloud([[0.2, 0, 0]]))
+
+    publish.assert_not_called()
