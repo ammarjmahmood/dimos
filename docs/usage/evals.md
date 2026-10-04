@@ -425,6 +425,18 @@ sensor streams and navigation streams supplied by the composed blueprint.
 The metadata's `point_cloud_source` describes how Habitat scans are generated
 (depth unprojection), not whether scan publication is enabled.
 
+The Habitat QA suites under `dimos.evals.suites.habitat` cover 18 furnished scenes
+(HSSD, HM3D, ReplicaCAD and the Habitat test apartment), one suite per scene; each
+suite's docstring describes its scene:
+
+```bash
+dimos evals run dimos.evals.suites.habitat.hm3d.hm3d_scene_3 --agent dimos.evals.agents.pi --limit 1
+```
+
+Datasets are read from `target/habitat/data`; point elsewhere with
+`HSSD_DATASET_CONFIG`, `HM3D_DATASET_CONFIG`, `HM3D_ANNOTATED_DATASET_CONFIG`,
+`REPLICACAD_DATASET_CONFIG`, or `HABITAT_TEST_SCENE`.
+
 For MuJoCo, the blueprint brings its own `MujocoSimModule` and scene, so the
 environment only launches `dimos --simulation mujoco --record run <blueprint>
 <modules>` headless; `MUJOCOSIMMODULE__HEADLESS=false` in the shell opens the viewer on

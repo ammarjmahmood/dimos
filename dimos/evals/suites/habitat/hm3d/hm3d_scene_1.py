@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""HM3D 00337-CFVBbU9Rsyb: real-home scan, 3 levels, ~186 m² (~2,000 sqft) navigable.
+Utility/storage, kitchen/living, and loft bedrooms under a pitched wooden roof, joined by stairs."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar

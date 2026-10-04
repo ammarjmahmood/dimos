@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Habitat test apartment_1.glb: real-apartment scan, 1 floor, ~53 m² (~570 sqft) navigable.
+Lounge with L-sofa and wall TV, dining room with sideboard and mirror, connecting corridor."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar

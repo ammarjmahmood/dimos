@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""HSSD 106878858_174886965: synthetic home, 1 floor, ~295 m² (~3,200 sqft) indoor.
+4-bed: 2 baths, office, living/kitchen/dining, utility, laundry, entryway, garage with red car."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar

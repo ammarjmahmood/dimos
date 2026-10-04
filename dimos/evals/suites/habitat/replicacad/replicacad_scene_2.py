@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""ReplicaCAD apt_5: same FRL apartment, 1 floor, ~85 m² (~900 sqft), different layout.
+Fully furnished: sofa close to TV, bicycles, beanbags, books, bowls; objects differ from apt_1."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar

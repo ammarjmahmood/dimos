@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""ReplicaCAD v3_sc1_staging_00: FRL apartment shell, 1 floor, ~85 m² (~900 sqft).
+Sparsely staged: sofa, TV stand, one bicycle, beanbags, chairs, plants."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar

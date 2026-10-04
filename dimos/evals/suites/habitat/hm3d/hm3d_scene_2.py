@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""HM3D 00861-GLAQ4DNUx5U: annotated real-home scan, 2 levels, ~126 m² (~1,350 sqft) navigable.
+Bedrooms (one with a mural), bathrooms, kitchen/living, utility with laundry; some scan holes."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar

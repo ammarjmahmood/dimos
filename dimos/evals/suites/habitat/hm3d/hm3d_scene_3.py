@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""HM3D 00770-NBg5UqG3di3: real-building scan, 1 level, ~300 m² (~3,200 sqft) navigable.
+Ornate, mostly unfurnished: white and red-gold corridors, fireplace room, pale-blue arched room."""
+
 from collections.abc import Callable
 import os
 from typing import TypeVar
