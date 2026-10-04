@@ -769,7 +769,7 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
     for t in (human, agent_t, idle):
         t.start()
 
-    def fake_mcp_client(text: str) -> None:
+    def fake_agent(text: str) -> None:
         idle.publish(False)
         agent_t.publish(HumanMessage(content=text))
         for i in range(2):
@@ -793,7 +793,7 @@ def test_mcp_client_adapter_drives_a_turn_over_real_transports(
     workers: list[threading.Thread] = []
 
     def on_human(msg: str) -> None:
-        worker = threading.Thread(target=fake_mcp_client, args=(msg,))
+        worker = threading.Thread(target=fake_agent, args=(msg,))
         workers.append(worker)
         worker.start()
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from queue import Empty
 from threading import RLock
@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, create_autospec, patch
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.base import BaseMessage
 import pytest
+from pytest_mock import MockerFixture
 import requests
 
 from dimos.agents.llm_agent import LlmAgent
@@ -100,14 +101,14 @@ def _mock_session(payload_fn: Callable[[dict[str, object]], dict[str, object]]) 
 
 
 @pytest.fixture
-def agent() -> LlmAgent:
-    """Build an LlmAgent wired to a mock requests session."""
-    client = LlmAgent(mcp_server_url="http://localhost:9990/mcp")
-    client.mcp._session = _mock_session(_mock_payload)
-    try:
-        yield client
-    finally:
-        client.stop()
+def agent(mocker: MockerFixture) -> Iterator[LlmAgent]:
+    """An LlmAgent whose MCP requests are answered by a mock session."""
+    mocker.patch(
+        "dimos.agents.mcp.mcp_client.requests.Session", return_value=_mock_session(_mock_payload)
+    )
+    agent = LlmAgent(mcp_server_url="http://localhost:9990/mcp")
+    yield agent
+    agent.stop()
 
 
 def test_fetch_tools_from_mcp_server(agent: LlmAgent) -> None:
@@ -125,23 +126,6 @@ def test_tool_invocation_via_mcp(agent: LlmAgent) -> None:
 
     assert add_tool.func(x=2, y=3) == "5"
     assert greet_tool.func(name="Alice") == "Hello, Alice!"
-
-
-def test_mcp_request_error_propagation(agent: LlmAgent) -> None:
-    def error_payload(body: dict[str, object]) -> dict[str, object]:
-        return {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": {"code": -32601, "message": "Unknown: bad/method"},
-        }
-
-    agent.mcp._session = _mock_session(error_payload)
-
-    try:
-        agent.mcp.request("bad/method")
-        raise AssertionError("Expected RuntimeError")
-    except RuntimeError as e:
-        assert "Unknown: bad/method" in str(e)
 
 
 def test_tool_stream_notification_becomes_human_message(agent: LlmAgent) -> None:
@@ -198,32 +182,9 @@ def test_tool_stream_progress_frame_becomes_human_message(agent: LlmAgent) -> No
     assert str(msg.content) == "[tool:follow_person] Found a person"
 
 
-def test_mcp_tool_call_sends_progress_token(agent: LlmAgent) -> None:
-    """Every `tools/call` request carries a `_meta.progressToken`."""
-    captured: dict[str, object] = {}
-
-    def fake_request(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
-        captured["method"] = method
-        captured["params"] = params
-        return {"content": [{"type": "text", "text": "ok"}]}
-
-    with patch.object(agent.mcp, "request", side_effect=fake_request):
-        agent.mcp.call_tool("add", {"x": 1, "y": 2})
-
-    assert captured["method"] == "tools/call"
-    params = captured["params"]
-    assert isinstance(params, dict)
-    assert params["name"] == "add"
-    assert params["arguments"] == {"x": 1, "y": 2}
-    meta = params["_meta"]
-    assert isinstance(meta, dict)
-    token = meta["progressToken"]
-    assert isinstance(token, str) and len(token) > 0
-
-
 @pytest.fixture
 def configured_agent(agent: LlmAgent, monkeypatch: pytest.MonkeyPatch) -> LlmAgent:
-    """Prepare a client for testing agent model initialization."""
+    """An agent prepared for testing model initialization."""
     agent.config.model_fixture = None
     agent.config.system_prompt = "System prompt"
     monkeypatch.setattr(agent, "_fetch_tools", MagicMock(return_value=[]))

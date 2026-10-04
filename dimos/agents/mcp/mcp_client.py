@@ -20,6 +20,8 @@ import requests
 
 from dimos.utils.sequential_ids import SequentialIds
 
+_RETRY_INTERVAL_S = 1.0
+
 
 class McpClient:
     """JSON-RPC over HTTP to an MCP server. Connects on first request."""
@@ -58,7 +60,7 @@ class McpClient:
             },
         )
 
-    def list_tools(self, timeout: float = 60.0, interval: float = 1.0) -> list[dict[str, Any]]:
+    def list_tools(self, timeout: float = 60.0) -> list[dict[str, Any]]:
         """The server's tools, waiting up to *timeout* seconds for it to come up."""
         deadline = time.monotonic() + timeout
         while True:
@@ -68,7 +70,7 @@ class McpClient:
             except requests.ConnectionError:
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"Failed to fetch tools from MCP server {self.url}")
-                time.sleep(interval)
+                time.sleep(_RETRY_INTERVAL_S)
 
         tools: list[dict[str, Any]] = self.request("tools/list").get("tools", [])
         return tools

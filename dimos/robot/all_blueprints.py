@@ -212,7 +212,6 @@ all_modules = {
     "arm-twist-coordinator": "dimos.robot.manipulators.common.coordinators.ArmTwistCoordinator",
     "b-box-navigation-module": "dimos.agents.skills.visual_servoing.bbox_navigation.BBoxNavigationModule",
     "b1-connection-module": "dimos.robot.unitree.b1.connection.B1ConnectionModule",
-    "base-agent": "dimos.agents.agent.BaseAgent",
     "basic-path-follower": "dimos.navigation.trajectory_follower.basic.module.BasicPathFollower",
     "benchmarker": "dimos.control.benchmarking.benchmark.Benchmarker",
     "camera-module": "dimos.hardware.sensors.camera.module.CameraModule",
