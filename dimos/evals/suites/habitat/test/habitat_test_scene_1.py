@@ -19,10 +19,10 @@ from collections.abc import Callable
 import os
 from typing import TypeVar
 
-from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
 from dimos.evals.scorers import choice, exact, first_number, yes_no
 from dimos.evals.types import EvalCase, Outcome, Suite
+from dimos.utils.data import get_data_dir
 
 T = TypeVar("T")
 
@@ -61,10 +61,7 @@ def _environment() -> HabitatEnvironment:
         scene_dataset_config=os.environ.get("HABITAT_TEST_DATASET_CONFIG", "default"),
         scene_id=os.environ.get(
             "HABITAT_TEST_SCENE",
-            str(
-                DIMOS_PROJECT_ROOT
-                / "target/habitat/data/versioned_data/habitat_test_scenes/apartment_1.glb"
-            ),
+            str(get_data_dir("habitat_test_scenes/apartment_1.glb")),
         ),
         seed=0,
         blueprint=["habitat-nav", "mcp-server", "observe-skill"],

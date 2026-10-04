@@ -19,10 +19,10 @@ from collections.abc import Callable
 import os
 from typing import TypeVar
 
-from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
 from dimos.evals.scorers import choice, exact, first_number, numeric, rank_order, ranking, yes_no
 from dimos.evals.types import EvalCase, Outcome, Suite
+from dimos.utils.data import get_data_dir
 
 T = TypeVar("T")
 
@@ -60,10 +60,7 @@ def _environment() -> HabitatEnvironment:
     return HabitatEnvironment(
         scene_dataset_config=os.environ.get(
             "REPLICACAD_DATASET_CONFIG",
-            str(
-                DIMOS_PROJECT_ROOT
-                / "target/habitat/data/versioned_data/replica_cad_dataset/replicaCAD.scene_dataset_config.json"
-            ),
+            str(get_data_dir("replica_cad_dataset/replicaCAD.scene_dataset_config.json")),
         ),
         scene_id="apt_5",
         seed=0,

@@ -19,10 +19,10 @@ from collections.abc import Callable
 import os
 from typing import TypeVar
 
-from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
 from dimos.evals.scorers import choice, exact, first_number, yes_no
 from dimos.evals.types import EvalCase, Outcome, Suite
+from dimos.utils.data import get_data_dir
 
 T = TypeVar("T")
 
@@ -60,10 +60,7 @@ def _environment() -> HabitatEnvironment:
     return HabitatEnvironment(
         scene_dataset_config=os.environ.get(
             "HM3D_DATASET_CONFIG",
-            str(
-                DIMOS_PROJECT_ROOT
-                / "target/habitat/data/versioned_data/hm3d-0.2/hm3d/example/hm3d_example_basis.scene_dataset_config.json"
-            ),
+            str(get_data_dir("hm3d-0.2/hm3d/example/hm3d_example_basis.scene_dataset_config.json")),
         ),
         scene_id="00770-NBg5UqG3di3",
         seed=0,

@@ -433,17 +433,24 @@ suite's docstring describes its scene:
 dimos evals run dimos.evals.suites.habitat.hm3d.hm3d_scene_3 --agent dimos.evals.agents.pi --limit 1
 ```
 
-The Habitat build downloads only the HM3D example. Fetch the others into the same
-`target/habitat/data` (HSSD requires accepting its terms on Hugging Face first):
+The datasets are not bundled. Download them from their sources (HSSD requires
+accepting its terms first), for example with habitat-sim's downloader, then set
+the variable for each dataset you use:
 
 ```bash
-cd target/habitat && ./env/bin/python -m habitat_sim.utils.datasets_download \
-    --uids hssd-hab replica_cad_dataset habitat_test_scenes --data-path ./data --no-replace
+python -m habitat_sim.utils.datasets_download \
+    --uids hssd-hab hm3d_example replica_cad_dataset habitat_test_scenes --data-path <dir>
 ```
 
-Datasets are read from `target/habitat/data/versioned_data`; point elsewhere with
-`HSSD_DATASET_CONFIG`, `HM3D_DATASET_CONFIG`, `HM3D_ANNOTATED_DATASET_CONFIG`,
-`REPLICACAD_DATASET_CONFIG`, or `HABITAT_TEST_SCENE`.
+| Dataset | Variable | Default |
+|---|---|---|
+| [HSSD](https://huggingface.co/datasets/hssd/hssd-hab) | `HSSD_DATASET_CONFIG` | `data/hssd-hab/hssd-hab.scene_dataset_config.json` |
+| [HM3D example](https://github.com/matterport/habitat-matterport-3dresearch) | `HM3D_DATASET_CONFIG` | `data/hm3d-0.2/hm3d/example/hm3d_example_basis.scene_dataset_config.json` |
+| HM3D annotated example | `HM3D_ANNOTATED_DATASET_CONFIG` | `data/hm3d-0.2/hm3d/example/hm3d_annotated_example_basis.scene_dataset_config.json` |
+| [ReplicaCAD](https://huggingface.co/datasets/ai-habitat/ReplicaCAD_dataset) | `REPLICACAD_DATASET_CONFIG` | `data/replica_cad_dataset/replicaCAD.scene_dataset_config.json` |
+| [Habitat test scenes](https://huggingface.co/datasets/ai-habitat/habitat_test_scenes) | `HABITAT_TEST_SCENE` | `data/habitat_test_scenes/apartment_1.glb` |
+
+A set variable wins; otherwise the suite reads the default under the repo's `data/`.
 
 For MuJoCo, the blueprint brings its own `MujocoSimModule` and scene, so the
 environment only launches `dimos --simulation mujoco --record run <blueprint>

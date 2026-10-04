@@ -19,10 +19,10 @@ from collections.abc import Callable
 import os
 from typing import TypeVar
 
-from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.evals.environments.habitat import HabitatEnvironment
 from dimos.evals.scorers import choice, exact, first_number, numeric, yes_no
 from dimos.evals.types import EvalCase, Outcome, Suite
+from dimos.utils.data import get_data_dir
 
 T = TypeVar("T")
 
@@ -59,10 +59,7 @@ def _environment() -> HabitatEnvironment:
     return HabitatEnvironment(
         scene_dataset_config=os.environ.get(
             "HSSD_DATASET_CONFIG",
-            str(
-                DIMOS_PROJECT_ROOT
-                / "target/habitat/data/versioned_data/hssd-hab/hssd-hab.scene_dataset_config.json"
-            ),
+            str(get_data_dir("hssd-hab/hssd-hab.scene_dataset_config.json")),
         ),
         scene_id="104348463_171513588",
         seed=0,
