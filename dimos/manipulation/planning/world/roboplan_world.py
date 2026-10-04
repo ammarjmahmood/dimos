@@ -88,14 +88,14 @@ class RoboPlanContext:
     """DimOS context wrapper for RoboPlan world state."""
 
     q: NDArray[np.float64] = field(default_factory=lambda: np.empty(0, dtype=np.float64))
-    native: Any | None = field(default=None, repr=False)
+    native: roboplan_core.SceneContext | None = field(default=None, repr=False)
 
 
 class RoboPlanWorld:
     """WorldSpec implementation backed by RoboPlan scene and collision queries."""
 
     def __init__(self, enable_viz: bool = False, **_: object) -> None:
-        self._body_filter: Any | None = None
+        self._body_filter: roboplan_core.RobotBodyFilter | None = None
         self._scene: Any | None = None
         self._model: RoboPlanModel | None = None
         self._enable_viz = enable_viz
@@ -495,7 +495,7 @@ class RoboPlanWorld:
         with self._lock:
             yield self._require_model()
 
-    def _query_context(self, ctx: RoboPlanContext) -> Any:
+    def _query_context(self, ctx: RoboPlanContext) -> roboplan_core.SceneContext:
         """Refresh consumer scratch after geometry edits, under the scene lock.
 
         The lock also excludes concurrent geometry placement updates. Native
