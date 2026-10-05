@@ -31,7 +31,7 @@ from reactivex import Observable, operators as ops
 from reactivex.disposable import Disposable
 import requests
 
-from dimos.agents.agent import AgentConfig, BaseAgent
+from dimos.agents.base_agent import BaseAgent, BaseAgentConfig
 from dimos.agents.typesafe.constants import (
     BASE_URL_ENV,
     DEFAULT_BASE_URL,
@@ -56,7 +56,7 @@ def typesafe_api_key() -> str | None:
     return "TYPESAFE_API_KEY is not set. Create a key at https://console.typesafe.ai/settings/keys"
 
 
-class TypeSafeAgentConfig(AgentConfig):
+class TypeSafeAgentConfig(BaseAgentConfig):
     model: str = DEFAULT_MODEL
     max_hz: float | None = None  # None: infer on every trigger update
     timeout_s: float = REQUEST_TIMEOUT_S

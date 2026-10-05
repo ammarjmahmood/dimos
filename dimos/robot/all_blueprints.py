@@ -203,6 +203,7 @@ all_blueprints = {
 
 
 all_modules = {
+    "agent": "dimos.agents.agent.Agent",
     "alfred-high-level": "dimos.robot.diy.alfred.effector_high_level.AlfredHighLevel",
     "alfred-mount-tf": "dimos.robot.diy.alfred.mount_tf.AlfredMountTf",
     "arm-command-module": "dimos.teleop.hosted.arm_command.ArmCommandModule",
@@ -284,7 +285,6 @@ all_modules = {
     "le-robot-policy-module": "dimos.imitation.policy.lerobot.module.LeRobotPolicyModule",
     "lidar-window-relocalization": "dimos.mapping.relocalization.lidar.module.LidarWindowRelocalization",
     "live-localize-module": "dimos.perception.localize.demo_blueprints.live_localize.LiveLocalizeModule",
-    "llm-agent": "dimos.agents.llm_agent.LlmAgent",
     "local-map-relocalization": "dimos.mapping.relocalization.lidar.module.LocalMapRelocalization",
     "local-planner": "dimos.navigation.local_planner.module.LocalPlanner",
     "local-planner-native": "dimos.navigation.local_planner.native.LocalPlannerNative",

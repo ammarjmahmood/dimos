@@ -25,7 +25,7 @@ import pytest
 from pytest_mock import MockerFixture
 import requests
 
-from dimos.agents.llm_agent import LlmAgent
+from dimos.agents.agent import Agent
 
 
 def _mock_payload(body: dict[str, object]) -> dict[str, object]:
@@ -101,17 +101,17 @@ def _mock_session(payload_fn: Callable[[dict[str, object]], dict[str, object]]) 
 
 
 @pytest.fixture
-def agent(mocker: MockerFixture) -> Iterator[LlmAgent]:
-    """An LlmAgent whose MCP requests are answered by a mock session."""
+def agent(mocker: MockerFixture) -> Iterator[Agent]:
+    """An Agent whose MCP requests are answered by a mock session."""
     mocker.patch(
         "dimos.agents.mcp.mcp_client.requests.Session", return_value=_mock_session(_mock_payload)
     )
-    agent = LlmAgent(mcp_server_url="http://localhost:9990/mcp")
+    agent = Agent(mcp_server_url="http://localhost:9990/mcp")
     yield agent
     agent.stop()
 
 
-def test_fetch_tools_from_mcp_server(agent: LlmAgent) -> None:
+def test_fetch_tools_from_mcp_server(agent: Agent) -> None:
     tools = agent._fetch_tools()
 
     assert len(tools) == 2
@@ -119,7 +119,7 @@ def test_fetch_tools_from_mcp_server(agent: LlmAgent) -> None:
     assert tools[1].name == "greet"
 
 
-def test_tool_invocation_via_mcp(agent: LlmAgent) -> None:
+def test_tool_invocation_via_mcp(agent: Agent) -> None:
     tools = agent._fetch_tools()
     add_tool = next(t for t in tools if t.name == "add")
     greet_tool = next(t for t in tools if t.name == "greet")
@@ -128,7 +128,7 @@ def test_tool_invocation_via_mcp(agent: LlmAgent) -> None:
     assert greet_tool.func(name="Alice") == "Hello, Alice!"
 
 
-def test_tool_stream_notification_becomes_human_message(agent: LlmAgent) -> None:
+def test_tool_stream_notification_becomes_human_message(agent: Agent) -> None:
     """A `notifications/message` delivered over LCM becomes a HumanMessage."""
     notification = {
         "jsonrpc": "2.0",
@@ -147,7 +147,7 @@ def test_tool_stream_notification_becomes_human_message(agent: LlmAgent) -> None
     assert "Person follow stopped: lost track." in str(msg.content)
 
 
-def test_tool_stream_ignores_unrelated_frames(agent: LlmAgent) -> None:
+def test_tool_stream_ignores_unrelated_frames(agent: Agent) -> None:
     """Unknown methods and empty bodies are dropped on the floor."""
 
     agent._on_tool_stream_message({"jsonrpc": "2.0", "method": "notifications/other"})
@@ -162,7 +162,7 @@ def test_tool_stream_ignores_unrelated_frames(agent: LlmAgent) -> None:
         agent._message_queue.get_nowait()
 
 
-def test_tool_stream_progress_frame_becomes_human_message(agent: LlmAgent) -> None:
+def test_tool_stream_progress_frame_becomes_human_message(agent: Agent) -> None:
     """A `notifications/progress` frame is routed as a HumanMessage."""
 
     progress_frame = {
@@ -183,7 +183,7 @@ def test_tool_stream_progress_frame_becomes_human_message(agent: LlmAgent) -> No
 
 
 @pytest.fixture
-def configured_agent(agent: LlmAgent, monkeypatch: pytest.MonkeyPatch) -> LlmAgent:
+def configured_agent(agent: Agent, monkeypatch: pytest.MonkeyPatch) -> Agent:
     """An agent prepared for testing model initialization."""
     agent.config.model_fixture = None
     agent.config.system_prompt = "System prompt"
@@ -195,7 +195,7 @@ def configured_agent(agent: LlmAgent, monkeypatch: pytest.MonkeyPatch) -> LlmAge
 
 
 def test_on_system_modules_uses_responses_api_model(
-    configured_agent: LlmAgent, monkeypatch: pytest.MonkeyPatch
+    configured_agent: Agent, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Production agents use the Responses API required for Luna tool calls."""
     from langchain_openai import ChatOpenAI
@@ -215,7 +215,7 @@ def test_on_system_modules_uses_responses_api_model(
 
 @pytest.mark.parametrize("model_name", ["gpt-4o", "ollama:qwen3:8b", "huggingface:Qwen/Qwen3-8B"])
 def test_on_system_modules_resolves_non_reasoning_models(
-    configured_agent: LlmAgent, model_name: str
+    configured_agent: Agent, model_name: str
 ) -> None:
     """Models without Responses reasoning support use provider resolution."""
     configured_agent.config.model = model_name
@@ -231,7 +231,7 @@ def test_on_system_modules_resolves_non_reasoning_models(
 
 
 def test_set_trace_dir_rebuilds_the_model_with_capture(
-    configured_agent: LlmAgent,
+    configured_agent: Agent,
 ) -> None:
     """Evals repoint raw LLM capture per case; the model must be rebuilt so
     the HTTP hook writes under the new directory. Before the agent exists
@@ -241,7 +241,7 @@ def test_set_trace_dir_rebuilds_the_model_with_capture(
 
     with (
         patch("langchain.agents.create_agent") as create_agent,
-        patch("dimos.agents.llm_agent.init_model", return_value=resolved) as init,
+        patch("dimos.agents.agent.init_model", return_value=resolved) as init,
     ):
         configured_agent.set_trace_dir("/eval/case/raw")  # no agent yet: stored only
         assert init.call_count == 0

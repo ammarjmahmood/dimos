@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evaluate the production LlmAgent through its input and output topics."""
+"""Evaluate the production Agent through its input and output topics."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from dimos.evals.types import RunningEnvironment, Trajectory
 
 
 class _Turn:
-    """One LlmAgent turn as seen on the wire: every message on ``/agent``
+    """One Agent turn as seen on the wire: every message on ``/agent``
     from the moment ``/agent_idle`` goes False until it comes back True.
     ``/agent_idle`` is its own topic and can overtake the last ``/agent``
     message, so the turn is done only once the received ``AIMessage``s match
@@ -68,7 +68,7 @@ class _Turn:
 
 
 class McpClientAdapter(EvalAgent):
-    """An eval adapter for the production ``LlmAgent``.
+    """An eval adapter for the production ``Agent``.
 
     Send the instruction on ``/human_input`` and capture ``/agent`` until
     ``/agent_idle``. Configure the model and prompt on the production module;
@@ -89,30 +89,28 @@ class McpClientAdapter(EvalAgent):
     def preflight(self, environment: Environment) -> None:
         if not environment.has_robot and not self.config.modules:
             raise RuntimeError(
-                f"McpClientAdapter needs a running LlmAgent; {type(environment).__name__} "
+                f"McpClientAdapter needs a running Agent; {type(environment).__name__} "
                 "has no robot and this agent adds no modules"
             )
 
     def run(
         self, inputs: str, env: RunningEnvironment, run_dir: Path, *, timeout_s: float
     ) -> Trajectory:
-        from dimos.agents.llm_agent import LlmAgentConfig
+        from dimos.agents.agent import AgentConfig
         from dimos.core.transport_factory import make_transport
         from dimos.porcelain.dimos import Dimos
 
         # Set the directory for logging raw request/response payloads
-        # in dimos.agents.llm_agent.LlmAgent
+        # in dimos.agents.agent.Agent
         app = Dimos.connect()
         try:
-            mcp_client: Any = app.LlmAgent  # handle type depends on what's importable
+            mcp_client: Any = app.Agent  # handle type depends on what's importable
             mcp_client.set_trace_dir(str(run_dir / "raw"))
         finally:
             app.stop()
 
-        # init the stateful trajectory builder and subscribe to LlmAgent events
-        trajectory = TrajectoryBuilder(
-            inputs, name=type(self).__name__, model=LlmAgentConfig().model
-        )
+        # init the stateful trajectory builder and subscribe to Agent events
+        trajectory = TrajectoryBuilder(inputs, name=type(self).__name__, model=AgentConfig().model)
         turn = _Turn(run_dir / "raw")
         agent_t, idle_t, human_t = (
             make_transport("/agent"),
@@ -137,7 +135,7 @@ class McpClientAdapter(EvalAgent):
             if isinstance(msg, AIMessage):
                 if calls >= len(pairs):
                     raise RuntimeError(
-                        f"LlmAgent wrote no LLM trace for call {calls} under {run_dir / 'raw'}; "
+                        f"Agent wrote no LLM trace for call {calls} under {run_dir / 'raw'}; "
                         "every call must be captured whole"
                     )
                 _, request_path, response_path = pairs[calls]
