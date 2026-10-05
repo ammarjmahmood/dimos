@@ -64,7 +64,8 @@ def test_health_info_and_paths(
     paths = client.get("/dimos/paths").json()
     assert paths["dimosDir"] == str(checkout)
     assert paths["recordingsDir"] == str(config.dimos_home() / "recordings")
-    assert set(paths) == {"dimosDir", "runsDir", "logsDirs", "recordingsDir"}
+    assert set(paths) == {"dimosDir", "runsDir", "logsDirs", "recordingsDir", "server"}
+    assert paths["server"]["exe"] == sys.executable and paths["server"]["exeModified"] > 0
     missing = client.get("/dimos/nope")
     assert (missing.status_code, missing.json()) == (404, {"error": "no such route: /dimos/nope"})
 
@@ -127,6 +128,7 @@ INTROSPECTED: dict[str, dict[str, Any]] = {
                 "ref": "dimos.robot.unitree.go2:bp",
                 "robot": "go2",
                 "modules": ["Cam"],
+                "doc": "The Go2 with its camera.",
             }
         ],
         "modules": [
@@ -222,6 +224,10 @@ def test_global_config_overrides_live_in_desktops_config(client: TestClient) -> 
 
 def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert client.get("/dimos/runs").json() == {"runs": [], "launch": None}
+    nothing_yet = client.post("/dimos/runs/restart")
+    assert (
+        nothing_yet.status_code == 400 and "hasn't launched anything" in nothing_yet.json()["error"]
+    )
     config.config_file().parent.mkdir(parents=True)
     config.config_file().write_text("dimos:\n  global_config:\n    robot_ip: 10.0.0.2\n")
     launched = client.post(
@@ -232,6 +238,10 @@ def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch
     assert launched["output"].startswith(
         "$ dimos --n-workers 2 --replay --robot-ip 10.0.0.2 run unitree-go2"
     )
+    overrides = {"robot_ip": "10.0.0.2", "n_workers": 2, "replay": True}
+    assert launched["overrides"] == overrides
+    assert [step["state"] for step in launched["steps"]] == ["now", "todo", "todo", "todo"]
+    assert launched["problems"] == []
     again = client.post("/dimos/runs", json={"blueprint": "unitree-go2"})
     assert again.status_code == 400 and "still starting" in again.json()["error"]
 
@@ -257,6 +267,18 @@ def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch
     nothing = client.post("/dimos/runs/stop", json={"runId": "nope"})
     assert nothing.status_code == 500 and nothing.json() == {"error": "no live run nope"}
     assert client.post("/dimos/runs", json={"blueprint": "-x"}).status_code == 400
+
+    # a restart launches the same blueprint with the same global config, stopping it first if it still runs
+    for _ in range(2):
+        restarted = client.post("/dimos/runs/restart").json()
+        assert (restarted["blueprint"], restarted["phase"], restarted["overrides"]) == (
+            "unitree-go2",
+            "starting",
+            overrides,
+        )
+        assert restarted["pid"] != launched["pid"]
+        launched = restarted
+    assert client.post("/dimos/runs/stop").json()["output"].startswith("stopped unitree-go2")
 
 
 def test_launch_refuses_a_version_outside_desktops_range(

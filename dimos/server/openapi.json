@@ -279,6 +279,11 @@
       "CatalogBlueprint": {
         "additionalProperties": true,
         "properties": {
+          "doc": {
+            "description": "Its file's docstring's first paragraph, when the file defines only this blueprint (else empty)",
+            "title": "Doc",
+            "type": "string"
+          },
           "modules": {
             "description": "Its modules' catalog names",
             "items": {
@@ -323,7 +328,8 @@
           "name",
           "ref",
           "robot",
-          "modules"
+          "modules",
+          "doc"
         ],
         "title": "CatalogBlueprint",
         "type": "object"
@@ -788,6 +794,20 @@
             "title": "Output",
             "type": "string"
           },
+          "overrides": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "The GlobalConfig it was launched with (Desktop's saved overrides, then the launch's own, then replay); POST /dimos/runs/restart launches with them again",
+            "examples": [
+              {
+                "n_workers": 2,
+                "replay": true
+              }
+            ],
+            "title": "Overrides",
+            "type": "object"
+          },
           "phase": {
             "description": "starting: alive, not registered yet; running: in dimos's run registry (every module built); stopped: ran and is gone; failed: exited before running",
             "enum": [
@@ -806,6 +826,14 @@
             ],
             "title": "Pid",
             "type": "integer"
+          },
+          "problems": {
+            "description": "What went wrong, most specific first: known causes with their fix, else the error lines",
+            "items": {
+              "$ref": "#/components/schemas/LaunchProblem"
+            },
+            "title": "Problems",
+            "type": "array"
           },
           "runId": {
             "anyOf": [
@@ -826,6 +854,14 @@
             ],
             "title": "Startedat",
             "type": "string"
+          },
+          "steps": {
+            "description": "starting dimOS, building, starting modules, running: how far startup got",
+            "items": {
+              "$ref": "#/components/schemas/LaunchStep"
+            },
+            "title": "Steps",
+            "type": "array"
           }
         },
         "required": [
@@ -836,7 +872,10 @@
           "output",
           "runId",
           "logDir",
-          "error"
+          "error",
+          "overrides",
+          "steps",
+          "problems"
         ],
         "title": "Launch",
         "type": "object"
@@ -869,6 +908,57 @@
         "title": "LaunchEvent",
         "type": "object",
         "x-zenoh-key": "<ns>/dimos/events/launch"
+      },
+      "LaunchProblem": {
+        "additionalProperties": true,
+        "description": "Something that went wrong (or looks wrong), in words, from the launch's output.",
+        "properties": {
+          "fix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What to do about it (null: no known fix)",
+            "examples": [
+              "Pick Robot as the source and fill in Robot IP."
+            ],
+            "title": "Fix"
+          },
+          "level": {
+            "description": "How bad",
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "line": {
+            "description": "The output line it came from (at most 300 characters)",
+            "title": "Line",
+            "type": "string"
+          },
+          "text": {
+            "description": "What it means",
+            "examples": [
+              "This blueprint needs the robot's IP address."
+            ],
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "text",
+          "fix",
+          "line"
+        ],
+        "title": "LaunchProblem",
+        "type": "object"
       },
       "LaunchRequest": {
         "additionalProperties": true,
@@ -908,6 +998,53 @@
           "blueprint"
         ],
         "title": "LaunchRequest",
+        "type": "object"
+      },
+      "LaunchStep": {
+        "additionalProperties": true,
+        "description": "A startup step, read from the launch's output.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "More, e.g. how many modules started",
+            "examples": [
+              "4 started"
+            ],
+            "title": "Detail"
+          },
+          "label": {
+            "description": "Starting dimOS, Building the blueprint, Starting modules, then Running (or Stopped)",
+            "examples": [
+              "Starting modules"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "state": {
+            "description": "How far it got",
+            "enum": [
+              "done",
+              "now",
+              "todo",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "state",
+          "detail"
+        ],
+        "title": "LaunchStep",
         "type": "object"
       },
       "LogEvent": {
@@ -1269,13 +1406,18 @@
             ],
             "title": "Runsdir",
             "type": "string"
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerProgram",
+            "description": "What this server runs"
           }
         },
         "required": [
           "dimosDir",
           "runsDir",
           "logsDirs",
-          "recordingsDir"
+          "recordingsDir",
+          "server"
         ],
         "title": "Paths",
         "type": "object"
@@ -1384,6 +1526,44 @@
           "launch"
         ],
         "title": "RunList",
+        "type": "object"
+      },
+      "ServerProgram": {
+        "additionalProperties": true,
+        "properties": {
+          "exe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The program this server runs (for this server, its python)",
+            "examples": [
+              "/home/me/dimos/.venv/bin/python"
+            ],
+            "title": "Exe"
+          },
+          "exeModified": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its modification time when the server started (Unix s): Desktop restarts its built-in server when its own binary has been replaced since",
+            "title": "Exemodified"
+          }
+        },
+        "required": [
+          "exe",
+          "exeModified"
+        ],
+        "title": "ServerProgram",
         "type": "object"
       },
       "SkillParam": {
@@ -2675,7 +2855,7 @@
     },
     "/dimos/paths": {
       "get": {
-        "description": "Absolute paths, read from the environment and Desktop's config.yaml. Desktop compares `dimosDir` with its configured checkout to tell whether this server is the right one. No side effects.",
+        "description": "Absolute paths, read from the environment and Desktop's config.yaml. Desktop compares `dimosDir` with its configured checkout to tell whether this server is the right one, and `server` with its own binary to tell whether its built-in server is outdated (this server runs python, so it never is). No side effects.",
         "operationId": "get_dimos_paths",
         "responses": {
           "200": {
@@ -2686,7 +2866,7 @@
                 }
               }
             },
-            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir }`"
+            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified } }`"
           },
           "500": {
             "content": {
@@ -2762,7 +2942,7 @@
                 }
               }
             },
-            "description": "`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error }`"
+            "description": "`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error, overrides, steps: [{ label, state: done|now|todo|failed, detail }], problems: [{ level, text, fix, line }] }`"
           },
           "400": {
             "content": {
@@ -2792,6 +2972,50 @@
         "x-agent": true,
         "x-family": "dimos",
         "x-mcp-tool": "run_blueprint"
+      }
+    },
+    "/dimos/runs/restart": {
+      "post": {
+        "description": "Takes the last launch's blueprint and overrides (kept even after it stopped), stops it first if it's starting or running (as POST /dimos/runs/stop), then launches it as POST /dimos/runs would. Takes no body. 400 when nothing was launched yet; 500 when it won't stop or won't start.",
+        "operationId": "post_dimos_runs_restart",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Launch"
+                }
+              }
+            },
+            "description": "`Launch` (as POST /dimos/runs)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Stop the blueprint this server launched (if it still runs) and launch it again with the same global config",
+        "tags": [
+          "runs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
       }
     },
     "/dimos/runs/stop": {

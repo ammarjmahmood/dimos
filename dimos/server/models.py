@@ -74,6 +74,18 @@ class Paths(ApiModel):
         description="Desktop's recordings folder (config.yaml `recordings.dir`)",
         examples=["/home/me/.dimos/recordings"],
     )
+    server: ServerProgram = Field(description="What this server runs")
+
+
+class ServerProgram(ApiModel):
+    exe: str | None = Field(
+        description="The program this server runs (for this server, its python)",
+        examples=["/home/me/dimos/.venv/bin/python"],
+    )
+    exeModified: int | None = Field(
+        description="Its modification time when the server started (Unix s): Desktop restarts its built-in server "
+        "when its own binary has been replaced since"
+    )
 
 
 class Stopping(ApiModel):
@@ -175,6 +187,9 @@ class CatalogBlueprint(ApiModel):
         description="The robot folder it's under (null: none)", examples=["go2"]
     )
     modules: list[str] = Field(description="Its modules' catalog names")
+    doc: str = Field(
+        description="Its file's docstring's first paragraph, when the file defines only this blueprint (else empty)"
+    )
 
 
 class CatalogModule(ApiModel):
@@ -243,6 +258,33 @@ class RegistryRun(ApiModel):
     log_dir: str = Field(description="Its log folder (main.jsonl is there)")
 
 
+class LaunchStep(ApiModel):
+    """A startup step, read from the launch's output."""
+
+    label: str = Field(
+        description="Starting dimOS, Building the blueprint, Starting modules, then Running (or Stopped)",
+        examples=["Starting modules"],
+    )
+    state: Literal["done", "now", "todo", "failed"] = Field(description="How far it got")
+    detail: str | None = Field(
+        description="More, e.g. how many modules started", examples=["4 started"]
+    )
+
+
+class LaunchProblem(ApiModel):
+    """Something that went wrong (or looks wrong), in words, from the launch's output."""
+
+    level: Literal["error", "warning"] = Field(description="How bad")
+    text: str = Field(
+        description="What it means", examples=["This blueprint needs the robot's IP address."]
+    )
+    fix: str | None = Field(
+        description="What to do about it (null: no known fix)",
+        examples=["Pick Robot as the source and fill in Robot IP."],
+    )
+    line: str = Field(description="The output line it came from (at most 300 characters)")
+
+
 class Launch(ApiModel):
     """The last launch this server started; its phase is worked out from disk on every call."""
 
@@ -265,6 +307,17 @@ class Launch(ApiModel):
     error: str | None = Field(
         description="When failed: the output's first `Error: ` line, else its last line",
         examples=["Error: no blueprint named unitree-go3"],
+    )
+    overrides: dict[str, JsonValue] = Field(
+        description="The GlobalConfig it was launched with (Desktop's saved overrides, then the launch's own, then "
+        "replay); POST /dimos/runs/restart launches with them again",
+        examples=[{"replay": True, "n_workers": 2}],
+    )
+    steps: list[LaunchStep] = Field(
+        description="starting dimOS, building, starting modules, running: how far startup got"
+    )
+    problems: list[LaunchProblem] = Field(
+        description="What went wrong, most specific first: known causes with their fix, else the error lines"
     )
 
 

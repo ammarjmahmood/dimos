@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import re
+import sys
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Path as PathParam, Query, Request
@@ -43,6 +44,17 @@ from dimos.server.uploads import Uploads
 
 LIST_TTL_S = 60.0
 INTROSPECT_TTL_S = 600.0
+
+
+def _started_from() -> tuple[str | None, int | None]:
+    """The program this server runs (the python running it) and its modification time (Unix s), as it started."""
+    try:
+        return sys.executable, int(os.stat(sys.executable).st_mtime)
+    except (OSError, ValueError):
+        return sys.executable or None, None
+
+
+STARTED_FROM = _started_from()
 
 
 class EventStreamResponse(StreamingResponse):
@@ -189,8 +201,10 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "server",
             "Where dimos keeps its things: the checkout, run registry, log folders, recordings folder",
             "Absolute paths, read from the environment and Desktop's config.yaml. Desktop compares `dimosDir` with "
-            "its configured checkout to tell whether this server is the right one. No side effects.",
-            answer="`{ dimosDir, runsDir, logsDirs, recordingsDir }`",
+            "its configured checkout to tell whether this server is the right one, and `server` with its own binary "
+            "to tell whether its built-in server is outdated (this server runs python, so it never is). No side "
+            "effects.",
+            answer="`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified } }`",
         ),
     )
     async def paths() -> dict[str, Any]:
@@ -201,6 +215,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "runsDir": str(STATE_DIR / "runs"),
             "logsDirs": [str(d) for d in logs.logs_dirs(s.dimos_dir)],
             "recordingsDir": str(config.recordings_dir()),
+            "server": {"exe": STARTED_FROM[0], "exeModified": STARTED_FROM[1]},
         }
 
     @app.post(
@@ -371,7 +386,8 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             errors=(400, 500),
             agent=True,
             mcp_tool="run_blueprint",
-            answer="`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error }`",
+            answer="`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error, overrides, steps: [{ "
+            "label, state: done|now|todo|failed, detail }], problems: [{ level, text, fix, line }] }`",
         ),
     )
     async def launch(request: models.LaunchRequest) -> dict[str, Any]:
@@ -388,9 +404,39 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         if request.replay:
             merged["replay"] = True
         try:
-            started = runs.start(s.dimos_dir, request.blueprint, config.global_config_flags(merged))
+            started = runs.start(s.dimos_dir, request.blueprint, merged)
         except runs.StillRunningError as error:
             raise ApiError(400, str(error))
+        except runs.RunError as error:
+            raise ApiError(500, str(error))
+        s.bus.send({"type": "launch", "launch": started})
+        return started
+
+    @app.post(
+        "/dimos/runs/restart",
+        response_model=models.Launch,
+        **route_doc(
+            "runs",
+            "Stop the blueprint this server launched (if it still runs) and launch it again with the same global "
+            "config",
+            "Takes the last launch's blueprint and overrides (kept even after it stopped), stops it first if it's "
+            "starting or running (as POST /dimos/runs/stop), then launches it as POST /dimos/runs would. Takes no "
+            "body. 400 when nothing was launched yet; 500 when it won't stop or won't start.",
+            errors=(400, 500),
+            agent=True,
+            answer="`Launch` (as POST /dimos/runs)",
+        ),
+    )
+    async def restart() -> dict[str, Any]:
+        last = runs.last_launch_args()
+        if last is None:
+            raise ApiError(400, "the dimos server hasn't launched anything yet")
+        blueprint, overrides = last
+        current = await asyncio.to_thread(runs.current_launch)
+        try:
+            if current and current["phase"] in ("starting", "running"):
+                await runs.stop(None)
+            started = runs.start(s.dimos_dir, blueprint, overrides)
         except runs.RunError as error:
             raise ApiError(500, str(error))
         s.bus.send({"type": "launch", "launch": started})

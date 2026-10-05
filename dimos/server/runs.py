@@ -30,7 +30,7 @@ import threading
 import time
 from typing import Any
 
-from dimos.server import config
+from dimos.server import config, diagnose
 
 
 class RunError(Exception):
@@ -116,6 +116,7 @@ def current_launch() -> dict[str, Any] | None:
         lines = output.splitlines()
         error = next((line for line in lines if line.startswith("Error: ")), None)
         error = error or (output.strip().splitlines() or ["dimos exited during startup"])[-1]
+    overrides = record.get("overrides")
     return {
         "blueprint": blueprint,
         "phase": phase,
@@ -125,16 +126,30 @@ def current_launch() -> dict[str, Any] | None:
         "runId": entry["run_id"] if entry else None,
         "logDir": entry["log_dir"] if entry else None,
         "error": error,
+        "overrides": overrides if isinstance(overrides, dict) else {},
+        "steps": diagnose.steps(output, phase),
+        "problems": diagnose.problems(output),
     }
+
+
+def last_launch_args() -> tuple[str, dict[str, Any]] | None:
+    """The blueprint and global config of the last launch (to launch it again), even after it stopped."""
+    try:
+        record = json.loads(launch_file().read_text())
+        overrides = record.get("overrides")
+        return str(record["blueprint"]), overrides if isinstance(overrides, dict) else {}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def start(dimos_dir: Path, blueprint: str, global_flags: list[str]) -> dict[str, Any]:
-    """`dimos [flags] run <blueprint>` in the foreground of its own session (not `--daemon`: on macOS the daemon's
-    post-fork build segfaults inside CoreFoundation)."""
+def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[str, Any]:
+    """`dimos [--key value ...] run <blueprint>` with GlobalConfig `overrides`, in the foreground of its own session
+    (not `--daemon`: on macOS the daemon's post-fork build segfaults inside CoreFoundation). The launch keeps its
+    overrides, so it can be launched again the same way."""
     previous = current_launch()
     if previous and previous["phase"] in ("starting", "running"):
         raise StillRunningError(
@@ -143,7 +158,7 @@ def start(dimos_dir: Path, blueprint: str, global_flags: list[str]) -> dict[str,
     program = config.dimos_bin(dimos_dir)
     if not program.exists():
         raise RunError(f"no dimos at {dimos_dir} (no {program})")
-    args = [*global_flags, "run", blueprint]
+    args = [*config.global_config_flags(overrides), "run", blueprint]
     launch_log().parent.mkdir(parents=True, exist_ok=True)
     launch_log().write_text(f"$ dimos {' '.join(args)}\n")
     venv = dimos_dir / ".venv"
@@ -168,7 +183,13 @@ def start(dimos_dir: Path, blueprint: str, global_flags: list[str]) -> dict[str,
         )
     # reap it, so a finished run doesn't linger as a zombie that still looks alive
     threading.Thread(target=child.wait, daemon=True).start()
-    record = {"blueprint": blueprint, "started_at": now_iso(), "pid": child.pid, "ever_ran": False}
+    record = {
+        "blueprint": blueprint,
+        "started_at": now_iso(),
+        "pid": child.pid,
+        "ever_ran": False,
+        "overrides": overrides,
+    }
     config.write_atomic(launch_file(), json.dumps(record))
     launch = current_launch()
     assert launch is not None

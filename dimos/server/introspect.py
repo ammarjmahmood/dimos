@@ -219,6 +219,10 @@ def catalog() -> dict[str, Any]:
     classes: dict[str, tuple[str, Any]] = {}
     robots: dict[str, set[str]] = {}
     blueprints = []
+    # a blueprint file's docstring describes its blueprint only when the file defines just that one
+    per_file: dict[str, int] = {}
+    for ref in all_blueprints.values():
+        per_file[ref.split(":")[0]] = per_file.get(ref.split(":")[0], 0) + 1
     for name, path in sorted(all_modules.items()):
         try:
             cls = _load(path)
@@ -236,7 +240,11 @@ def catalog() -> dict[str, Any]:
                 ids.append(classes[key][0])
                 if robot:
                     robots.setdefault(key, set()).add(robot)
-            blueprints.append({"name": name, "ref": ref, "robot": robot, "modules": ids})
+            file = ref.split(":")[0]
+            doc = first_line(importlib.import_module(file)) if per_file.get(file) == 1 else ""
+            blueprints.append(
+                {"name": name, "ref": ref, "robot": robot, "modules": ids, "doc": doc}
+            )
         except Exception as error:
             errors.append(f"blueprint {name}: {type(error).__name__}: {error}")
     modules, skills = [], []

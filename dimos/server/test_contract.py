@@ -14,7 +14,7 @@
 
 
 """Every /dimos path and method in dimOS Desktop's OpenAPI (fixtures/desktop_openapi_dimos.json, saved from
-`GET /api/desktop/openapi` on Desktop 0.2.0) is served here, so Desktop can switch to this server unchanged."""
+`GET /api/desktop/openapi` on Desktop 0.2.0, jeff/agent_chat as of 2026-10-05) is served here, so Desktop can switch to this server unchanged."""
 
 import json
 from pathlib import Path
