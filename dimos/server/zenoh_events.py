@@ -16,8 +16,8 @@
 
 `<ns>` is Desktop's namespace. The server learns it from, first to last: `--zenoh-namespace`, `DIMOS_ZENOH_NAMESPACE`,
 `DIMOS_APP`'s `zenohNamespace`, Desktop's config.yaml `desktop.namespace`, and else Desktop's own default,
-`dimos-desktop/<host>-<desktop.port>`. The endpoint to dial: `--zenoh-connect`, `ZENOH_CONNECT`, `DIMOS_APP`'s
-`zenohConnect`, then dimos's GlobalConfig `zenoh_connect` (empty = a peer on the local network).
+`dimos-desktop/<host>-<desktop.port>`. The endpoint to dial: `--zenoh-connect`, `DIMOS_APP`'s `zenohConnect`, then
+dimos's GlobalConfig `zenoh_connect` (which reads `ZENOH_CONNECT`; empty = a peer on the local network).
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from dimos.protocol.service.zenohservice import ZenohSessionPool
 
 NAMESPACE_ENV = "DIMOS_ZENOH_NAMESPACE"
-CONNECT_ENV = "ZENOH_CONNECT"
 # Desktop's own default port (its config.rs DEFAULT_PORT)
 DESKTOP_DEFAULT_PORT = 7077
 
@@ -90,9 +89,7 @@ def resolve_connect(given: str | None = None) -> list[str]:
     value = (
         given
         if given is not None
-        else os.environ.get(CONNECT_ENV)
-        or dimos_app().get("zenohConnect")
-        or global_config.zenoh_connect
+        else dimos_app().get("zenohConnect") or global_config.zenoh_connect
     )
     return [item.strip() for item in str(value or "").split(",") if item.strip()]
 

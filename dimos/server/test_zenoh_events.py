@@ -29,7 +29,7 @@ from dimos.server.uploads import Queue
 
 @pytest.fixture
 def no_namespace_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (zenoh_events.NAMESPACE_ENV, zenoh_events.CONNECT_ENV, "DIMOS_APP"):
+    for name in (zenoh_events.NAMESPACE_ENV, "DIMOS_APP"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -78,12 +78,11 @@ def test_namespace_order(
 
 
 def test_connect_order(no_namespace_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(global_config, "zenoh_connect", "tcp/10.0.0.9:7447")
-    assert zenoh_events.resolve_connect() == ["tcp/10.0.0.9:7447"]
+    monkeypatch.setattr(global_config, "zenoh_connect", "tcp/a:1, tcp/b:2")
+    assert zenoh_events.resolve_connect() == ["tcp/a:1", "tcp/b:2"]
     monkeypatch.setenv("DIMOS_APP", json.dumps({"zenohConnect": "tcp/10.0.0.2:7447"}))
     assert zenoh_events.resolve_connect() == ["tcp/10.0.0.2:7447"]
-    monkeypatch.setenv(zenoh_events.CONNECT_ENV, "tcp/a:1, tcp/b:2")
-    assert zenoh_events.resolve_connect() == ["tcp/a:1", "tcp/b:2"]
+    assert zenoh_events.resolve_connect("tcp/flag:3") == ["tcp/flag:3"]
     assert zenoh_events.resolve_connect("") == []
 
 

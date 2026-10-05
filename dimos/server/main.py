@@ -179,7 +179,7 @@ def server(
     zenoh_connect: str = typer.Option(
         None,
         help="zenoh endpoints to dial, comma-separated "
-        "(default: $ZENOH_CONNECT, DIMOS_APP.zenohConnect, else dimos's zenoh_connect)",
+        "(default: DIMOS_APP.zenohConnect, else dimos's zenoh_connect, i.e. $ZENOH_CONNECT)",
     ),
     zenoh: bool = typer.Option(True, help="publish events on zenoh (off: SSE only)"),
     write_openapi: bool = typer.Option(
