@@ -299,6 +299,8 @@ def start(dimos_dir: Path, blueprint: str, launch_config: LaunchConfig) -> dict[
         "PATH": f"{venv / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
         "VIRTUAL_ENV": str(venv),
         "PYTHONUNBUFFERED": "1",
+        # a run Desktop starts never opens browser tabs (rerun_open=web, the command center): Desktop shows them
+        "BROWSER": "true",
         "NO_COLOR": "1",
         # its structured log starts here, so even what it logs before it has a run id can be read
         "DIMOS_RUN_LOG_DIR": str(launch_records_dir()),

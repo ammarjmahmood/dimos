@@ -311,9 +311,9 @@ def test_launch_log_and_stop(
     ).json()
     assert (launched["blueprint"], launched["phase"]) == ("unitree-go2", "starting")
     assert launched["output"].startswith(
-        "$ dimos --n-workers=2 --replay --robot-ip=10.0.0.2 run unitree-go2"
+        "$ dimos --n-workers=2 --replay --rerun-open=web --robot-ip=10.0.0.2 run unitree-go2"
     )
-    overrides = {"robot_ip": "10.0.0.2", "n_workers": 2, "replay": True}
+    overrides = {"robot_ip": "10.0.0.2", "n_workers": 2, "replay": True, "rerun_open": "web"}
     assert launched["overrides"] == overrides
     assert [step["state"] for step in launched["steps"]] == ["now", "todo", "todo", "todo"]
     assert launched["problems"] == []

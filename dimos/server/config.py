@@ -102,6 +102,11 @@ def _section(config: dict[str, Any], name: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# GlobalConfig values Desktop's launches start from, under the saved overrides: Rerun serves its web
+# viewer instead of opening a native window that takes the screen from Desktop.
+LAUNCH_GLOBAL_DEFAULTS: dict[str, Any] = {"rerun_open": "web"}
+
+
 def global_config_overrides() -> dict[str, Any]:
     overrides = _section(load_desktop_config(), "dimos").get("global_config")
     return dict(overrides) if isinstance(overrides, dict) else {}

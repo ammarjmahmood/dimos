@@ -426,7 +426,8 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             if launch_overrides.is_secret_name(key)
         ]
         shown, _ = launch_overrides.redact(config.global_config_overrides(), {}, secrets)
-        return {**value, "overrides": shown, "secrets": secrets}
+        defaults = {**value["defaults"], **config.LAUNCH_GLOBAL_DEFAULTS}
+        return {**value, "defaults": defaults, "overrides": shown, "secrets": secrets}
 
     @app.get(
         "/dimos/global-config",
@@ -520,7 +521,10 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
                 )
         except ValueError as error:
             raise ApiError(400, str(error))
-        effective = launch_overrides.merge(config.global_config_overrides(), one_off.global_)
+        effective = launch_overrides.merge(
+            launch_overrides.merge(config.LAUNCH_GLOBAL_DEFAULTS, config.global_config_overrides()),
+            one_off.global_,
+        )
         checked_overrides(effective)
         return runs.LaunchConfig(
             effective,
