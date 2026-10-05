@@ -82,12 +82,18 @@ async def watch_launch(bus: Bus, interval: float = 1.0) -> None:
     """Turns the launch's phase changes and its run's new warnings and errors into events, for as long as it runs."""
     last_key: tuple[Any, ...] | None = None
     tailing: tuple[Path, int] | None = None
+    last_failure = ""
     while True:
         await asyncio.sleep(interval)
         try:
             launch = await asyncio.to_thread(runs.current_launch)
-        except Exception:
+        except Exception as error:
+            # it retries every second: log each new failure once, not every second
+            if repr(error) != last_failure:
+                last_failure = repr(error)
+                logger.exception("reading the launch failed; no launch events until it works")
             continue
+        last_failure = ""
         key = (launch["blueprint"], launch["phase"], launch["runId"]) if launch else None
         if key != last_key:
             last_key = key
