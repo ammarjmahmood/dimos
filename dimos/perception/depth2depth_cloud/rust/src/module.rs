@@ -513,8 +513,17 @@ fn load_model(cfg: &Config) -> Result<Depth2Depth, String> {
     let stem = cfg.onnx_file.trim_end_matches(".onnx");
     let engine = format!("{}/{stem}.engine", cfg.engine_cache_dir);
     info!(%engine, "Loading the TensorRT engine (building it first if it is not cached).");
-    let model = Depth2Depth::new_tensorrt(&onnx, &engine, ModelConfig::default())
-        .map_err(|e| e.to_string())?;
+    let open = || Depth2Depth::new_tensorrt(&onnx, &engine, ModelConfig::default());
+    let model = match open() {
+        Ok(model) => model,
+        // An engine another TensorRT version built won't deserialize; rebuild it once.
+        Err(error) if std::path::Path::new(&engine).exists() => {
+            tracing::warn!(%error, %engine, "The cached TensorRT engine did not load; rebuilding it.");
+            std::fs::remove_file(&engine).map_err(|e| e.to_string())?;
+            open().map_err(|e| e.to_string())?
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     info!("Depth model loaded on TensorRT.");
     Ok(model)
 }
