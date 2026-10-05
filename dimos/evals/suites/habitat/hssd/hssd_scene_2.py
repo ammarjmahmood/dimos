@@ -65,7 +65,7 @@ def _environment() -> HabitatEnvironment:
         scene_id="102344403",
         seed=0,
         start_position_ros_override=(3.713, 6.3, 0.159347),
-        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+        blueprint=["habitat-nav", "mcp-server", "observe-skill", "point-nav-skill-container"],
     )
 
 

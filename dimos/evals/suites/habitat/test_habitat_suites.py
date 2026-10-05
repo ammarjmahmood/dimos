@@ -82,6 +82,7 @@ def test_scene_contract(name, scene_id, size):
         if scene_id is not None:
             assert habitat.scene_id == scene_id
         assert habitat.seed == 0
+        assert "point-nav-skill-container" in habitat.blueprint  # agents must be able to move
         if name in START_OVERRIDES:
             assert habitat.start_position_ros_override == START_OVERRIDES[name]
         assert c.timeout_s == 1200

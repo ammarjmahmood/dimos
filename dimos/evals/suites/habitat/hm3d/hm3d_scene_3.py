@@ -64,7 +64,7 @@ def _environment() -> HabitatEnvironment:
         ),
         scene_id="00770-NBg5UqG3di3",
         seed=0,
-        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+        blueprint=["habitat-nav", "mcp-server", "observe-skill", "point-nav-skill-container"],
     )
 
 

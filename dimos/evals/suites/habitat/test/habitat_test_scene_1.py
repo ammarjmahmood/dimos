@@ -64,7 +64,7 @@ def _environment() -> HabitatEnvironment:
             str(get_data_dir("habitat_test_scenes/apartment_1.glb")),
         ),
         seed=0,
-        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+        blueprint=["habitat-nav", "mcp-server", "observe-skill", "point-nav-skill-container"],
     )
 
 

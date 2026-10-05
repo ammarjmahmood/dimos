@@ -67,7 +67,7 @@ def _environment() -> HabitatEnvironment:
         seed=0,
         # Interior living-room point; do not sample an outdoor spawn.
         start_position_ros_override=(3.0, 5.5, 0.124386),
-        blueprint=["habitat-nav", "mcp-server", "observe-skill"],
+        blueprint=["habitat-nav", "mcp-server", "observe-skill", "point-nav-skill-container"],
     )
 
 
