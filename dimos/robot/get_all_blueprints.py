@@ -19,6 +19,7 @@ from typing import NoReturn
 import typer
 
 from dimos.core.coordination.blueprints import Blueprint
+from dimos.core.module import ModuleBase
 from dimos.robot.all_blueprints import all_blueprints, all_modules
 from dimos.robot.external_blueprints import (
     ExternalBlueprintError,
@@ -81,12 +82,16 @@ def load_blueprint(name: str) -> Blueprint:
         raise
 
 
-def get_module_by_name(name: str) -> Blueprint:
+def get_module_class_by_name(name: str) -> type[ModuleBase]:
     if name not in all_modules:
         _raise_unknown(name, list(all_modules.keys()))
     module_path, class_name = all_modules[name].rsplit(".", 1)
     python_module = __import__(module_path, fromlist=[class_name])
-    return getattr(python_module, class_name).blueprint()  # type: ignore[no-any-return]
+    return getattr(python_module, class_name)  # type: ignore[no-any-return]
+
+
+def get_module_by_name(name: str) -> Blueprint:
+    return get_module_class_by_name(name).blueprint()
 
 
 def get_by_name(name: str) -> Blueprint:

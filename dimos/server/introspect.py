@@ -37,8 +37,13 @@ from typing import Any
 
 MARKER = "@@DIMOS_SERVER@@"
 
-# ModuleConfig fields every module has that aren't for a person to set
+# the catalog lists this many import errors, then how many more (a broken install fails most blueprints the same way)
+MAX_ERRORS = 50
+
+# ModuleConfig fields every module has that aren't for a person to set (test_introspect checks every ModuleConfig
+# field is either here or in SHOWN_BASE_FIELDS, so a new one is a decision, not an accident)
 INTERNAL_FIELDS = {"g", "rpc_transport", "rpc_timeouts", "default_rpc_timeout", "instance_name"}
+SHOWN_BASE_FIELDS = {"frame_id", "frame_id_prefix"}
 
 # group folders under dimos/robot/ that hold several robots (dimos.robot.unitree.go2 is the go2)
 ROBOT_GROUPS = {"unitree", "manipulators", "diy", "galaxea", "deeprobotics"}
@@ -50,24 +55,12 @@ def type_name(kind: Any) -> str:
     return str(name) if module in ("builtins", "") else f"{module}.{name}"
 
 
-def resolve(name: str) -> Any:
-    """A blueprint by name: built-in, a module's own blueprint, or an external `namespace.name`."""
-    from dimos.robot.all_blueprints import all_blueprints, all_modules
-    from dimos.robot.get_all_blueprints import get_blueprint_by_name, get_module_by_name
-
-    if name in all_blueprints:
-        return get_blueprint_by_name(name)
-    if "." in name and name not in all_modules:
-        from dimos.robot.external_blueprints import resolve_external_blueprint_by_name
-
-        return resolve_external_blueprint_by_name(name)
-    return get_module_by_name(name)
-
-
 def atoms_of(name: str) -> list[Any]:
-    bp = resolve(name)
-    atoms = getattr(bp, "active_blueprints", bp.blueprints)
-    return list(atoms() if callable(atoms) else atoms)
+    """The modules `dimos run <name>` would start: a built-in blueprint, a module's own blueprint, or an external
+    `namespace.name`, resolved the way dimos resolves them."""
+    from dimos.robot.get_all_blueprints import get_by_name
+
+    return list(get_by_name(name).active_blueprints)
 
 
 def blueprint(name: str) -> dict[str, Any]:
@@ -163,7 +156,7 @@ def config(name: str) -> dict[str, Any]:
     for atom in atoms_of(name):
         entry: dict[str, Any] = {"module": atom.name, "class": type_name(atom.module)}
         try:
-            entry["args"] = config_args(atom.module, dict(getattr(atom, "kwargs", {}) or {}))
+            entry["args"] = config_args(atom.module, dict(atom.kwargs))
         except Exception as error:
             entry["args"] = []
             entry["error"] = f"{type(error).__name__}: {error}"
@@ -203,17 +196,10 @@ def params(fn: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _load(path: str) -> Any:
-    module_path, _, attr = path.partition(":") if ":" in path else path.rpartition(".")
-    obj: Any = importlib.import_module(module_path)
-    for part in attr.split("."):
-        obj = getattr(obj, part)
-    return obj
-
-
 def catalog() -> dict[str, Any]:
     """Every blueprint, module and skill (for a launcher); one that fails to import is listed in `errors`."""
     from dimos.robot.all_blueprints import all_blueprints, all_modules
+    from dimos.robot.get_all_blueprints import get_blueprint_by_name, get_module_class_by_name
 
     errors: list[str] = []
     classes: dict[str, tuple[str, Any]] = {}
@@ -223,18 +209,18 @@ def catalog() -> dict[str, Any]:
     per_file: dict[str, int] = {}
     for ref in all_blueprints.values():
         per_file[ref.split(":")[0]] = per_file.get(ref.split(":")[0], 0) + 1
-    for name, path in sorted(all_modules.items()):
+    for name in sorted(all_modules):
         try:
-            cls = _load(path)
+            cls = get_module_class_by_name(name)
             classes[f"{cls.__module__}.{cls.__qualname__}"] = (name, cls)
         except Exception as error:
             errors.append(f"module {name}: {type(error).__name__}: {error}")
     for name, ref in sorted(all_blueprints.items()):
         try:
-            bp = _load(ref)
+            bp = get_blueprint_by_name(name)
             robot = robot_of(ref)
             ids = []
-            for atom in getattr(bp, "blueprints", ()):
+            for atom in bp.active_blueprints:
                 key = f"{atom.module.__module__}.{atom.module.__qualname__}"
                 classes.setdefault(key, (atom.module.__name__, atom.module))
                 ids.append(classes[key][0])
@@ -271,7 +257,9 @@ def catalog() -> dict[str, Any]:
             ]
         except Exception as error:
             errors.append(f"module {module_id}: {type(error).__name__}: {error}")
-    return {"blueprints": blueprints, "modules": modules, "skills": skills, "errors": errors[:50]}
+    if len(errors) > MAX_ERRORS:
+        errors = [*errors[:MAX_ERRORS], f"... and {len(errors) - MAX_ERRORS} more"]
+    return {"blueprints": blueprints, "modules": modules, "skills": skills, "errors": errors}
 
 
 COMMANDS: dict[str, Callable[..., dict[str, Any]]] = {
