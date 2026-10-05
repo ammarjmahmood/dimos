@@ -562,7 +562,10 @@ class Account(ApiModel):
         description="A cloud key is stored (or in the environment) and wasn't refused"
     )
     email: str | None = Field(description="Who it belongs to", examples=["me@example.com"])
-    scopes: list[str] | None = Field(description="What it may do, per the cloud")
+    scopes: str | list[str] | None = Field(
+        description="What it may do, as the cloud reports it (today a string, e.g. `data`)",
+        examples=["data"],
+    )
     source: Literal["env", "stored"] | None = Field(
         description="env: DIMOS_API_KEY; stored: `dimos login`'s saved key; null: none"
     )

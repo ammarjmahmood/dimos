@@ -490,3 +490,19 @@ def test_robots_come_from_robots_json(client: TestClient, repo: Path) -> None:
     assert found == {"unitree-go2-basic": "go2", "unitree-g1-sdk": None, "xarm-basic": "arm"}
     assert client.get("/dimos/robots/arm/modules").json()["modules"][0]["name"] == "xarm-driver"
     assert client.get("/dimos/robots/xarm/modules").status_code == 404
+
+
+def test_an_account_carries_the_scopes_the_cloud_sends(check_model: Any) -> None:
+    """The cloud answers `scopes` as a string ("data"); a list-only model turned every logged-in account into a 500."""
+    from dimos.server.models import Account
+
+    for scopes in ("data", ["data"], None):
+        account = {
+            "loggedIn": True,
+            "email": "a@b.c",
+            "scopes": scopes,
+            "source": "stored",
+            "cloudUrl": "x",
+            "error": None,
+        }
+        check_model(Account, account, "the account")
