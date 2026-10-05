@@ -671,7 +671,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
             },
-            "description": "The new overrides, {key: value}, replacing the old ones; a null value removes that key. Keys are letters, digits and `_`",
+            "description": "The new overrides, {key: value}, replacing the old ones; a null value removes that key. Keys are GlobalConfig fields (each one `dimos` takes as a `--key` flag)",
             "examples": [
               {
                 "robot_ip": "192.168.12.1"
@@ -3282,7 +3282,7 @@
         "x-family": "dimos"
       },
       "put": {
-        "description": "Replaces config.yaml's `dimos.global_config` with `overrides` (null values dropped), keeping the rest of the file. Takes effect at the next launch; a running blueprint is untouched. 400 for a key that isn't letters, digits and `_`. Answers like GET.",
+        "description": "Replaces config.yaml's `dimos.global_config` with `overrides` (null values dropped), keeping the rest of the file. Takes effect at the next launch; a running blueprint is untouched. 400 for a key that isn't a GlobalConfig field `dimos` takes as a flag, or a value GlobalConfig refuses. Answers like GET.",
         "operationId": "put_dimos_global_config",
         "requestBody": {
           "content": {
@@ -3326,7 +3326,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "Save Desktop's GlobalConfig overrides (null removes one); they become `--key value` on every launch",
+        "summary": "Save Desktop's GlobalConfig overrides (null removes one); they become `--key=value` on every launch",
         "tags": [
           "global-config"
         ],
@@ -3495,7 +3495,7 @@
         "x-family": "dimos"
       },
       "post": {
-        "description": "Starts `dimos [--key value ...] run <blueprint>` in the checkout, in its own session, with Desktop's saved GlobalConfig overrides, then the body's, then `--replay` if asked. Answers at once with phase `starting`; `launch` events (or GET /dimos/runs) follow it to running, stopped or failed. 400 when the checkout's dimos is outside Desktop's range (unless config.yaml `dimos.ignore_version_range`) or the name is bad, and while the last launch is still starting or running (one at a time); 500 when dimos isn't installed or won't start.",
+        "description": "Starts `dimos [--key value ...] run <blueprint>` in the checkout, in its own session, with Desktop's saved GlobalConfig overrides, then the body's, then `--replay` if asked. Answers at once with phase `starting`; `launch` events (or GET /dimos/runs) follow it to running, stopped or failed. 400 when the checkout's dimos is outside Desktop's range (unless config.yaml `dimos.ignore_version_range`), the name is bad, an override (saved or given) isn't a GlobalConfig flag or valid value, and while the last launch is still starting or running (one at a time); 500 when dimos isn't installed or won't start.",
         "operationId": "post_dimos_runs",
         "requestBody": {
           "content": {
@@ -3890,7 +3890,7 @@
         "x-family": "dimos"
       },
       "post": {
-        "description": "Adds the recording to the end of the queue (saved, so it survives a restart) and answers its upload, queued; one already queued or uploading for that path is answered instead. Needs a cloud login: without one it waits. 400 when the path isn't an absolute path to an existing .mcap or .db.",
+        "description": "Adds the recording to the end of the queue (saved, so it survives a restart) and answers its upload, queued; one already queued or uploading for that path is answered instead. Needs a cloud login: without one it waits. 400 when the path isn't an absolute path to an existing dimos recording (an .mcap, or a .db dimos recorded).",
         "operationId": "post_dimos_uploads",
         "requestBody": {
           "content": {

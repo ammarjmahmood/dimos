@@ -28,7 +28,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-import re
 import sys
 from typing import Annotated, Any, Literal
 
@@ -156,6 +155,12 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             )
         except blueprints.IntrospectError as error:
             raise ApiError(500, str(error))
+
+    def checked_overrides(overrides: dict[str, Any]) -> None:
+        try:
+            config.check_overrides(overrides)
+        except ValueError as error:
+            raise ApiError(400, str(error))
 
     def check_name(name: str) -> None:
         if not blueprints.valid_name(name):
@@ -368,18 +373,16 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         response_model=models.GlobalConfig,
         **route_doc(
             "global-config",
-            "Save Desktop's GlobalConfig overrides (null removes one); they become `--key value` on every launch",
+            "Save Desktop's GlobalConfig overrides (null removes one); they become `--key=value` on every launch",
             "Replaces config.yaml's `dimos.global_config` with `overrides` (null values dropped), keeping the rest "
             "of the file. Takes effect at the next launch; a running blueprint is untouched. 400 for a key that "
-            "isn't letters, digits and `_`. Answers like GET.",
+            "isn't a GlobalConfig field `dimos` takes as a flag, or a value GlobalConfig refuses. Answers like GET.",
             errors=(400, 500),
             answer="`{ schema, defaults, overrides }`, with the saved overrides",
         ),
     )
     async def put_global_config(update: models.GlobalConfigUpdate) -> dict[str, Any]:
-        for key in update.overrides:
-            if not re.fullmatch(r"[A-Za-z0-9_]+", key):
-                raise ApiError(400, f"bad config key: {key}")
+        checked_overrides(update.overrides)
         config.set_global_config_overrides(update.overrides)
         return await global_config_value()
 
@@ -410,8 +413,8 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "Starts `dimos [--key value ...] run <blueprint>` in the checkout, in its own session, with Desktop's "
             "saved GlobalConfig overrides, then the body's, then `--replay` if asked. Answers at once with phase "
             "`starting`; `launch` events (or GET /dimos/runs) follow it to running, stopped or failed. 400 when the "
-            "checkout's dimos is outside Desktop's range (unless config.yaml `dimos.ignore_version_range`) or the "
-            "name is bad, and while the last launch is still starting or running (one at a time); 500 when dimos isn't "
+            "checkout's dimos is outside Desktop's range (unless config.yaml `dimos.ignore_version_range`), the "
+            "name is bad, an override (saved or given) isn't a GlobalConfig flag or valid value, and while the last launch is still starting or running (one at a time); 500 when dimos isn't "
             "installed or won't start.",
             errors=(400, 500),
             agent=True,
@@ -433,6 +436,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         merged = {**config.global_config_overrides(), **request.overrides}
         if request.replay:
             merged["replay"] = True
+        checked_overrides(merged)
         try:
             started = runs.start(s.dimos_dir, request.blueprint, merged)
         except runs.StillRunningError as error:
@@ -462,6 +466,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         if last is None:
             raise ApiError(400, "the dimos server hasn't launched anything yet")
         blueprint, overrides = last
+        checked_overrides(overrides)
         current = await asyncio.to_thread(runs.current_launch)
         try:
             if current and current["phase"] in ("starting", "running"):
@@ -680,7 +685,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "Upload a recording (.mcap or .db) to Dimensional cloud: it joins the queue (one at a time)",
             "Adds the recording to the end of the queue (saved, so it survives a restart) and answers its upload, "
             "queued; one already queued or uploading for that path is answered instead. Needs a cloud login: "
-            "without one it waits. 400 when the path isn't an absolute path to an existing .mcap or .db.",
+            "without one it waits. 400 when the path isn't an absolute path to an existing dimos recording (an .mcap, or a .db dimos recorded).",
             errors=(400, 500),
             agent=True,
             answer="`Upload`",

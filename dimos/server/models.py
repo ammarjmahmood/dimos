@@ -363,7 +363,7 @@ class GlobalConfig(ApiModel):
 class GlobalConfigUpdate(ApiModel):
     overrides: dict[str, JsonValue] = Field(
         description="The new overrides, {key: value}, replacing the old ones; a null value removes that key. "
-        "Keys are letters, digits and `_`",
+        "Keys are GlobalConfig fields (each one `dimos` takes as a `--key` flag)",
         examples=[{"robot_ip": "192.168.12.1", "simulation": None}],
     )
 

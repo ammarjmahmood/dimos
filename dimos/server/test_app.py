@@ -218,7 +218,17 @@ def test_global_config_overrides_live_in_desktops_config(client: TestClient) -> 
     assert saved.json()["overrides"] == {"robot_ip": "10.0.0.2"}
     on_disk = config.load_desktop_config()
     assert on_disk["desktop"] == {"port": 7341} and on_disk["dimos"]["dir"] == "/somewhere"
-    assert client.put("/dimos/global-config", json={"overrides": {"a-b": 1}}).status_code == 400
+    for bad, why in [
+        ({"a-b": 1}, "not a dimos GlobalConfig setting: a-b"),
+        ({"robot_ipp": "x"}, "not a dimos GlobalConfig setting: robot_ipp"),
+        ({"n_workers": "many"}, "n_workers"),
+    ]:
+        refused = client.put("/dimos/global-config", json={"overrides": bad})
+        assert refused.status_code == 400 and why in refused.json()["error"], refused.json()
+    # a saved override dimos no longer has stops a launch with its name, before dimos is started
+    config.set_global_config_overrides({"renamed_away": 1})
+    stale = client.post("/dimos/runs", json={"blueprint": "unitree-go2"})
+    assert stale.status_code == 400 and "renamed_away" in stale.json()["error"]
     assert client.put("/dimos/global-config", json={}).status_code == 400
 
 
@@ -236,7 +246,7 @@ def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch
     ).json()
     assert (launched["blueprint"], launched["phase"]) == ("unitree-go2", "starting")
     assert launched["output"].startswith(
-        "$ dimos --n-workers 2 --replay --robot-ip 10.0.0.2 run unitree-go2"
+        "$ dimos --n-workers=2 --replay --robot-ip=10.0.0.2 run unitree-go2"
     )
     overrides = {"robot_ip": "10.0.0.2", "n_workers": 2, "replay": True}
     assert launched["overrides"] == overrides

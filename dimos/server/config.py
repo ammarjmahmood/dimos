@@ -187,8 +187,37 @@ def info(dimos_dir: Path) -> Info:
     )
 
 
+def flag_fields() -> set[str]:
+    """The GlobalConfig fields `dimos` takes as a root flag (global_options.py builds them, and skips some types)."""
+    import inspect
+
+    from dimos.cli.commands.global_options import create_dynamic_callback
+
+    callback = create_dynamic_callback()  # type: ignore[no-untyped-call]
+    return set(inspect.signature(callback).parameters) - {"ctx"}
+
+
+def check_overrides(overrides: dict[str, Any]) -> None:
+    """ValueError naming what `dimos` would refuse: a key that isn't one of its GlobalConfig flags (a typo, or a field
+    renamed since it was saved), or a value GlobalConfig rejects. None values are skipped (they mean "unset")."""
+    from pydantic import ValidationError
+
+    from dimos.core.global_config import GlobalConfig
+
+    unknown = sorted(set(overrides) - flag_fields())
+    if unknown:
+        raise ValueError(f"not a dimos GlobalConfig setting: {', '.join(unknown)}")
+    try:
+        # model_validate: the values alone, without the environment and .env a GlobalConfig() reads
+        GlobalConfig.model_validate({k: v for k, v in overrides.items() if v is not None})
+    except ValidationError as error:
+        problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors())
+        raise ValueError(f"bad GlobalConfig value: {problems}") from error
+
+
 def global_config_flags(overrides: dict[str, Any]) -> list[str]:
-    """`--key value` flags for dimos's GlobalConfig, as typer reads them."""
+    """dimos's root flags for GlobalConfig `overrides` (`--key=value`, `--flag`/`--no-flag`), as its typer callback
+    reads them; `=` keeps a value from being read as a flag's optional value (`--simulation` alone means mujoco)."""
     import json
 
     flags: list[str] = []
@@ -200,8 +229,6 @@ def global_config_flags(overrides: dict[str, Any]) -> list[str]:
             flags.append(flag)
         elif value is False:
             flags.append("--no-" + key.replace("_", "-"))
-        elif isinstance(value, str):
-            flags += [flag, value]
         else:
-            flags += [flag, json.dumps(value)]
+            flags.append(f"{flag}={value if isinstance(value, str) else json.dumps(value)}")
     return flags
