@@ -49,6 +49,16 @@ from dimos.utils.sequential_ids import SequentialIds
 
 logger = setup_logger()
 
+
+def mcp_http_client() -> requests.Session:
+    """A session that opens a connection per request. A kept-alive one is closed by the MCP server after 5 s idle
+    (uvicorn's timeout_keep_alive), and a request sent just as it closes is reset (ECONNRESET), which killed the
+    agent's tool call; to localhost a new connection costs nothing."""
+    session = requests.Session()
+    session.headers["Connection"] = "close"
+    return session
+
+
 _RESPONSES_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
 
@@ -119,7 +129,7 @@ class McpClient(Module):
             daemon=True,
         )
         self._stop_event = Event()
-        self._http_client = requests.Session()
+        self._http_client = mcp_http_client()
         self._seq_ids = SequentialIds()
         self._tool_stream_cleanup = None
 
@@ -375,7 +385,14 @@ class McpClient(Module):
             with self._lock:
                 if not self._state_graph:
                     raise ValueError("No state graph initialized")
-                self._process_message(self._state_graph, message)
+                try:
+                    self._process_message(self._state_graph, message)
+                except Exception:
+                    # one failed turn (a tool call's transport error) must not end the agent: it stays able to
+                    # take the next message, and says it's idle again
+                    logger.exception("The agent failed processing a message", msg_type=message.type)
+                    if self._message_queue.empty():
+                        self.agent_idle.publish(True)
 
     def _process_message(
         self, state_graph: CompiledStateGraph[Any, Any, Any, Any], message: BaseMessage
