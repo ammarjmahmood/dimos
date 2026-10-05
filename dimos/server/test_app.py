@@ -252,14 +252,15 @@ async def test_introspection_runs_in_a_child_with_a_timeout(tmp_path: Path) -> N
     assert await blueprints.introspect(tmp_path, ["blueprint", "ok"], python=str(python)) == {
         "name": "ok"
     }
-    for name, message in [
-        ("bad", "KeyError: x"),
-        ("crash", "segfault-ish"),
-        ("hang", "took over 1 s"),
+    # only the hang gets the short timeout: a slow CI machine can take over a second just to start python
+    for name, message, timeout in [
+        ("bad", "KeyError: x", 120),
+        ("crash", "segfault-ish", 120),
+        ("hang", "took over 1 s", 1),
     ]:
         with pytest.raises(blueprints.IntrospectError, match=message):
             await blueprints.introspect(
-                tmp_path, ["blueprint", name], timeout=1, python=str(python)
+                tmp_path, ["blueprint", name], timeout=timeout, python=str(python)
             )
 
 
