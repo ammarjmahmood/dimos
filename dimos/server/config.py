@@ -147,16 +147,18 @@ class Info:
 def checkout_version(dimos_dir: Path) -> tuple[bool, str | None]:
     """(a dimos checkout is there, its pyproject version)."""
     try:
-        text = (dimos_dir / "pyproject.toml").read_text()
-    except OSError:
+        import tomllib
+    except ImportError:  # python 3.10
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    try:
+        project = tomllib.loads((dimos_dir / "pyproject.toml").read_text()).get("project", {})
+    except (OSError, tomllib.TOMLDecodeError):
         return False, None
-    if 'name = "dimos"' not in text:
+    if project.get("name") != "dimos":
         return False, None
-    for line in text.splitlines():
-        key, equals, value = line.partition("=")
-        if equals and key.strip() == "version":
-            return True, value.strip().strip('"')
-    return True, None
+    version = project.get("version")
+    return True, str(version) if version else None
 
 
 def satisfies(version: str, range_text: str) -> bool:
