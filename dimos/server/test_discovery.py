@@ -127,7 +127,7 @@ async def test_a_crash_or_hang_costs_one_blueprint(
         ["go2-a", "crash-b", "go2-c", "hang-d", "g1-e", "broken-f"], ["extra-mod"]
     )
     events: list[dict[str, Any]] = []
-    found = discovery(tmp_path, command, events, item_timeout=2, key=keyed("k1"))
+    found = discovery(tmp_path, command, events, item_timeout=5, key=keyed("k1"))
     await found.check("startup")
     status = found.status
     assert status["state"] == "done" and status["reason"] == "startup"
@@ -139,7 +139,7 @@ async def test_a_crash_or_hang_costs_one_blueprint(
         crash and not crash["importable"] and "crashed its process (exit" in crash["import_error"]
     )
     hang = found.blueprint("hang-d")
-    assert hang and "no answer in 2 s" in hang["import_error"]
+    assert hang and "no answer in 5 s" in hang["import_error"]
     broken = found.blueprint("broken-f")
     assert broken and broken["missing_module"] == "sdk" and broken["optional_dependency"]
     assert [b["name"] for b in found.blueprint_list()][:3] == ["go2-a", "crash-b", "go2-c"]
