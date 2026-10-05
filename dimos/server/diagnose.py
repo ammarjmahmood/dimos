@@ -244,8 +244,16 @@ def problems(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in found:
         if not any((p["code"], p["message"]) == (item["code"], item["message"]) for p in distinct):
             distinct.append(item)
-    known = [p for p in distinct if p["code"] != "error"]
-    return known or distinct[-3:]
+    # one per known code: the same failure is logged where it happened and again where it was caught; keep the
+    # first, or a later one that names the port when the first doesn't
+    known: dict[str, dict[str, Any]] = {}
+    for item in distinct:
+        if item["code"] == "error":
+            continue
+        kept = known.get(item["code"])
+        if kept is None or ("port" in item["data"] and "port" not in kept["data"]):
+            known[item["code"]] = item
+    return list(known.values()) or distinct[-3:]
 
 
 def error_text(problems_found: list[dict[str, Any]], output: str) -> str:

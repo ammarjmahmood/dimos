@@ -228,4 +228,7 @@ def test_a_port_in_use_says_which_port_and_who_holds_it() -> None:
     assert found["data"]["port"] == port and found["data"]["holder_pid"] == os.getpid()
     assert "python" in (found["data"]["holder_command"] or "")
     # an address the error doesn't name: no port, nothing looked up
-    assert "port" not in problems([failure(OSError(errno.EADDRINUSE, "in use"))])[0]["data"]
+    unnamed = failure(OSError(errno.EADDRINUSE, "in use"))
+    assert "port" not in problems([unnamed])[0]["data"]
+    # logged where it happened and again where it was caught: one problem, the one that names the port
+    assert [p["data"].get("port") for p in problems([unnamed, failure(error), unnamed])] == [port]
