@@ -311,9 +311,15 @@ def test_launch_log_and_stop(
     ).json()
     assert (launched["blueprint"], launched["phase"]) == ("unitree-go2", "starting")
     assert launched["output"].startswith(
-        "$ dimos --n-workers=2 --replay --rerun-open=web --robot-ip=10.0.0.2 run unitree-go2"
+        "$ dimos --n-workers=2 --replay --rerun-open=none --rerun-web --robot-ip=10.0.0.2 run unitree-go2"
     )
-    overrides = {"robot_ip": "10.0.0.2", "n_workers": 2, "replay": True, "rerun_open": "web"}
+    overrides = {
+        "robot_ip": "10.0.0.2",
+        "n_workers": 2,
+        "replay": True,
+        "rerun_open": "none",
+        "rerun_web": True,
+    }
     assert launched["overrides"] == overrides
     assert [step["state"] for step in launched["steps"]] == ["now", "todo", "todo", "todo"]
     assert launched["problems"] == []
@@ -581,7 +587,8 @@ def test_a_launch_with_its_own_global_and_module_config_and_a_secret(
     # the secret is in the environment, never in argv, the launch log, the record or the answer
     assert seen["argv"] == [
         "--n-workers=8",
-        "--rerun-open=web",
+        "--rerun-open=none",
+        "--rerun-web",
         "run",
         "unitree-go2",
         "--camera.codec=jpeg",
@@ -590,9 +597,9 @@ def test_a_launch_with_its_own_global_and_module_config_and_a_secret(
     ]
     assert seen["env"]["GO2CONNECTION__AES_128_KEY"] == "saved-key"
     assert launched["output"].startswith(
-        "$ GO2CONNECTION__AES_128_KEY=••• dimos --n-workers=8 --rerun-open=web run unitree-go2"
+        "$ GO2CONNECTION__AES_128_KEY=••• dimos --n-workers=8 --rerun-open=none --rerun-web run unitree-go2"
     )
-    assert launched["overrides"] == {"n_workers": 8, "rerun_open": "web"}
+    assert launched["overrides"] == {"n_workers": 8, "rerun_open": "none", "rerun_web": True}
     assert launched["modules"] == {
         "camera": {"codec": "jpeg", "fps": 20},
         "go2connection": {"aes_128_key": "•••", "lidar": False},
