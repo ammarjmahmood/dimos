@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING
 
 from pydantic import Field, field_validator
 
-from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
@@ -34,8 +33,12 @@ from dimos.utils.data import get_data
 
 class Depth2DepthCloudConfig(NativeModuleConfig):
     cwd: str | None = "rust"
-    executable: str = str(DIMOS_PROJECT_ROOT / "target" / "release" / "depth2depth_cloud")
-    build_command: str | None = "cargo build --release"
+    executable: str = "result/bin/depth2depth_cloud"
+    # git+file, not path:. : the flake's ../../../.. input must be inside the entered tree.
+    # Builds see tracked files only.
+    build_command: str | None = (
+        "nix build -L 'git+file:../../../..?dir=dimos/perception/depth2depth_cloud/rust'"
+    )
     stdin_config: bool = True
     # frame_id is also a NativeModuleConfig field; listed so it still crosses to the Rust config.
     base_fields: frozenset[str] = frozenset({"frame_id"})

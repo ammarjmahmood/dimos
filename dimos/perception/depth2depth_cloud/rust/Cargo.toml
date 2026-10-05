@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "depth2depth_cloud"
 path = "src/bin/depth2depth_cloud.rs"
 
+# Not a root-workspace member: its candle/TensorRT dependency tree would otherwise land in the root
+# Cargo.lock and every flake that builds from it.
+[workspace]
+
 # Bake registry entry, cross-checked at compile time by the module macro.
 [package.metadata.dimos.module.depth2depth_cloud]
 path = "dimos_depth2depth_cloud::module::Depth2DepthCloud"
@@ -47,3 +51,7 @@ depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "77
 
 [target.'cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "aarch64"))))'.dependencies]
 depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "77b22b8" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
