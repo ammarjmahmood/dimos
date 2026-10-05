@@ -28,7 +28,22 @@ SCENES = [
     ("replicacad_apt_5", "apt_5", 13),
     ("replicacad_v3_sc1_staging_00", "v3_sc1_staging_00", 14),
     ("replicacad_v3_sc2_staging_00", "v3_sc2_staging_00", 14),
+    ("hssd_102344193", "102344193", 11),
+    ("hssd_102344403", "102344403", 14),
+    ("hssd_103997424_171030444", "103997424_171030444", 13),
+    ("hssd_103997970_171031287", "103997970_171031287", 12),
+    ("hssd_104348463_171513588", "104348463_171513588", 10),
+    ("hssd_106366410_174226806", "106366410_174226806", 12),
+    ("hssd_106878858_174886965", "106878858_174886965", 11),
+    ("hssd_107734110_175999914", "107734110_175999914", 10),
+    ("hssd_108736851_177263586", "108736851_177263586", 11),
+    ("hssd_108736884_177263634", "108736884_177263634", 9),
 ]
+
+START_OVERRIDES = {
+    "hssd_102344193": (3.0, 5.5, 0.124386),
+    "hssd_102344403": (3.713, 6.3, 0.159347),
+}
 
 
 def suite_module(name):
@@ -42,6 +57,16 @@ def suite_module(name):
         "replicacad_apt_5": "replicacad_scene_2",
         "replicacad_v3_sc1_staging_00": "replicacad_scene_3",
         "replicacad_v3_sc2_staging_00": "replicacad_scene_4",
+        "hssd_102344193": "hssd_scene_1",
+        "hssd_102344403": "hssd_scene_2",
+        "hssd_103997424_171030444": "hssd_scene_3",
+        "hssd_103997970_171031287": "hssd_scene_4",
+        "hssd_104348463_171513588": "hssd_scene_5",
+        "hssd_106366410_174226806": "hssd_scene_6",
+        "hssd_106878858_174886965": "hssd_scene_7",
+        "hssd_107734110_175999914": "hssd_scene_8",
+        "hssd_108736851_177263586": "hssd_scene_9",
+        "hssd_108736884_177263634": "hssd_scene_10",
     }[name]
     return f"dimos.evals.suites.habitat.{family}.{filename}"
 
@@ -57,6 +82,8 @@ def test_scene_contract(name, scene_id, size):
         if scene_id is not None:
             assert habitat.scene_id == scene_id
         assert habitat.seed == 0
+        if name in START_OVERRIDES:
+            assert habitat.start_position_ros_override == START_OVERRIDES[name]
         assert c.timeout_s == 1200
         for invalid in ("", "unknown"):
             assert c.grade(SimpleNamespace(trajectory=SimpleNamespace(final_answer=invalid))) == 0
@@ -96,6 +123,72 @@ def test_scene_contract(name, scene_id, size):
         ("replicacad_v3_sc2_staging_00", "books", "0", 1),
         ("replicacad_v3_sc1_staging_00", "height_order", "ACB", 1),
         ("replicacad_v3_sc2_staging_00", "height_order", "BCA", 1),
+        ("hssd_102344193", "bedrooms", "1", 1),
+        ("hssd_102344193", "bathroom_count", "1", 1),
+        ("hssd_102344193", "largest_room", "B", 1),
+        ("hssd_102344193", "living_area", "47.23", 1),
+        ("hssd_102344193", "bedroom_perimeter", "15.55", 1),
+        ("hssd_102344193", "laptop_location", "C", 1),
+        ("hssd_102344193", "laundry_exists", "yes", 1),
+        ("hssd_102344193", "fridge_height", "1.68", 1),
+        ("hssd_102344193", "room_area_order", "ACB", 1),
+        ("hssd_102344193", "fridge_state", "B", 1),
+        ("hssd_102344193", "laptop_tv_distance", "11.46", 1),
+        ("hssd_102344403", "garage_cars", "3", 1),
+        ("hssd_102344403", "every_bedroom_tv", "no", 1),
+        ("hssd_102344403", "arcade_exists", "no", 1),
+        ("hssd_102344403", "arcade_exists", "yes", 0),
+        ("hssd_102344403", "dumbbells", "6", 1),
+        ("hssd_102344403", "smallest_car_color", "C", 1),
+        ("hssd_102344403", "lounge_path_order", "A,C,B", 1),
+        ("hssd_102344403", "lounge_path_order", "ABC", 2 / 3),
+        ("hssd_103997970_171031287", "room_count", "3", 1),
+        ("hssd_103997970_171031287", "dining_exists", "no", 1),
+        ("hssd_103997970_171031287", "largest_room", "C", 1),
+        ("hssd_103997970_171031287", "smallest_room", "B", 1),
+        ("hssd_103997970_171031287", "laptop_exists", "no", 1),
+        ("hssd_103997970_171031287", "dining_table_diameter", "1.60", 1),
+        ("hssd_103997970_171031287", "tv_location", "C", 1),
+        ("hssd_103997970_171031287", "every_room_plants", "yes", 1),
+        ("hssd_103997424_171030444", "computer_bed_wall", "yes", 1),
+        ("hssd_103997424_171030444", "adjacent_red_objects", "D", 1),
+        ("hssd_103997424_171030444", "adjacent_red_objects", "A", 0),
+        ("hssd_103997424_171030444", "dining_table_diagonal", "2.43", 1),
+        ("hssd_103997424_171030444", "dining_table_diagonal", "2.55", 1),
+        ("hssd_103997424_171030444", "dining_table_diagonal", "2.88", 0),
+        ("hssd_104348463_171513588", "island_chairs", "3", 1),
+        ("hssd_104348463_171513588", "room_count", "3", 1),
+        ("hssd_107734110_175999914", "office_doorway_radius", "0.49", 1),
+        ("hssd_107734110_175999914", "office_doorway_radius", "0.7", 0),
+        ("hssd_107734110_175999914", "piano_computer_distance", "11.64", 1),
+        ("hssd_106366410_174226806", "laundry_appliances", "3", 1),
+        ("hssd_106366410_174226806", "red_trash_bin_location", "B", 1),
+        ("hssd_106366410_174226806", "red_trash_bin_location", "A", 0),
+        ("hssd_106366410_174226806", "bed_relative_to_sofa", "A", 1),
+        ("hssd_106366410_174226806", "bed_relative_to_sofa", "B", 0),
+        ("hssd_106366410_174226806", "toilet_room_bathtub", "yes", 1),
+        ("hssd_106366410_174226806", "bedroom_path_order", "B,C,A", 1),
+        ("hssd_106366410_174226806", "bedroom_path_order", "CBA", 2 / 3),
+        ("hssd_106366410_174226806", "bedroom_path_order", "BBA", 0),
+        ("hssd_106878858_174886965", "beds", "4", 1),
+        ("hssd_106878858_174886965", "garage_bedroom_doorways", "4", 1),
+        ("hssd_106878858_174886965", "entryway_path_order", "A B C", 1),
+        ("hssd_106878858_174886965", "garage_car_color", "The car is blue.\n\n**B**", 1),
+        ("hssd_106878858_174886965", "exterior_opening", "yes", 1),
+        ("hssd_106878858_174886965", "bathroom_floor_pattern_match", "yes", 1),
+        ("hssd_108736851_177263586", "beds", "4", 1),
+        ("hssd_108736851_177263586", "dining_chairs", "8", 1),
+        ("hssd_108736851_177263586", "curved_sofa_table_shape", "A", 1),
+        ("hssd_108736851_177263586", "side_table_sides", "C", 1),
+        ("hssd_108736851_177263586", "side_table_sides", "6", 0),
+        ("hssd_108736851_177263586", "office_path_order", "CBA", 1),
+        ("hssd_108736851_177263586", "office_path_order", "CB", 0),
+        ("hssd_108736884_177263634", "toilets", "3", 1),
+        ("hssd_108736884_177263634", "red_potted_plant_location", "D", 1),
+        ("hssd_108736884_177263634", "kitchen_counter_windows", "3", 1),
+        ("hssd_108736884_177263634", "bathtub_shape_match", "no", 1),
+        ("hssd_108736884_177263634", "bathroom_plant_exists", "yes", 1),
+        ("hssd_108736884_177263634", "area_order", "CAB", 1),
     ],
 )
 def test_reference_transcription_and_scores(name, suffix, answer, expected):
@@ -104,3 +197,11 @@ def test_reference_transcription_and_scores(name, suffix, answer, expected):
     assert c.grade(
         SimpleNamespace(trajectory=SimpleNamespace(final_answer=answer))
     ) == pytest.approx(expected)
+
+
+def test_hssd_dataset_config_follows_environment(monkeypatch, tmp_path):
+    from dimos.evals.suites.habitat.hssd.hssd_scene_1 import _environment
+
+    dataset = tmp_path / "hssd-hab.scene_dataset_config.json"
+    monkeypatch.setenv("HSSD_DATASET_CONFIG", str(dataset))
+    assert _environment().config.scene_dataset_config == str(dataset)
