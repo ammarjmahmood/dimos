@@ -222,12 +222,15 @@ class Discovery:
                 return value
         return None
 
-    def save(self) -> None:
+    async def save(self) -> None:
+        """The data to disk: serialized here (the loop is the only writer of it), written in a thread."""
         digest = self.data["key"].get("digest")
-        if not digest:
-            return
+        if digest:
+            await asyncio.to_thread(self.write, self.path_for(digest), json.dumps(self.data))
+
+    def write(self, path: Path, text: str) -> None:
         try:
-            config.write_atomic(self.path_for(digest), json.dumps(self.data))
+            config.write_atomic(path, text)
             files = sorted(
                 self.cache_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True
             )
@@ -319,7 +322,7 @@ class Discovery:
                     code_changed, self.dimos_dir, data["key"], key
                 ):
                     self.data = {**data, "key": key}
-                    await asyncio.to_thread(self.save)
+                    await self.save()
                     self.finished()
                     return
                 else:
@@ -363,7 +366,7 @@ class Discovery:
         await self.scan_items(todo_blueprints, todo_modules)
         self.data.update(complete=True, scanned_at=now_iso())
         self.stale_data = None
-        await asyncio.to_thread(self.save)
+        await self.save()
         self.status.update(state="done", finished_at=now_iso(), current=None, cached_from=None)
         self.notify(force=True)
 
@@ -527,7 +530,7 @@ class Discovery:
                 self.notify()
                 if time.monotonic() - last_save > SAVE_INTERVAL_S:
                     last_save = time.monotonic()
-                    await asyncio.to_thread(self.save)
+                    await self.save()
         finally:
             if child.returncode is None:
                 kill(child)
