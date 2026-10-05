@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """ReplicaCAD apt_1: synthetic FRL apartment, 1 floor, ~85 m² (~900 sqft).
-Fully furnished: sofa far from TV, bicycles, beanbags, many small objects, articulated cabinets."""
+Fully furnished: sofa far from TV, bicycles, beanbags, many small objects.
+Articulated furniture (fridge, counter, cupboards, door) does not load: physics is off."""
 
 from collections.abc import Callable
 import os

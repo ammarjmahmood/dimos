@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """ReplicaCAD v3_sc2_staging_00: FRL apartment shell, 1 floor, ~85 m² (~900 sqft).
-Sparsely staged: sofa, TV stand, two bicycles, chairs, plants; no beanbags."""
+Sparsely staged: sofa, TV stand, two bicycles, chairs, plants; no beanbags.
+Articulated furniture (fridge, counter, cupboards, door) does not load: physics is off."""
 
 from collections.abc import Callable
 import os
@@ -102,16 +103,6 @@ SUITE: Suite = [
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION + "\n\n" + "Is there a sofa in the scene? Return only yes or no.",
-        grade=_parsed(yes_no, lambda value: exact("yes", value)),
-        tags=frozenset({"existence", "boolean"}),
-    ),
-    EvalCase(
-        id=f"{SCENE_KEY}_fridge_exists",
-        environment=_environment(),
-        timeout_s=1200,
-        inputs=INSTRUCTION
-        + "\n\n"
-        + "Is there a refrigerator in the scene? Return only yes or no.",
         grade=_parsed(yes_no, lambda value: exact("yes", value)),
         tags=frozenset({"existence", "boolean"}),
     ),
