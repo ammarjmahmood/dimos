@@ -1125,6 +1125,12 @@ class JobLog(JobSummary):
         description="Only after a failure: the output's last 15 non-empty lines, where the command says why (the "
         "whole output is `lines`)"
     )
+    code: Literal["cyclonedds_missing"] | None = Field(
+        description="Why it couldn't run, when its preparation found something missing (`error` says what to do): "
+        "`cyclonedds_missing` = the cyclonedds package must be built against the CycloneDDS C library and none was "
+        "found or could be fetched (no nix, no Homebrew one, no $CYCLONEDDS_HOME). null otherwise",
+        examples=[None],
+    )
 
 
 # events: on zenoh at <ns>/dimos/events/<type>, and (deprecated) the SSE stream /dimos/events

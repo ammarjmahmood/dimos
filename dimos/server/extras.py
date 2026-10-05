@@ -22,6 +22,9 @@ may run on another one.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -30,6 +33,9 @@ from typing import Any
 from packaging.markers import Marker
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
+
+from dimos.server.config import venv_dir
+from dimos.server.jobs import MissingForJobError
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -137,9 +143,8 @@ def status(dimos_dir: Path, probe: dict[str, Any], lock_sizes: bool = True) -> l
     return answer
 
 
-def wheel_size(entry: dict[str, Any], environment: dict[str, str]) -> int | None:
-    """A guess at the download for this machine: the largest wheel built for its OS and CPU (or any), else the
-    sdist."""
+def wheel_sizes(entry: dict[str, Any], environment: dict[str, str]) -> list[int]:
+    """The sizes of a uv.lock package's wheels built for this machine's python, OS and CPU (or any)."""
     system = {"Darwin": "macosx", "Linux": "linux"}.get(
         environment.get("platform_system", ""), "win"
     )
@@ -156,10 +161,116 @@ def wheel_size(entry: dict[str, Any], environment: dict[str, str]) -> int | None
         plat_ok = tags[2] == "any" or (system in tags[2] and any(cpu in tags[2] for cpu in cpus))
         if py_ok and plat_ok:
             sizes.append(wheel["size"])
+    return sizes
+
+
+def wheel_size(entry: dict[str, Any], environment: dict[str, str]) -> int | None:
+    """A guess at the download for this machine: the largest wheel built for its OS and CPU (or any), else the
+    sdist."""
+    sizes = wheel_sizes(entry, environment)
     if sizes:
         return max(sizes)
     size = entry.get("sdist", {}).get("size")
     return size if isinstance(size, int) else None
+
+
+def lock_entry(dimos_dir: Path, name: str) -> dict[str, Any] | None:
+    try:
+        lock = tomllib.loads((dimos_dir / "uv.lock").read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return next(
+        (e for e in lock.get("package", []) if canonicalize_name(e["name"]) == name),
+        None,
+    )
+
+
+def builds_cyclonedds(
+    dimos_dir: Path, statuses: list[dict[str, Any]], wanted: list[str], environment: dict[str, str]
+) -> bool:
+    """Whether installing `wanted` builds the cyclonedds package from source: one of them adds it and uv.lock has no
+    wheel of it for this python and machine (0.10.5 has wheels for python 3.10 only). Its build needs the CycloneDDS C
+    library (CYCLONEDDS_HOME)."""
+    if not any("cyclonedds" in e["missing"] for e in statuses if e["name"] in wanted):
+        return False
+    entry = lock_entry(dimos_dir, "cyclonedds")
+    return entry is None or not wheel_sizes(entry, environment)
+
+
+def find_nix() -> str | None:
+    return shutil.which("nix") or next(
+        (
+            str(p)
+            for p in (
+                Path("/nix/var/nix/profiles/default/bin/nix"),
+                Path("/run/current-system/sw/bin/nix"),
+            )
+            if p.is_file()
+        ),
+        None,
+    )
+
+
+def nixpkgs_ref(dimos_dir: Path) -> str:
+    """The nixpkgs dimos's flake.lock pins (its shell's cyclonedds), read from the lock file alone (evaluating the
+    flake would copy the whole checkout into the nix store); else the registry's nixpkgs."""
+    try:
+        lock = json.loads((dimos_dir / "flake.lock").read_text())
+        nodes = lock["nodes"]
+        locked = nodes[nodes[lock["root"]]["inputs"]["nixpkgs"]]["locked"]
+        if locked.get("type") == "github":
+            return f"github:{locked['owner']}/{locked['repo']}/{locked['rev']}"
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return "nixpkgs"
+
+
+# where Homebrew keeps `brew install cyclonedds` (Apple silicon, Intel)
+BREWED_CYCLONEDDS = (Path("/opt/homebrew/opt/cyclonedds"), Path("/usr/local/opt/cyclonedds"))
+
+
+def cyclonedds_env(home: Path) -> dict[str, str]:
+    return {
+        "CYCLONEDDS_HOME": str(home),
+        "CMAKE_PREFIX_PATH": os.pathsep.join(
+            p for p in (str(home), os.environ.get("CMAKE_PREFIX_PATH", "")) if p
+        ),
+    }
+
+
+async def prepare_cyclonedds(
+    dimos_dir: Path, step: Callable[[list[str]], Awaitable[int]]
+) -> dict[str, str]:
+    """A CycloneDDS C library for the cyclonedds build: $CYCLONEDDS_HOME, else nix's (from the nixpkgs dimos's
+    flake.lock pins, the same one `nix develop` gives; its out-link in the venv keeps it from garbage collection, and the
+    built package links it by its store path), else Homebrew's. None: MissingForJobError `cyclonedds_missing`."""
+    given = os.environ.get("CYCLONEDDS_HOME")
+    if given and (Path(given) / "lib").is_dir():
+        return cyclonedds_env(Path(given))
+    link = venv_dir(dimos_dir) / "cyclonedds"
+    nix = find_nix()
+    if nix is not None:
+        command = [
+            nix,
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "build",
+            "--out-link",
+            str(link),
+            f"{nixpkgs_ref(dimos_dir)}#cyclonedds",
+        ]
+        if await step(command) == 0 and (link / "lib").is_dir():
+            return cyclonedds_env(link.resolve())
+    for brewed in BREWED_CYCLONEDDS:
+        if (brewed / "lib").is_dir():
+            return cyclonedds_env(brewed.resolve())
+    raise MissingForJobError(
+        "cyclonedds_missing",
+        "The cyclonedds package is built here against the CycloneDDS C library, and none was found"
+        + (" (nix couldn't build it, see above)" if nix else "")
+        + ": install nix (Desktop's installer does), or `brew install cyclonedds`, or set CYCLONEDDS_HOME to an"
+        " install of CycloneDDS 0.10, then install again.",
+    )
 
 
 def lock_download_sizes(

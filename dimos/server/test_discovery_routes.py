@@ -17,7 +17,10 @@ pyproject.toml, uv.lock) and a fake uv."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
+import json
+import os
 from pathlib import Path
 import sys
 import textwrap
@@ -31,7 +34,7 @@ from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.server import docs, events, extras
 from dimos.server.app import ServerState, create_app
 from dimos.server.discovery import Discovery
-from dimos.server.jobs import failure_lines
+from dimos.server.jobs import Jobs, MissingForJobError, failure_lines
 from dimos.server.uploads import Uploads
 
 PYPROJECT = textwrap.dedent(
@@ -398,6 +401,7 @@ def test_extras_install_is_a_job(
         "ok": True,
         "error": None,
         "failure": [],
+        "code": None,
         "lines": len(log["lines"]),
     }
 
@@ -418,6 +422,104 @@ def test_extras_install_is_a_job(
     assert not cancelled["ok"] and cancelled["error"] == "cancelled"
     assert {j["job"] for j in client.get("/dimos/jobs").json()["jobs"]} >= {started["job"], slow}
     assert client.get("/dimos/jobs/nope/log").status_code == 404
+
+
+CYCLONEDDS_LOCK = """
+[[package]]
+name = "cyclonedds"
+version = "0.10.5"
+sdist = { url = "https://x/cyclonedds-0.10.5.tar.gz", size = 228410 }
+wheels = [{ url = "https://x/cyclonedds-0.10.5-cp310-cp310-macosx_11_0_arm64.whl", size = 1000 }]
+"""
+MAC_312 = {"platform_system": "Darwin", "platform_machine": "arm64", "python_version": "3.12"}
+
+
+def test_cyclonedds_is_built_where_it_has_no_wheel(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(CYCLONEDDS_LOCK)
+    adding = [
+        {"name": "unitree-dds", "missing": ["cyclonedds", "mcap"]},
+        {"name": "sim", "missing": []},
+    ]
+    assert extras.builds_cyclonedds(tmp_path, adding, ["unitree-dds"], MAC_312)
+    # python 3.10 has a wheel; an extra that doesn't add it doesn't build it
+    assert not extras.builds_cyclonedds(
+        tmp_path, adding, ["unitree-dds"], {**MAC_312, "python_version": "3.10"}
+    )
+    assert not extras.builds_cyclonedds(tmp_path, adding, ["sim"], MAC_312)
+
+
+def test_nixpkgs_comes_from_flake_lock_alone(tmp_path: Path) -> None:
+    assert extras.nixpkgs_ref(tmp_path) == "nixpkgs"
+    lock = {
+        "root": "root",
+        "nodes": {
+            "root": {"inputs": {"nixpkgs": "nixpkgs_2"}},
+            "nixpkgs_2": {
+                "locked": {"type": "github", "owner": "NixOS", "repo": "nixpkgs", "rev": "abc"}
+            },
+        },
+    }
+    (tmp_path / "flake.lock").write_text(json.dumps(lock))
+    assert extras.nixpkgs_ref(tmp_path) == "github:NixOS/nixpkgs/abc"
+
+
+def test_cyclonedds_from_env_then_nix_else_a_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built = tmp_path / "store" / "cyclonedds"
+    (built / "lib").mkdir(parents=True)
+    ran: list[list[str]] = []
+
+    async def nix_builds(command: list[str]) -> int:
+        ran.append(command)
+        link = Path(command[command.index("--out-link") + 1])
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(built)
+        return 0
+
+    async def nothing(command: list[str]) -> int:
+        raise AssertionError(f"ran {command}")
+
+    monkeypatch.setenv("CYCLONEDDS_HOME", str(built))
+    env = asyncio.run(extras.prepare_cyclonedds(tmp_path, nothing))
+    assert env["CYCLONEDDS_HOME"] == str(built)
+
+    monkeypatch.delenv("CYCLONEDDS_HOME")
+    monkeypatch.setattr(extras, "find_nix", lambda: "nix")
+    env = asyncio.run(extras.prepare_cyclonedds(tmp_path, nix_builds))
+    assert env["CYCLONEDDS_HOME"] == str(built.resolve())
+    assert env["CMAKE_PREFIX_PATH"].split(os.pathsep)[0] == str(built.resolve())
+    assert ran[0][-1] == "nixpkgs#cyclonedds" and "build" in ran[0]
+    # the out-link lives in the venv: a garbage collection keeps what the built package links
+    assert ran[0][ran[0].index("--out-link") + 1] == str(tmp_path / ".venv" / "cyclonedds")
+
+    monkeypatch.setattr(extras, "find_nix", lambda: None)
+    monkeypatch.setattr(extras, "BREWED_CYCLONEDDS", (tmp_path / "no-brew",))
+    with pytest.raises(MissingForJobError) as missing:
+        asyncio.run(extras.prepare_cyclonedds(tmp_path / "other", nothing))
+    assert missing.value.code == "cyclonedds_missing" and "brew install cyclonedds" in str(
+        missing.value
+    )
+
+
+def test_a_failed_preparation_ends_the_job_with_its_code(tmp_path: Path) -> None:
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def missing(*_: Any) -> dict[str, str]:
+        raise MissingForJobError("cyclonedds_missing", "no CycloneDDS")
+
+    async def go() -> Any:
+        jobs = Jobs(lambda _: None, lambda key, payload: published.append((key, payload)))
+        job = jobs.start("Install extras: dds", "extras", ["false"], tmp_path, prepare=missing)
+        while not job.done:
+            await asyncio.sleep(0.01)
+        return job
+
+    job = asyncio.run(go())
+    assert (job.ok, job.code, job.error) == (False, "cyclonedds_missing", "no CycloneDDS")
+    # the command never ran
+    assert job.lines == ["no CycloneDDS"] and job.log()["code"] == "cyclonedds_missing"
+    assert published[-1][1]["code"] == "cyclonedds_missing"
 
 
 def test_failure_is_the_last_lines() -> None:

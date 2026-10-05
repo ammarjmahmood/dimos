@@ -18,6 +18,7 @@ a module's default config, dimos's docs (docs.py), its extras (extras.py) and th
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import FastAPI, Path as PathParam, Query
@@ -294,7 +295,11 @@ def add(app: FastAPI, state: ServerState) -> None:
             "Install dimos extras, as a job (streamed output); discovery rescans when it ends",
             "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a "
             "checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> "
-            "--torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. Answers the job at once: follow "
+            "--torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. When that builds the cyclonedds package "
+            "from source (unitree-dds, dds: it has wheels for python 3.10 only), the job first finds the CycloneDDS C "
+            "library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an "
+            "out-link in the venv), else Homebrew's; none = the job fails with `code: cyclonedds_missing` before uv "
+            "runs. Answers the job at once: follow "
             "`<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log; when it ends the extras cache is dropped and "
             "discovery rescans. 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
             errors=(400, 409, 500),
@@ -316,6 +321,20 @@ def add(app: FastAPI, state: ServerState) -> None:
         if uv is None:
             raise ApiError(500, "uv isn't installed (https://docs.astral.sh/uv/)")
         wanted = list(dict.fromkeys(request.extras))
+        probed = await probe()
+        prepare = None
+        if extras.builds_cyclonedds(
+            s.dimos_dir,
+            extras.status(s.dimos_dir, probed, lock_sizes=False),
+            wanted,
+            probed.get("environment", {}),
+        ):
+
+            async def prepare(
+                _: Any, step: Callable[[list[str]], Awaitable[int]]
+            ) -> dict[str, str]:
+                return await extras.prepare_cyclonedds(s.dimos_dir, step)
+
         command = extras.install_command(
             s.dimos_dir, wanted, python_for(s.dimos_dir), config.info(s.dimos_dir).version, uv
         )
@@ -330,7 +349,13 @@ def add(app: FastAPI, state: ServerState) -> None:
             discovery.refresh("extras installed")
 
         job = jobs.start(
-            f"Install extras: {', '.join(wanted)}", "extras", command, s.dimos_dir, env, then
+            f"Install extras: {', '.join(wanted)}",
+            "extras",
+            command,
+            s.dimos_dir,
+            env,
+            then,
+            prepare,
         )
         return {"job": job.id, "command": command}
 
