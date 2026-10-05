@@ -44,18 +44,18 @@ cd ~/galaxea-dimos/install/startup_config/share/startup_config/script
 ## Blueprints
 
 ```bash
-dimos run r1pro-coordinator     # connection + coordinator + viewer
+dimos run r1pro-coordinator     # connection + coordinator + Point-LIO + viewer
 dimos run r1pro-teleop          # + chassis teleop from the viewer
 dimos run r1pro-nav             # + click-to-drive nav (costmap + A*)
 dimos run r1pro-manipulation    # + dual-arm planning (experimental)
 dimos run r1pro-planar-preview   # planar-base planning preview with fake hardware
-dimos run r1pro-pointlio --g.transport lcm   # coordinator + Point-LIO on the chassis lidar
 ```
 
 ## Point-LIO
 
-`r1pro-pointlio` places `base_link` by Point-LIO on the chassis Mid-360 instead
-of wheel odometry; `chassis_odom` keeps its name.
+Every blueprint built on `r1pro-coordinator` places `base_link` by Point-LIO on
+the chassis Mid-360 instead of wheel odometry; `chassis_odom` keeps its name.
+`r1pro-manipulation` builds on `r1pro_control` alone and keeps wheel odometry.
 The Mid-360 driver and Point-LIO are native binaries built on first run, so
 `cargo` must be on the path.
 
