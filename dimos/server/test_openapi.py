@@ -45,30 +45,6 @@ KNOWN_DIFFERENCES = {
     "get /dimos/blueprints.blueprints[]: field only here: missing_module",
 }
 
-# secrets (launch_overrides_contract.md section 5) are served here ahead of Desktop's doc
-KNOWN_DIFFERENCES |= {
-    "get /dimos/blueprints/{}/config.modules[].args[]: field only here: secret",
-    "get /dimos/global-config: field only here: secrets",
-    "put /dimos/global-config: field only here: secrets",
-    "get /dimos/runs.launch.oneOff: field only here: secrets",
-    "post /dimos/runs.oneOff: field only here: secrets",
-    "post /dimos/runs/restart.oneOff: field only here: secrets",
-}
-
-# a launch's steps and problems are stable codes with data here, read from dimos's structured log; Desktop's doc still
-# has its own words for them (Desktop moves to the codes and owns the words: launch_diagnostics_contract.md)
-CODED_DIAGNOSTICS = {
-    "steps[]": ({"code", "data"}, {"label", "detail"}),
-    "problems[]": ({"code", "data", "logger", "message", "timestamp"}, {"text", "fix", "line"}),
-}
-KNOWN_DIFFERENCES |= {
-    f"{launch}{part}: field only {side}: {field}"
-    for launch in ("get /dimos/runs.launch.", "post /dimos/runs.", "post /dimos/runs/restart.")
-    for part, (ours, theirs) in CODED_DIAGNOSTICS.items()
-    for side, fields in (("here", ours), ("in Desktop's doc", theirs))
-    for field in fields
-}
-
 
 @pytest.fixture(scope="module")
 def spec() -> dict[str, Any]:
