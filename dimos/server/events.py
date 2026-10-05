@@ -1,0 +1,102 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""/dimos/events: one JSON object per SSE `data:` line. Its types:
+
+{"type": "launch", "launch": <launch or null>}       the launch's phase changed (and first, on connect)
+{"type": "log", "runId", "record"}                   a warning+ record in the launched run's main.jsonl
+{"type": "upload", "upload"}                         an upload changed
+{"type": "upload-removed", "id"}
+{"type": "uploads", "waitingForLogin", "cleared"?}   the upload queue as a whole
+{"type": "cloud-login", "login"}                     the device login's state
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Callable
+import json
+from pathlib import Path
+from typing import Any
+
+from dimos.server import logs, runs
+
+KEEP_ALIVE_S = 15.0
+
+
+class Bus:
+    """Fan-out to every open event stream; a stream that can't keep up loses events, never blocks the server."""
+
+    def __init__(self) -> None:
+        self.queues: set[asyncio.Queue[dict[str, Any]]] = set()
+
+    def send(self, event: dict[str, Any]) -> None:
+        for queue in list(self.queues):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+    async def stream(
+        self, first: Callable[[], dict[str, Any]], keep_alive: float = KEEP_ALIVE_S
+    ) -> AsyncIterator[str]:
+        """SSE text: `first()` (taken once subscribed, so nothing is missed in between), then every event."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1024)
+        self.queues.add(queue)
+        try:
+            yield f"data: {json.dumps(first())}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), keep_alive)
+                except asyncio.TimeoutError:
+                    yield ":\n\n"
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            self.queues.discard(queue)
+
+
+async def watch_launch(bus: Bus, interval: float = 1.0) -> None:
+    """Turns the launch's phase changes and its run's new warnings and errors into events, for as long as it runs."""
+    last_key: tuple[Any, ...] | None = None
+    tailing: tuple[Path, int] | None = None
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            launch = await asyncio.to_thread(runs.current_launch)
+        except Exception:
+            continue
+        key = (launch["blueprint"], launch["phase"], launch["runId"]) if launch else None
+        if key != last_key:
+            last_key = key
+            bus.send({"type": "launch", "launch": launch})
+        log_dir = launch["logDir"] if launch else None
+        file = Path(log_dir) / "main.jsonl" if log_dir else None
+        if file is None:
+            tailing = None
+        elif tailing and tailing[0] == file:
+            page = logs.read_file(file, "", tailing[1], None, logs.Filter())
+            tailing = (file, page["offset"])
+            for record in page["records"]:
+                if logs.is_problem(record):
+                    bus.send(
+                        {
+                            "type": "log",
+                            "runId": launch["runId"] if launch else None,
+                            "record": record,
+                        }
+                    )
+        else:
+            # start at the end: only new problems are events
+            tailing = (file, file.stat().st_size if file.exists() else 0)
