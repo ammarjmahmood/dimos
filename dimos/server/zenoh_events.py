@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 NAMESPACE_ENV = "DIMOS_ZENOH_NAMESPACE"
 # Desktop's own default port (its config.rs DEFAULT_PORT)
-DESKTOP_DEFAULT_PORT = 7077
+DESKTOP_DEFAULT_PORT = 5555
 
 
 def dimos_app() -> dict[str, Any]:

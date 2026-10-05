@@ -54,7 +54,7 @@ def test_namespace_default_is_desktops(
     server_home: Path, no_namespace_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(socket, "gethostname", lambda: "Jeffs-MacBook.local")
-    assert zenoh_events.resolve_namespace() == "dimos-desktop/jeffs-macbook-local-7077"
+    assert zenoh_events.resolve_namespace() == "dimos-desktop/jeffs-macbook-local-5555"
     write_desktop_config(server_home, "desktop:\n  port: 7341\n")
     assert zenoh_events.resolve_namespace() == "dimos-desktop/jeffs-macbook-local-7341"
     write_desktop_config(server_home, "desktop:\n  port: 7341\n  namespace: lab/robot-desk\n")

@@ -29,7 +29,7 @@ import urllib.request
 from dimos.server import config
 
 URL_ENV = "DESKTOP_URL"
-DEFAULT_PORT = 7077
+DEFAULT_PORT = 5555
 FINISHED = ("succeeded", "failed", "cancelled")
 
 

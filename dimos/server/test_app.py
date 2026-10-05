@@ -84,9 +84,9 @@ def test_health_info_and_paths(
 
 def test_paths_says_where_its_events_go_on_zenoh(client: TestClient, state: ServerState) -> None:
     # serve() sets it once its publisher is open: Desktop then stops relaying the SSE stream
-    state.zenoh_namespace = "dimos-desktop/host-7077"
+    state.zenoh_namespace = "dimos-desktop/host-5555"
     assert (
-        client.get("/dimos/paths").json()["server"]["zenohNamespace"] == "dimos-desktop/host-7077"
+        client.get("/dimos/paths").json()["server"]["zenohNamespace"] == "dimos-desktop/host-5555"
     )
 
 

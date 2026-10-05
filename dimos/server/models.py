@@ -102,7 +102,7 @@ class ServerProgram(ApiModel):
     zenohNamespace: str | None = Field(
         description="The namespace this server publishes its events under (`<ns>/dimos/events/<type>`), "
         "null when it publishes on SSE only: Desktop relays the SSE stream onto zenoh only then",
-        examples=["dimos-desktop/jeffs-mac-7077"],
+        examples=["dimos-desktop/jeffs-mac-5555"],
     )
 
 
