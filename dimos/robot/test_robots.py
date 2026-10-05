@@ -40,8 +40,10 @@ def sample() -> dict[str, Any]:
         "args": {"robot_ip": IP},
         "robots": {
             "dog": {
-                "name": "Dog",
+                "name": "Vendor Dog",
                 "description": "a dog",
+                "type": "dog",
+                "manufacturer": "Vendor",
                 "dirs": ["dimos/robot/vendor/dog"],
                 "recommended_app": {
                     "id": "dog-app",
@@ -148,6 +150,8 @@ def test_a_blueprint_listed_twice(root: Path) -> None:
     doc["robots"]["cat"] = {
         "name": "Cat",
         "description": "a cat",
+        "type": None,
+        "manufacturer": None,
         "dirs": [],
         "blueprints": {"dog-basic": {"title": "x", "description": "y", "tags": []}},
     }
@@ -283,3 +287,57 @@ def test_the_catalog_names_each_blueprints_robot_from_robots_json() -> None:
     assert robot_of(all_blueprints["mid360-realsense-record"]) == "sensors"
     assert robot_of(all_blueprints["unitree-go2-basic"]) == "go2"
     assert robot_of("dimos.agents.demo_agent:demo_agent") is None
+
+
+def robot(**fields: Any) -> dict[str, Any]:
+    return {
+        "name": "X",
+        "description": "x",
+        "type": None,
+        "manufacturer": None,
+        "dirs": [],
+        "blueprints": {},
+        **fields,
+    }
+
+
+def test_type_and_manufacturer_follow_the_code() -> None:
+    doc = sample()
+    doc["robots"]["cat"] = robot(
+        name="Other Cat", type="dog", manufacturer="Other", dirs=["dimos/robot/vendor/cat"]
+    )
+    doc["robots"]["kit"] = robot(
+        name="Kit", type="wheeled", manufacturer="Kitco", dirs=["dimos/robot/diy/kit"]
+    )
+    doc["robots"]["claw"] = robot(name="Claw", type="arm", dirs=["dimos/robot/manipulators/claw"])
+    doc["robots"]["cam"] = robot(name="Cam", type="drone", dirs=["dimos/hardware/cam"])
+    found = robots.kind_problems(doc)
+    assert any("Kit" in p and "doesn't start with it" in p for p in found)
+    assert any("robots.kit" in p and "(DIY)" in p for p in found)
+    assert any("dimos/robot/vendor (dog: 'Vendor', cat: 'Other')" in p for p in found)
+    assert any("robots.claw" in p and "arms group" in p for p in found)
+    assert any("robots.cam.type" in p and "under dimos/robot" in p for p in found)
+    assert robots.kind_problems(sample()) == []
+
+
+def test_type_and_manufacturer_are_required(root: Path) -> None:
+    doc = sample()
+    del doc["robots"]["dog"]["type"]
+    doc["robots"]["dog"]["manufacturer"] = ""
+    found = robots.problems(doc, REGISTRY, root)
+    assert any("'type' is a required property" in p for p in found)
+    assert any("manufacturer" in p for p in found)
+    doc = sample()
+    doc["robots"]["dog"]["type"] = "boat"
+    assert any("['type']" in p for p in robots.problems(doc, REGISTRY, root))
+
+
+def test_vendor_dir() -> None:
+    assert robots.vendor_dir("dimos/robot/unitree/go2") == "dimos/robot/unitree"
+    assert (
+        robots.vendor_dir("dimos/experimental/robot/bosdyn/spot")
+        == "dimos/experimental/robot/bosdyn"
+    )
+    assert robots.vendor_dir("dimos/robot/manipulators/xarm") is None
+    assert robots.vendor_dir("dimos/robot/drone") is None
+    assert robots.vendor_dir("dimos/hardware/sensors") is None

@@ -149,6 +149,8 @@
       "required": [
         "name",
         "description",
+        "type",
+        "manufacturer",
         "dirs",
         "blueprints"
       ],
@@ -159,6 +161,25 @@
         },
         "description": {
           "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "description": "What kind of robot it is: dog (a legged quadruped), wheeled, humanoid, arm or drone; null when it isn't a robot dimos drives (sensors, demos, simulators, coordinators). Desktop's robot picker shows only the robots with a type, with its icon.",
+          "enum": [
+            "dog",
+            "wheeled",
+            "humanoid",
+            "arm",
+            "drone",
+            null
+          ]
+        },
+        "manufacturer": {
+          "description": "Who makes it, as its `name` starts (\"Unitree\" for \"Unitree Go2\"); null for DIY, open-source and generic hardware, and for what isn't a robot. Robots in one vendor folder (dimos/robot/<vendor>/<robot>) share it.",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1
         },
         "group": {

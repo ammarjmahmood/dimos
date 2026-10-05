@@ -24,7 +24,9 @@ all_blueprints.py current checks it too (`problems`), so the two can't drift:
   (c) every listed blueprint is registered in all_blueprints.py;
   (d) every arg names a real GlobalConfig field, or (`module_arg_problems`, which imports the blueprints) a real
       config field of a module in that blueprint;
-  (e) it matches robots.schema.json, and its tags, groups and starter ranks are consistent.
+  (e) it matches robots.schema.json, and its tags, groups and starter ranks are consistent;
+  (f) each robot's `type` (dog, wheeled, humanoid, arm, drone, or null: not a robot) and `manufacturer` agree with
+      where its code lives (`kind_problems`).
 
 dimOS Desktop reads it per tag through dimos.yaml's `robots:` (no server needed), or resolved from the dimos server's
 `GET /dimos/robots` (`resolved`).
@@ -251,6 +253,69 @@ def consistency_problems(doc: dict[str, Any]) -> list[str]:
     return problems
 
 
+# folders under a robot root that group robots by kind or origin, not by who makes them
+KIND_DIRS = {"manipulators", "diy"}
+ROBOT_ROOTS = (ROBOT_ROOT, "dimos/experimental/robot")
+
+
+def vendor_dir(directory: str) -> str | None:
+    """`dimos/robot/unitree/go2` -> `dimos/robot/unitree` (the folder of the company that makes it); None for a robot
+    at a robot root, in a kind folder (manipulators, diy), or outside the robot roots."""
+    for root in ROBOT_ROOTS:
+        if _inside(directory, root) and directory != root:
+            parts = directory[len(root) + 1 :].split("/")
+            if len(parts) >= 2 and parts[0] not in KIND_DIRS:
+                return f"{root}/{parts[0]}"
+    return None
+
+
+def kind_problems(doc: dict[str, Any]) -> list[str]:
+    """(f) Each robot's `type` and `manufacturer` agree with the code's layout: a manufacturer is how the robot's name
+    starts; robots in one vendor folder share a manufacturer (and have one); DIY robots have none; arms are the `arms`
+    group's robots; and something with no code under a robot root (dimos/robot, dimos/experimental/robot) isn't a robot
+    (type null)."""
+    problems = []
+    vendors: dict[str, list[tuple[str, Any]]] = {}
+    for robot_id, robot in doc["robots"].items():
+        where = f"robots.{robot_id}"
+        maker, kind = robot["manufacturer"], robot["type"]
+        if maker is not None and not robot["name"].startswith(maker + " "):
+            problems.append(
+                f"{where}.manufacturer is {maker!r}, but its name {robot['name']!r} doesn't start with it: name it "
+                f'"{maker} <model>", or fix the manufacturer'
+            )
+        for directory in robot["dirs"]:
+            vendor = vendor_dir(directory)
+            if vendor is not None:
+                vendors.setdefault(vendor, []).append((robot_id, maker))
+            if any(_inside(directory, f"{root}/diy") for root in ROBOT_ROOTS) and maker is not None:
+                problems.append(
+                    f"{where}.manufacturer is {maker!r}, but it lives in {directory} (DIY): make it null"
+                )
+        in_arms = robot.get("group") == "arms"
+        if kind == "arm" and not in_arms:
+            problems.append(f'{where}.type is "arm": put it in the arms group ("group": "arms")')
+        if in_arms and kind not in ("arm", None):
+            problems.append(
+                f'{where} is in the arms group, so its type is "arm" (or null if it isn\'t a robot)'
+            )
+        if kind is not None and not any(
+            _inside(d, root) for d in robot["dirs"] for root in ROBOT_ROOTS
+        ):
+            problems.append(
+                f"{where}.type is {kind!r}, but none of its dirs is under {' or '.join(ROBOT_ROOTS)}: a robot's code "
+                "lives there (make the type null if it isn't a robot)"
+            )
+    for vendor, members in sorted(vendors.items()):
+        makers = {maker for _, maker in members}
+        if None in makers or len(makers) > 1:
+            listing = ", ".join(f"{robot_id}: {maker!r}" for robot_id, maker in members)
+            problems.append(
+                f"the robots in {vendor} ({listing}) are made by one company: give them the same manufacturer"
+            )
+    return problems
+
+
 def _guess(name: str, options: Any) -> str:
     guess = difflib.get_close_matches(name, list(options), n=1)
     return f" (did you mean {guess[0]}?)" if guess else ""
@@ -313,6 +378,7 @@ def problems(
         *directory_problems(doc, root),
         *blueprint_problems(doc, registry),
         *consistency_problems(doc),
+        *kind_problems(doc),
     ]
 
 

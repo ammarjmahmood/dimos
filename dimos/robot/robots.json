@@ -165,6 +165,8 @@
     "go2": {
       "name": "Unitree Go2",
       "description": "Unitree's quadruped: camera, lidar, WebRTC, DDS or a zenoh bridge.",
+      "type": "dog",
+      "manufacturer": "Unitree",
       "dirs": [
         "dimos/robot/unitree/go2"
       ],
@@ -844,6 +846,8 @@
     "g1": {
       "name": "Unitree G1",
       "description": "Unitree's humanoid.",
+      "type": "humanoid",
+      "manufacturer": "Unitree",
       "dirs": [
         "dimos/robot/unitree/g1"
       ],
@@ -1046,6 +1050,8 @@
     "r1pro": {
       "name": "Galaxea R1 Pro",
       "description": "Galaxea's wheeled two-arm robot, over ROS.",
+      "type": "wheeled",
+      "manufacturer": "Galaxea",
       "dirs": [
         "dimos/robot/galaxea/r1pro"
       ],
@@ -1103,6 +1109,8 @@
     "spot": {
       "name": "Boston Dynamics Spot",
       "description": "Boston Dynamics' quadruped (experimental support).",
+      "type": "dog",
+      "manufacturer": "Boston Dynamics",
       "dirs": [
         "dimos/experimental/robot/bosdyn/spot"
       ],
@@ -1158,6 +1166,8 @@
     "drone": {
       "name": "Drone",
       "description": "A MAVLink drone (PX4 or ArduPilot) with a video stream.",
+      "type": "drone",
+      "manufacturer": null,
       "dirs": [
         "dimos/robot/drone"
       ],
@@ -1205,6 +1215,8 @@
     "m20": {
       "name": "DeepRobotics M20",
       "description": "DeepRobotics' wheel-legged quadruped; dimos runs on the robot.",
+      "type": "dog",
+      "manufacturer": "DeepRobotics",
       "dirs": [
         "dimos/robot/deeprobotics/m20"
       ],
@@ -1236,6 +1248,8 @@
     "alfred": {
       "name": "Alfred",
       "description": "A DIY mobile base with a Mid-360 and a RealSense mast.",
+      "type": "wheeled",
+      "manufacturer": null,
       "dirs": [
         "dimos/robot/diy/alfred"
       ],
@@ -1286,6 +1300,8 @@
     "xarm": {
       "name": "UFactory xArm",
       "description": "UFactory xArm6, xArm7 and Lite6 arms.",
+      "type": "arm",
+      "manufacturer": "UFactory",
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/xarm"
@@ -1753,6 +1769,8 @@
     "piper": {
       "name": "AgileX Piper",
       "description": "AgileX's 6-axis arm, over CAN.",
+      "type": "arm",
+      "manufacturer": "AgileX",
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/piper"
@@ -1852,6 +1870,8 @@
     "openyam": {
       "name": "OpenYAM",
       "description": "The OpenYAM arm, over CAN.",
+      "type": "arm",
+      "manufacturer": null,
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/openyam"
@@ -1921,6 +1941,8 @@
     "dual_openyam": {
       "name": "Dual OpenYAM",
       "description": "Two OpenYAM arms as one robot.",
+      "type": "arm",
+      "manufacturer": null,
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/dual_openyam"
@@ -1960,6 +1982,8 @@
     "openarm": {
       "name": "OpenArm",
       "description": "The bimanual OpenArm, over CAN.",
+      "type": "arm",
+      "manufacturer": null,
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/openarm"
@@ -1999,6 +2023,8 @@
     "a1z": {
       "name": "Galaxea A1Z",
       "description": "Galaxea's A1Z arm, over CAN.",
+      "type": "arm",
+      "manufacturer": "Galaxea",
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/a1z"
@@ -2069,6 +2095,8 @@
     "a750": {
       "name": "A-750",
       "description": "The A-750 arm, over a serial port.",
+      "type": "arm",
+      "manufacturer": null,
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/a750"
@@ -2100,6 +2128,8 @@
     "coordinators": {
       "name": "Coordinators and mocks",
       "description": "Arm combinations, mobile bases and mock hardware behind dimos's ControlCoordinator.",
+      "type": null,
+      "manufacturer": null,
       "group": "arms",
       "dirs": [
         "dimos/robot/manipulators/common",
@@ -2235,6 +2265,8 @@
     "sensors": {
       "name": "Sensors",
       "description": "Sensors on their own: Livox Mid-360 lidars, RealSense and other cameras, and the rigs that carry them.",
+      "type": null,
+      "manufacturer": null,
       "dirs": [
         "dimos/robot/assembly",
         "dimos/hardware/sensors"
@@ -2397,6 +2429,8 @@
     "habitat": {
       "name": "Habitat simulator",
       "description": "A simulated robot in Meta's Habitat scenes: no hardware.",
+      "type": null,
+      "manufacturer": null,
       "dirs": [
         "dimos/simulation/habitat"
       ],
@@ -2459,6 +2493,8 @@
     "demos": {
       "name": "Demos",
       "description": "No robot needed: agents, skills and tools to try dimos.",
+      "type": null,
+      "manufacturer": null,
       "dirs": [],
       "blueprints": {
         "demo-agent": {

@@ -3380,6 +3380,21 @@
             ],
             "title": "Group"
           },
+          "manufacturer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who makes it (how its name starts), or null (DIY, open-source, generic, not a robot)",
+            "examples": [
+              "Unitree"
+            ],
+            "title": "Manufacturer"
+          },
           "name": {
             "description": "Its name",
             "examples": [
@@ -3398,11 +3413,35 @@
               }
             ],
             "description": "The app to install for it, or null"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dog",
+                  "wheeled",
+                  "humanoid",
+                  "arm",
+                  "drone"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What kind of robot: dog, wheeled, humanoid, arm or drone; null when it isn't a robot dimos drives (sensors, demos, simulators, coordinators)",
+            "examples": [
+              "dog"
+            ],
+            "title": "Type"
           }
         },
         "required": [
           "name",
           "description",
+          "type",
+          "manufacturer",
           "group",
           "dirs",
           "recommended_app",

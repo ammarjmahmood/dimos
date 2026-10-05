@@ -378,6 +378,15 @@ class RobotBlueprint(ApiModel):
 class Robot(ApiModel):
     name: str = Field(description="Its name", examples=["Unitree Go2"])
     description: str = Field(description="What it is, in a sentence")
+    type: Literal["dog", "wheeled", "humanoid", "arm", "drone"] | None = Field(
+        description="What kind of robot: dog, wheeled, humanoid, arm or drone; null when it isn't a robot dimos drives "
+        "(sensors, demos, simulators, coordinators)",
+        examples=["dog"],
+    )
+    manufacturer: str | None = Field(
+        description="Who makes it (how its name starts), or null (DIY, open-source, generic, not a robot)",
+        examples=["Unitree"],
+    )
     group: str | None = Field(
         description="A key of `groups` it is shown under, or null", examples=["arms"]
     )
