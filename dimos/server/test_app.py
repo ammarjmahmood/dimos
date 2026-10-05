@@ -581,6 +581,7 @@ def test_a_launch_with_its_own_global_and_module_config_and_a_secret(
     # the secret is in the environment, never in argv, the launch log, the record or the answer
     assert seen["argv"] == [
         "--n-workers=8",
+        "--rerun-open=web",
         "run",
         "unitree-go2",
         "--camera.codec=jpeg",
@@ -589,9 +590,9 @@ def test_a_launch_with_its_own_global_and_module_config_and_a_secret(
     ]
     assert seen["env"]["GO2CONNECTION__AES_128_KEY"] == "saved-key"
     assert launched["output"].startswith(
-        "$ GO2CONNECTION__AES_128_KEY=••• dimos --n-workers=8 run unitree-go2"
+        "$ GO2CONNECTION__AES_128_KEY=••• dimos --n-workers=8 --rerun-open=web run unitree-go2"
     )
-    assert launched["overrides"] == {"n_workers": 8}
+    assert launched["overrides"] == {"n_workers": 8, "rerun_open": "web"}
     assert launched["modules"] == {
         "camera": {"codec": "jpeg", "fps": 20},
         "go2connection": {"aes_128_key": "•••", "lidar": False},
