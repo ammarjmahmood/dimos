@@ -27,10 +27,11 @@ Agent <-> isolated Zenoh endpoint <-> RawRobotBridge <-> robot streams (autoconn
 | `color_image` in | `camera/jpeg` | any camera |
 | `depth_image` in | `camera/depth_f32`, `camera/depth_info/json` | depth cameras |
 | `camera_info` in | `camera_info/json` | any camera |
+| `overview_image`, `overview_camera_info` in | `overview/jpeg`, `overview/camera_info/json` | a fixed workspace camera (MuJoCo `overview_camera_name`) |
 | `lidar` in | `lidar/xyz_f32` | lidar robots |
 | `odom` in | `odom/json` | mobile bases (the MuJoCo sim also publishes one) |
 | `coordinator_joint_state` in | `arm/state/json` | ControlCoordinator arms |
-| `tf` in, configured frames only | `camera_pose/json`, `ee_pose` in `arm/state/json` | when configured |
+| `tf` in, configured frames only | `camera_pose/json`, `overview/camera_pose/json`, `ee_pose` in `arm/state/json` | when configured |
 | `cmd_vel` out | `cmd_vel/json` | mobile bases |
 | `ee_twist_command` out | `arm/twist/json` | arms with an `eef_twist` task |
 | `gripper_command` out | `arm/gripper/json` | arms with a gripper task |
@@ -43,7 +44,7 @@ single zero is sent: the same deadman for the base and the arm. Gripper openings
 (0 closed, 1 open) pass straight through. Malformed commands are dropped.
 
 Robot-specific settings default to off and are set per suite through `module_env`:
-`RAWROBOTBRIDGE__CAMERA_FRAME`, `__EE_FRAME`, `__GRIPPER_JOINT` and
+`RAWROBOTBRIDGE__CAMERA_FRAME`, `__OVERVIEW_FRAME`, `__EE_FRAME`, `__GRIPPER_JOINT` and
 `__GRIPPER_RANGE`. The xArm sim blueprint has MuJoCo publish its `link_tcp` site on
 TF (`tracked_sites`) so the bridge can report the measured TCP pose.
 

@@ -142,6 +142,7 @@ def test_deadman_rejects_non_positive_limits(kwargs: dict[str, float]) -> None:
 def bridge() -> Iterator[RawRobotBridge]:
     module = RawRobotBridge(
         camera_frame="wrist_optical",
+        overview_frame="overview_optical",
         ee_frame="link_tcp",
         gripper_joint="arm/gripper",
         gripper_range=(0.0, 0.85),
@@ -268,6 +269,8 @@ def test_depth_round_trip_preserves_metric_values_and_invalid_pixels() -> None:
             "xarm-sim",
             {
                 "color_image",
+                "overview_image",
+                "overview_camera_info",
                 "depth_image",
                 "camera_info",
                 "coordinator_joint_state",
@@ -301,3 +304,17 @@ def test_one_bridge_wires_to_whatever_the_robot_provides(robot: str, connected: 
         if (name, type_, opposite[direction]) in provided or (name, type_, "inout") in provided
     }
     assert wired == connected
+
+
+def test_overview_camera_has_its_own_topics(bridge: RawRobotBridge) -> None:
+    overview = Transform(
+        translation=Vector3(1.7, -0.7, 0.8),
+        rotation=Quaternion(0, 0, 0, 1),
+        frame_id="world",
+        child_frame_id="overview_optical",
+        ts=2.0,
+    )
+    bridge._on_tf(TFMessage(overview))
+    (pose,) = _published(bridge, "overview/camera_pose/json")
+    assert pose["xyz"] == [1.7, -0.7, 0.8] and pose["t"] == 2.0
+    assert not _published(bridge, "camera_pose/json")

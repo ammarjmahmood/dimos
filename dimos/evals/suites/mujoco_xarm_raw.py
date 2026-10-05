@@ -52,6 +52,10 @@ Observations (binary payloads carry an attachment {"t": unix_seconds}):
   robot/camera_info/json   {"width", "height", "K"}
   robot/camera_pose/json   {"t", "frame", "xyz", "quaternion_xyzw"}: wrist optical pose
                            in world; optical +Z forward, +X image right, +Y image down
+  robot/overview/jpeg      fixed external RGB camera viewing the whole workspace, 5 Hz,
+                           no depth; use it to check an object after a grasp or lift
+  robot/overview/camera_info/json, robot/overview/camera_pose/json
+                           the overview's own intrinsics and pose (different from the wrist)
 
 Commands (fire-and-forget: no IDs, acknowledgements or status):
   robot/arm/twist/json     {"vx", "vy", "vz" (m/s), "wx", "wy", "wz" (rad/s), "t" (s)}
@@ -80,12 +84,13 @@ SUITE: Suite = [
             raw_guide=False,
             module_env={
                 "RAWROBOTBRIDGE__CAMERA_FRAME": "wrist_camera_color_optical_frame",
+                "RAWROBOTBRIDGE__OVERVIEW_FRAME": "env_camera_color_optical_frame",
                 "RAWROBOTBRIDGE__EE_FRAME": "link_tcp",
                 "RAWROBOTBRIDGE__GRIPPER_JOINT": "arm/gripper",
                 "RAWROBOTBRIDGE__GRIPPER_RANGE": "[0.0, 0.85]",
             },
             robot_context=local_robot_context("xarm7"),
-            ready_streams=("color_image", "coordinator_joint_state"),
+            ready_streams=("color_image", "overview_image", "coordinator_joint_state"),
             scene=LfsPath("xarm7/scene.xml"),
             tracked_bodies=("cup",),
         ),
