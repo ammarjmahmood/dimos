@@ -21,7 +21,7 @@ re-derived from the registry and the pid on every call, so a restarted server pi
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
@@ -33,7 +33,8 @@ import time
 from typing import Any
 
 from dimos.core.run_registry import is_pid_alive
-from dimos.server import config, diagnose, logs
+from dimos.server import config, diagnose, logs, overrides as overrides_
+from dimos.server.overrides import LaunchOverrides, ModuleValues
 
 
 class RunError(Exception):
@@ -46,6 +47,23 @@ class StillRunningError(RunError):
 
 def launch_file() -> Path:
     return config.state_file("launch.json")
+
+
+@dataclass
+class LaunchConfig:
+    """What a launch runs with: the effective GlobalConfig and module config, and what the request itself set."""
+
+    global_: dict[str, Any] = field(default_factory=dict)
+    modules: ModuleValues = field(default_factory=dict)
+    one_off: LaunchOverrides = field(default_factory=LaunchOverrides)
+
+    def secrets(self) -> list[str]:
+        return overrides_.secret_paths(self.global_, self.modules, self.one_off.secrets)
+
+
+def secrets_file() -> Path:
+    """The real values of the last launch's secrets (owner-only), so a restart can pass them again."""
+    return config.server_dir() / "launch_secrets.json"
 
 
 def launch_log() -> Path:
@@ -157,29 +175,103 @@ def current_launch() -> dict[str, Any] | None:
         "logDir": entry["log_dir"] if entry else None,
         "error": error,
         "overrides": overrides if isinstance(overrides, dict) else {},
+        "modules": record.get("modules") if isinstance(record.get("modules"), dict) else {},
+        "oneOff": LaunchOverrides.from_json(record.get("one_off")).to_json(),
         "steps": diagnose.steps(records, phase),
         "problems": problems,
     }
 
 
-def last_launch_args() -> tuple[str, dict[str, Any]] | None:
-    """The blueprint and global config of the last launch (to launch it again), even after it stopped."""
+def last_launch_args() -> tuple[str, LaunchConfig] | None:
+    """The blueprint and config of the last launch (to launch it again the same way), even after it stopped; its
+    secrets come back from the secrets file."""
     try:
         record = json.loads(launch_file().read_text())
-        overrides = record.get("overrides")
-        return str(record["blueprint"]), overrides if isinstance(overrides, dict) else {}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        blueprint = str(record["blueprint"])
+    except (OSError, ValueError, KeyError, TypeError):
         return None
+    try:
+        real = json.loads(secrets_file().read_text()) if record.get("secret") else {}
+    except (OSError, ValueError):
+        real = {}
+    one_off = LaunchOverrides.from_json(record.get("one_off"))
+
+    def restored(values: Any, saved: Any) -> dict[str, Any]:
+        values = dict(values) if isinstance(values, dict) else {}
+        saved = saved if isinstance(saved, dict) else {}
+        return {
+            k: saved[k] if v == overrides_.HIDDEN and k in saved else v for k, v in values.items()
+        }
+
+    def restored_modules(values: Any, saved: Any) -> ModuleValues:
+        values = values if isinstance(values, dict) else {}
+        saved = saved if isinstance(saved, dict) else {}
+        return {m: restored(f, saved.get(m)) for m, f in values.items()}
+
+    return blueprint, LaunchConfig(
+        restored(record.get("overrides"), real.get("global")),
+        restored_modules(record.get("modules"), real.get("modules")),
+        LaunchOverrides(
+            restored(one_off.global_, real.get("one_off_global")),
+            restored_modules(one_off.modules, real.get("one_off_modules")),
+            one_off.secrets,
+        ),
+    )
 
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[str, Any]:
-    """`dimos [--key value ...] run <blueprint>` with GlobalConfig `overrides`, in the foreground of its own session
-    (not `--daemon`: on macOS the daemon's post-fork build segfaults inside CoreFoundation). The launch keeps its
-    overrides, so it can be launched again the same way."""
+def run_args(blueprint: str, launch: LaunchConfig) -> list[str]:
+    """`[--key=value ...] run <blueprint> [--<module>.<field>=value ...]`, without the secrets (they go in the
+    environment, see run_env)."""
+    global_, modules = overrides_.without(launch.global_, launch.modules, launch.secrets())
+    return [
+        *config.global_config_flags(global_),
+        "run",
+        blueprint,
+        *overrides_.module_flags(modules),
+    ]
+
+
+def run_env(launch: LaunchConfig) -> dict[str, str]:
+    return overrides_.secret_env(launch.global_, launch.modules, launch.secrets())
+
+
+def write_secrets(launch: LaunchConfig) -> None:
+    """The real secret values, owner-only, created fresh; no file when the launch has none."""
+    secrets_file().unlink(missing_ok=True)
+    paths = launch.secrets() + overrides_.secret_paths(
+        launch.one_off.global_, launch.one_off.modules, launch.one_off.secrets
+    )
+    if not paths:
+        return
+
+    def only(values: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in values.items() if k in paths}
+
+    def only_modules(values: ModuleValues) -> ModuleValues:
+        return {m: {k: v for k, v in f.items() if f"{m}.{k}" in paths} for m, f in values.items()}
+
+    secrets_file().parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(secrets_file(), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        json.dump(
+            {
+                "global": only(launch.global_),
+                "modules": only_modules(launch.modules),
+                "one_off_global": only(launch.one_off.global_),
+                "one_off_modules": only_modules(launch.one_off.modules),
+            },
+            handle,
+        )
+
+
+def start(dimos_dir: Path, blueprint: str, launch_config: LaunchConfig) -> dict[str, Any]:
+    """`dimos [--key=value ...] run <blueprint> [--<module>.<field>=value ...]`, secrets in its environment, in the
+    foreground of its own session (not `--daemon`: on macOS the daemon's post-fork build segfaults inside
+    CoreFoundation). The launch keeps its config (secrets shown as •••), so it can be launched again the same way."""
     previous = current_launch()
     if previous and previous["phase"] in ("starting", "running"):
         raise StillRunningError(
@@ -188,9 +280,11 @@ def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[st
     program = config.dimos_bin(dimos_dir)
     if not program.exists():
         raise RunError(f"no dimos at {dimos_dir} (no {program})")
-    args = [*config.global_config_flags(overrides), "run", blueprint]
+    args = run_args(blueprint, launch_config)
+    secret_env = run_env(launch_config)
+    shown_env = "".join(f"{name}={overrides_.HIDDEN} " for name in secret_env)
     launch_log().parent.mkdir(parents=True, exist_ok=True)
-    launch_log().write_text(f"$ dimos {' '.join(args)}\n")
+    launch_log().write_text(f"$ {shown_env}dimos {' '.join(args)}\n")
     shutil.rmtree(launch_records_dir(), ignore_errors=True)
     venv = config.venv_dir(dimos_dir)
     env = {
@@ -202,6 +296,7 @@ def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[st
         "NO_COLOR": "1",
         # its structured log starts here, so even what it logs before it has a run id can be read
         "DIMOS_RUN_LOG_DIR": str(launch_records_dir()),
+        **secret_env,
     }
     with launch_log().open("a") as log:
         child = subprocess.Popen(
@@ -216,12 +311,23 @@ def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[st
         )
     # reap it, so a finished run doesn't linger as a zombie that still looks alive
     threading.Thread(target=child.wait, daemon=True).start()
+    write_secrets(launch_config)
+    paths = launch_config.secrets()
+    global_, modules = overrides_.redact(launch_config.global_, launch_config.modules, paths)
+    one_off = launch_config.one_off
+    one_off_paths = overrides_.secret_paths(one_off.global_, one_off.modules, one_off.secrets)
+    one_off_global, one_off_modules = overrides_.redact(
+        one_off.global_, one_off.modules, one_off_paths
+    )
     record = {
         "blueprint": blueprint,
         "started_at": now_iso(),
         "pid": child.pid,
         "ever_ran": False,
-        "overrides": overrides,
+        "overrides": global_,
+        "modules": modules,
+        "one_off": LaunchOverrides(one_off_global, one_off_modules, one_off.secrets).to_json(),
+        "secret": sorted(set(paths) | set(one_off_paths)),
     }
     config.write_atomic(launch_file(), json.dumps(record))
     launch = current_launch()

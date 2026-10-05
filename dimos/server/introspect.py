@@ -106,6 +106,35 @@ def choices(kind: Any) -> list[Any] | None:
     return None
 
 
+def field_schema(kind: Any) -> dict[str, Any] | None:
+    """A field's JSON Schema (self-contained: its $refs point into its own $defs), or None when its values aren't JSON
+    (a callable, an object) or it is a nested model (`dimos run` sets those field by field, not as a whole)."""
+    from pydantic import BaseModel, TypeAdapter
+
+    def has_model(annotation: Any) -> bool:
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            return True
+        return any(has_model(arg) for arg in typing.get_args(annotation))
+
+    if has_model(kind):
+        return None
+    try:
+        return TypeAdapter(kind).json_schema()
+    except Exception:
+        return None
+
+
+def json_safe(kind: Any, value: Any) -> bool:
+    """Whether a field's default survives a trip through JSON (so a value read from a form means the same)."""
+    from pydantic import TypeAdapter
+
+    try:
+        json.dumps(TypeAdapter(kind).dump_python(value, mode="json"))
+        return True
+    except Exception:
+        return False
+
+
 def config_args(module: Any, overrides: dict[str, Any]) -> list[dict[str, Any]]:
     """A module class's config fields: name, type, default, description, and the blueprint's value if it sets one."""
     kind = typing.get_type_hints(module).get("config")
@@ -143,6 +172,10 @@ def config_args(module: Any, overrides: dict[str, Any]) -> list[dict[str, Any]]:
         options = choices(field.annotation)
         if options is not None:
             entry["choices"] = options
+        schema = field_schema(field.annotation)
+        entry["json_compatible"] = schema is not None and json_safe(field.annotation, default)
+        if schema is not None:
+            entry["schema"] = schema
         if name in overrides:
             entry["value"] = jsonable(overrides[name])
         args.append(entry)

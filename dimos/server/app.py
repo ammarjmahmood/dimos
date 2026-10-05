@@ -28,6 +28,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Annotated, Any, Literal
 
@@ -37,7 +38,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Str
 from pydantic import BeforeValidator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dimos.server import blueprints, config, discovery_routes, events, logs, models, runs
+from dimos.server import (
+    blueprints,
+    config,
+    discovery_routes,
+    events,
+    logs,
+    models,
+    overrides as launch_overrides,
+    runs,
+)
 from dimos.server.discovery import Discovery
 from dimos.server.jobs import Jobs
 from dimos.server.openapi import document, operation_id, route_doc
@@ -314,7 +324,41 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
     )
     async def blueprint_config(name: BlueprintParam) -> Any:
         check_name(name)
-        return await introspected(f"config:{name}", ["config", name])
+        value = await introspected(f"config:{name}", ["config", name])
+        return blueprints.shown_config(name, value)
+
+    @app.put(
+        "/dimos/blueprints/{name}/config",
+        response_model=models.BlueprintConfig,
+        **route_doc(
+            "blueprints",
+            "Save Desktop's module config for a blueprint; it becomes `--<module>.<field>=value` on every launch of it",
+            "Replaces config.yaml's `dimos.module_config.<name>` with `overrides` ({module: {field: value}}; null "
+            "drops a field, a module left empty is dropped, all empty removes the blueprint's entry), after checking "
+            "each module and field against the blueprint's config (as a launch's `overrides.modules`). A secret sent "
+            "as ••• keeps its saved value. 400 for a bad name or a value its field refuses. Answers like GET.",
+            errors=(400, 500),
+            answer="`{ name, modules: [...], overrides }`, with the saved module config",
+        ),
+    )
+    async def put_blueprint_config(
+        name: BlueprintParam, update: models.BlueprintConfigUpdate
+    ) -> Any:
+        check_name(name)
+        value = await introspected(f"config:{name}", ["config", name])
+        saved = config.module_config(name)
+        values = {
+            module: launch_overrides.keep_hidden(
+                fields, saved.get(module, {}), launch_overrides.is_secret_name
+            )
+            for module, fields in update.overrides.items()
+        }
+        try:
+            launch_overrides.validate_modules(values, value, "overrides")
+        except ValueError as error:
+            raise ApiError(400, str(error))
+        config.set_module_config(name, launch_overrides.merge_modules({}, values))
+        return blueprints.shown_config(name, value)
 
     @app.get(
         "/dimos/catalog",
@@ -366,7 +410,13 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             return await asyncio.to_thread(blueprints.global_config_schema)
 
         value: dict[str, Any] = await s.cache.get("gc", INTROSPECT_TTL_S, compute)
-        return {**value, "overrides": config.global_config_overrides()}
+        secrets = [
+            key
+            for key in value["schema"].get("properties", {})
+            if launch_overrides.is_secret_name(key)
+        ]
+        shown, _ = launch_overrides.redact(config.global_config_overrides(), {}, secrets)
+        return {**value, "overrides": shown, "secrets": secrets}
 
     @app.get(
         "/dimos/global-config",
@@ -397,8 +447,20 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         ),
     )
     async def put_global_config(update: models.GlobalConfigUpdate) -> dict[str, Any]:
-        checked_overrides(update.overrides)
-        config.set_global_config_overrides(update.overrides)
+        for key in update.overrides:
+            if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+                raise ApiError(400, f"bad config key: {key}")
+        # ••• for a secret: keep the saved value
+        values = launch_overrides.keep_hidden(
+            update.overrides, config.global_config_overrides(), launch_overrides.is_secret_name
+        )
+        schema = (await global_config_value())["schema"]
+        try:
+            launch_overrides.validate_global(values, schema, "overrides")
+        except ValueError as error:
+            raise ApiError(400, str(error))
+        checked_overrides(values)
+        config.set_global_config_overrides(values)
         return await global_config_value()
 
     @app.get(
@@ -418,6 +480,45 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "runs": await asyncio.to_thread(runs.registry_runs),
             "launch": await asyncio.to_thread(runs.current_launch),
         }
+
+    async def launch_config_of(request: models.LaunchRequest) -> runs.LaunchConfig:
+        """Desktop's saved global config and this blueprint's saved module config, the request's own values on top
+        (checked against dimos's schemas first; null drops a saved value, ••• keeps it), plus `replay`."""
+        try:
+            one_off = launch_overrides.parse(request.overrides)
+        except ValueError as error:
+            raise ApiError(400, str(error))
+        one_off.global_ = {k: v for k, v in one_off.global_.items() if v != launch_overrides.HIDDEN}
+        one_off.modules = {
+            m: {k: v for k, v in f.items() if v != launch_overrides.HIDDEN}
+            for m, f in one_off.modules.items()
+        }
+        if request.replay:
+            one_off.global_["replay"] = True
+        try:
+            if one_off.global_:
+                schema = (await global_config_value())["schema"]
+                launch_overrides.validate_global(
+                    one_off.global_, schema, "overrides.global", one_off.secrets
+                )
+            if one_off.modules:
+                value = await introspected(
+                    f"config:{request.blueprint}", ["config", request.blueprint]
+                )
+                launch_overrides.validate_modules(
+                    one_off.modules, value, "overrides.modules", one_off.secrets
+                )
+        except ValueError as error:
+            raise ApiError(400, str(error))
+        effective = launch_overrides.merge(config.global_config_overrides(), one_off.global_)
+        checked_overrides(effective)
+        return runs.LaunchConfig(
+            effective,
+            launch_overrides.merge_modules(
+                config.module_config(request.blueprint), one_off.modules
+            ),
+            one_off,
+        )
 
     @app.post(
         "/dimos/runs",
@@ -448,12 +549,9 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             )
         if not request.blueprint or request.blueprint.startswith("-"):
             raise ApiError(400, "bad blueprint name")
-        merged = {**config.global_config_overrides(), **request.overrides}
-        if request.replay:
-            merged["replay"] = True
-        checked_overrides(merged)
+        launch_config = await launch_config_of(request)
         try:
-            started = runs.start(s.dimos_dir, request.blueprint, merged)
+            started = runs.start(s.dimos_dir, request.blueprint, launch_config)
         except runs.StillRunningError as error:
             raise ApiError(400, str(error))
         except runs.RunError as error:
@@ -480,13 +578,13 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         last = runs.last_launch_args()
         if last is None:
             raise ApiError(400, "the dimos server hasn't launched anything yet")
-        blueprint, overrides = last
-        checked_overrides(overrides)
+        blueprint, launch_config = last
+        checked_overrides(launch_config.global_)
         current = await asyncio.to_thread(runs.current_launch)
         try:
             if current and current["phase"] in ("starting", "running"):
                 await runs.stop(None)
-            started = runs.start(s.dimos_dir, blueprint, overrides)
+            started = runs.start(s.dimos_dir, blueprint, launch_config)
         except runs.RunError as error:
             raise ApiError(500, str(error))
         s.bus.send({"type": "launch", "launch": started})

@@ -117,6 +117,31 @@ def set_global_config_overrides(overrides: dict[str, Any]) -> None:
     save_desktop_config(config)
 
 
+def module_config(blueprint: str) -> dict[str, dict[str, Any]]:
+    """Desktop's saved module config for a blueprint, config.yaml `dimos.module_config.<blueprint>`."""
+    saved = _section(_section(load_desktop_config(), "dimos"), "module_config").get(blueprint)
+    if not isinstance(saved, dict):
+        return {}
+    return {module: dict(fields) for module, fields in saved.items() if isinstance(fields, dict)}
+
+
+def set_module_config(blueprint: str, modules: dict[str, dict[str, Any]]) -> None:
+    """Replaces a blueprint's saved module config (an empty one removes it, and an empty `module_config` too)."""
+    config = load_desktop_config()
+    dimos = _section(config, "dimos")
+    saved = dict(_section(dimos, "module_config"))
+    if modules:
+        saved[blueprint] = modules
+    else:
+        saved.pop(blueprint, None)
+    if saved:
+        dimos["module_config"] = saved
+    else:
+        dimos.pop("module_config", None)
+    config["dimos"] = dimos
+    save_desktop_config(config)
+
+
 def ignore_version_range() -> bool:
     return bool(_section(load_desktop_config(), "dimos").get("ignore_version_range"))
 

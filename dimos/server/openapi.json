@@ -141,13 +141,63 @@
             ],
             "title": "Name",
             "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "description": "Desktop's saved module config for this blueprint (config.yaml `dimos.module_config.<name>`), `--<module>.<field>=value` on every launch of it; secrets as \u2022\u2022\u2022",
+            "examples": [
+              {
+                "go2connection": {
+                  "lidar": false
+                }
+              }
+            ],
+            "title": "Overrides",
+            "type": "object"
           }
         },
         "required": [
           "name",
-          "modules"
+          "modules",
+          "overrides"
         ],
         "title": "BlueprintConfig",
+        "type": "object"
+      },
+      "BlueprintConfigUpdate": {
+        "additionalProperties": true,
+        "properties": {
+          "overrides": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "description": "The blueprint's new saved module config, {module: {field: value}}, replacing the old one; null drops a field; \u2022\u2022\u2022 keeps a saved secret",
+            "examples": [
+              {
+                "go2connection": {
+                  "lidar": false
+                },
+                "voxelgridmapper": {
+                  "voxel_size": 0.1
+                }
+              }
+            ],
+            "title": "Overrides",
+            "type": "object"
+          }
+        },
+        "required": [
+          "overrides"
+        ],
+        "title": "BlueprintConfigUpdate",
         "type": "object"
       },
       "BlueprintList": {
@@ -561,6 +611,18 @@
             "description": "The field's description, if it has one",
             "title": "Description"
           },
+          "json_compatible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent when pydantic can't be imported. It can be set from a launch or saved config: its `schema` could be built, its default survives JSON, and it isn't a nested model (dimos sets those field by field)",
+            "title": "Json Compatible"
+          },
           "name": {
             "description": "The field",
             "examples": [
@@ -572,6 +634,31 @@
           "required": {
             "description": "It has no default",
             "title": "Required",
+            "type": "boolean"
+          },
+          "schema": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when it can be built: the field's own JSON Schema (its $refs point into its own $defs); a launch's value for it is checked against it",
+            "examples": [
+              {
+                "type": "boolean"
+              }
+            ],
+            "title": "Schema"
+          },
+          "secret": {
+            "description": "Its name says it's a secret (key, *_key, secret, token, password, passwd): shown as \u2022\u2022\u2022 and passed to dimos in the environment, never on the command line",
+            "title": "Secret",
             "type": "boolean"
           },
           "type": {
@@ -591,7 +678,7 @@
           },
           "value": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "Only when the blueprint sets it: the value it sets"
+            "description": "Only when the blueprint sets it: the value it sets (\u2022\u2022\u2022 for a secret)"
           }
         },
         "required": [
@@ -600,7 +687,8 @@
           "default",
           "description",
           "required",
-          "base"
+          "base",
+          "secret"
         ],
         "title": "ConfigArg",
         "type": "object"
@@ -1615,7 +1703,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
             },
-            "description": "Desktop's overrides (config.yaml `dimos.global_config`): `--key value` on every launch",
+            "description": "Desktop's overrides (config.yaml `dimos.global_config`): `--key value` on every launch; secrets as \u2022\u2022\u2022",
             "examples": [
               {
                 "robot_ip": "192.168.12.1"
@@ -1631,12 +1719,27 @@
             "description": "dimos's GlobalConfig as a JSON Schema (draft 2020-12)",
             "title": "Schema",
             "type": "object"
+          },
+          "secrets": {
+            "description": "The GlobalConfig keys named like a secret: shown as \u2022\u2022\u2022, passed in the environment",
+            "examples": [
+              [
+                "unitree_aes_128_key",
+                "dimos_api_key"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "array"
           }
         },
         "required": [
           "schema",
           "defaults",
-          "overrides"
+          "overrides",
+          "secrets"
         ],
         "title": "GlobalConfig",
         "type": "object"
@@ -2043,6 +2146,28 @@
             "description": "Its log folder, once running",
             "title": "Logdir"
           },
+          "modules": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "description": "The module config it was launched with (Desktop's saved one for this blueprint, then the launch's own); secrets as \u2022\u2022\u2022",
+            "examples": [
+              {
+                "go2connection": {
+                  "lidar": false
+                }
+              }
+            ],
+            "title": "Modules",
+            "type": "object"
+          },
+          "oneOff": {
+            "$ref": "#/components/schemas/LaunchOneOff",
+            "description": "What the launch request itself set, as sent (nulls kept, `replay` added); secrets as \u2022\u2022\u2022"
+          },
           "output": {
             "description": "The end of its output (at most 200 kB), starting with the command line",
             "title": "Output",
@@ -2128,6 +2253,8 @@
           "logDir",
           "error",
           "overrides",
+          "modules",
+          "oneOff",
           "steps",
           "problems"
         ],
@@ -2162,6 +2289,52 @@
         "title": "LaunchEvent",
         "type": "object",
         "x-zenoh-key": "<ns>/dimos/events/launch"
+      },
+      "LaunchOneOff": {
+        "additionalProperties": true,
+        "properties": {
+          "global": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "{GlobalConfig key: value}",
+            "title": "Global",
+            "type": "object"
+          },
+          "modules": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "description": "{module: {field: value}}",
+            "title": "Modules",
+            "type": "object"
+          },
+          "secrets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only when the request listed some: its extra secret paths",
+            "title": "Secrets"
+          }
+        },
+        "required": [
+          "global",
+          "modules"
+        ],
+        "title": "LaunchOneOff",
+        "type": "object"
       },
       "LaunchProblem": {
         "additionalProperties": true,
@@ -2259,19 +2432,39 @@
             "type": "string"
           },
           "overrides": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "description": "GlobalConfig overrides for this launch, e.g. {\"simulation\": \"mujoco\"}; they win over Desktop's saved ones",
+            "description": "This launch's own config, on top of Desktop's saved config and never saved: `{global?, modules?, secrets?}`, or (the older form) a flat `{GlobalConfig key: value}`. null drops a saved value for this launch; \u2022\u2022\u2022 keeps a saved secret. Checked against dimos's schemas: 400 with the path and why. Secret values (by name, or listed) go to `dimos run` as environment variables, never argv.",
             "examples": [
               {
-                "simulation": "mujoco"
+                "global": {
+                  "n_workers": 4
+                },
+                "modules": {
+                  "go2connection": {
+                    "lidar": false
+                  }
+                }
               },
               {
-                "robot_ip": "192.168.12.1"
+                "simulation": "mujoco"
               }
             ],
-            "title": "Overrides",
+            "properties": {
+              "global": {
+                "description": "{GlobalConfig key: value}",
+                "type": "object"
+              },
+              "modules": {
+                "description": "{module (its name in the blueprint): {field: value}}",
+                "type": "object"
+              },
+              "secrets": {
+                "description": "More paths to treat as secrets (`robot_ip`, `<module>.<field>`)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
             "type": "object"
           },
           "replay": {
@@ -4555,6 +4748,74 @@
           "blueprints"
         ],
         "x-agent": true,
+        "x-family": "dimos"
+      },
+      "put": {
+        "description": "Replaces config.yaml's `dimos.module_config.<name>` with `overrides` ({module: {field: value}}; null drops a field, a module left empty is dropped, all empty removes the blueprint's entry), after checking each module and field against the blueprint's config (as a launch's `overrides.modules`). A secret sent as \u2022\u2022\u2022 keeps its saved value. 400 for a bad name or a value its field refuses. Answers like GET.",
+        "operationId": "put_dimos_blueprints_name_config",
+        "parameters": [
+          {
+            "description": "blueprint name, e.g. unitree-go2-basic",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "blueprint name, e.g. unitree-go2-basic",
+              "examples": [
+                "unitree-go2-basic"
+              ],
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlueprintConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintConfig"
+                }
+              }
+            },
+            "description": "`{ name, modules: [...], overrides }`, with the saved module config"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Save Desktop's module config for a blueprint; it becomes `--<module>.<field>=value` on every launch of it",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": false,
         "x-family": "dimos"
       }
     },

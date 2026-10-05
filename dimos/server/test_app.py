@@ -110,6 +110,8 @@ INTROSPECTED: dict[str, dict[str, Any]] = {
                         "required": False,
                         "base": False,
                         "value": 15,
+                        "json_compatible": True,
+                        "schema": {"type": "integer", "minimum": 1},
                     },
                     {
                         "name": "mode",
@@ -119,6 +121,28 @@ INTROSPECTED: dict[str, dict[str, Any]] = {
                         "required": False,
                         "base": False,
                         "choices": ["rgb", "depth"],
+                        "json_compatible": True,
+                        "schema": {"enum": ["rgb", "depth"], "type": "string"},
+                    },
+                    {
+                        "name": "aes_128_key",
+                        "type": "str | None",
+                        "default": None,
+                        "description": None,
+                        "required": False,
+                        "base": False,
+                        "value": "blueprint-secret",
+                        "json_compatible": True,
+                        "schema": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                    {
+                        "name": "on_frame",
+                        "type": "Callable",
+                        "default": None,
+                        "description": None,
+                        "required": False,
+                        "base": False,
+                        "json_compatible": False,
                     },
                 ],
             },
@@ -174,8 +198,19 @@ def test_blueprint_details_are_introspected_and_cached(
     monkeypatch.setattr(blueprints, "introspect", fake)
     assert client.get("/dimos/blueprints/unitree-go2").json() == INTROSPECTED["blueprint"]
     client.get("/dimos/blueprints/unitree-go2")
-    # absent optional fields (choices, value, error) stay absent
-    assert client.get("/dimos/blueprints/unitree-go2/config").json() == INTROSPECTED["config"]
+    # absent optional fields (choices, value, error) stay absent; each arg says whether it's a secret
+    shown = client.get("/dimos/blueprints/unitree-go2/config").json()
+    assert shown["overrides"] == {}
+    args = shown["modules"][0]["args"]
+    assert [arg.pop("secret") for arg in args] == [False, False, True, False]
+    assert args[2].pop("value") == "•••"
+    expected = INTROSPECTED["config"]["modules"][0]["args"]
+    assert args == [
+        expected[0],
+        expected[1],
+        {k: v for k, v in expected[2].items() if k != "value"},
+        expected[3],
+    ]
     assert client.get("/dimos/catalog").json() == INTROSPECTED["catalog"]
     assert calls == [["blueprint", "unitree-go2"], ["config", "unitree-go2"], ["catalog"]]
     broken = client.get("/dimos/blueprints/broken")
@@ -223,8 +258,11 @@ def test_global_config_overrides_live_in_desktops_config(client: TestClient) -> 
     on_disk = config.load_desktop_config()
     assert on_disk["desktop"] == {"port": 7341} and on_disk["dimos"]["dir"] == "/somewhere"
     for bad, why in [
-        ({"a-b": 1}, "not a dimos GlobalConfig setting: a-b"),
-        ({"robot_ipp": "x"}, "not a dimos GlobalConfig setting: robot_ipp"),
+        ({"a-b": 1}, "bad config key: a-b"),
+        (
+            {"robot_ipp": "x"},
+            "overrides.robot_ipp: no such GlobalConfig field (did you mean robot_ip?)",
+        ),
         ({"n_workers": "many"}, "n_workers"),
     ]:
         refused = client.put("/dimos/global-config", json={"overrides": bad})
@@ -343,6 +381,179 @@ def test_a_failed_launch_says_how_far_it_got_and_why(
         "B",
     )
     assert launch["error"] == "No module named 'not_a_real_package_xyz'"
+
+
+GO2_CONFIG = {
+    "name": "unitree-go2",
+    "modules": [
+        {
+            "module": "go2connection",
+            "class": "x.GO2Connection",
+            "args": [
+                {
+                    "name": "lidar",
+                    "type": "bool",
+                    "default": True,
+                    "description": None,
+                    "required": False,
+                    "base": False,
+                    "json_compatible": True,
+                    "schema": {"type": "boolean"},
+                },
+                {
+                    "name": "aes_128_key",
+                    "type": "str | None",
+                    "default": None,
+                    "description": None,
+                    "required": False,
+                    "base": False,
+                    "json_compatible": True,
+                    "schema": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                },
+            ],
+        },
+        {
+            "module": "camera",
+            "class": "x.Camera",
+            "args": [
+                {
+                    "name": "fps",
+                    "type": "int",
+                    "default": 30,
+                    "description": None,
+                    "required": False,
+                    "base": False,
+                    "json_compatible": True,
+                    "schema": {"type": "integer"},
+                },
+                {
+                    "name": "codec",
+                    "type": "str",
+                    "default": "h264",
+                    "description": None,
+                    "required": False,
+                    "base": False,
+                    "json_compatible": True,
+                    "schema": {"type": "string"},
+                },
+            ],
+        },
+    ],
+}
+
+# a `dimos` that writes its argv and the secret part of its environment, then waits to be stopped
+ECHO_DIMOS = """
+import json, os, sys, time
+seen = {"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items() if "KEY" in k}}
+open(os.environ["FAKE_SEEN"], "w").write(json.dumps(seen))
+time.sleep(60)
+"""
+
+
+def test_a_launch_with_its_own_global_and_module_config_and_a_secret(
+    client: TestClient, checkout: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake(dimos_dir: Path, args: list[str], **_: Any) -> dict[str, Any]:
+        return GO2_CONFIG
+
+    monkeypatch.setattr(blueprints, "introspect", fake)
+    (checkout / ".venv" / "bin" / "dimos").write_text(f"#!{sys.executable}\n{ECHO_DIMOS}")
+    seen_file = tmp_path / "seen.json"
+    monkeypatch.setenv("FAKE_SEEN", str(seen_file))
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text(
+        "dimos:\n  global_config:\n    robot_ip: 10.0.0.2\n    n_workers: 4\n"
+    )
+
+    # saved module config: checked, kept, a secret shown as •••
+    saved = client.put(
+        "/dimos/blueprints/unitree-go2/config",
+        json={"overrides": {"camera": {"fps": 20}, "go2connection": {"aes_128_key": "saved-key"}}},
+    ).json()
+    assert saved["overrides"] == {"camera": {"fps": 20}, "go2connection": {"aes_128_key": "•••"}}
+    assert config.module_config("unitree-go2")["go2connection"] == {"aes_128_key": "saved-key"}
+    # ••• sent back keeps the saved secret
+    client.put(
+        "/dimos/blueprints/unitree-go2/config",
+        json={"overrides": {"camera": {"fps": 20}, "go2connection": {"aes_128_key": "•••"}}},
+    )
+    assert config.module_config("unitree-go2")["go2connection"] == {"aes_128_key": "saved-key"}
+    refused = client.put(
+        "/dimos/blueprints/unitree-go2/config", json={"overrides": {"camera": {"fsp": 1}}}
+    )
+    assert refused.json() == {
+        "error": "overrides.camera.fsp: no such field of camera (did you mean fps?)"
+    }
+
+    for bad, why in [
+        ({"global": {}, "robot_ip": "x"}, "overrides has `robot_ip` next to `global`/`modules`"),
+        (
+            {"modules": {"go2conection": {"lidar": False}}},
+            "overrides.modules.go2conection: no such module",
+        ),
+        (
+            {"global": {"n_workers": "8"}},
+            'overrides.global.n_workers: needs a whole number, got string "8"',
+        ),
+        ([1], "overrides must be an object, not list"),
+    ]:
+        refused = client.post("/dimos/runs", json={"blueprint": "unitree-go2", "overrides": bad})
+        assert refused.status_code == 400 and refused.json()["error"].startswith(why), (
+            refused.json()
+        )
+
+    launched = client.post(
+        "/dimos/runs",
+        json={
+            "blueprint": "unitree-go2",
+            "overrides": {
+                "global": {"n_workers": 8, "robot_ip": None},
+                "modules": {"camera": {"codec": "jpeg"}, "go2connection": {"lidar": False}},
+            },
+        },
+    ).json()
+    for _ in range(200):
+        if seen_file.exists() and seen_file.read_text():
+            break
+        time.sleep(0.05)
+    seen = json.loads(seen_file.read_text())
+    # the secret is in the environment, never in argv, the launch log, the record or the answer
+    assert seen["argv"] == [
+        "--n-workers=8",
+        "run",
+        "unitree-go2",
+        "--camera.codec=jpeg",
+        "--camera.fps=20",
+        "--go2connection.lidar=false",
+    ]
+    assert seen["env"]["GO2CONNECTION__AES_128_KEY"] == "saved-key"
+    assert launched["output"].startswith(
+        "$ GO2CONNECTION__AES_128_KEY=••• dimos --n-workers=8 run unitree-go2"
+    )
+    assert launched["overrides"] == {"n_workers": 8}
+    assert launched["modules"] == {
+        "camera": {"codec": "jpeg", "fps": 20},
+        "go2connection": {"aes_128_key": "•••", "lidar": False},
+    }
+    assert launched["oneOff"] == {
+        "global": {"n_workers": 8, "robot_ip": None},
+        "modules": {"camera": {"codec": "jpeg"}, "go2connection": {"lidar": False}},
+    }
+    for leaked in (runs.launch_file(), runs.launch_log()):
+        assert "saved-key" not in leaked.read_text()
+    assert oct(runs.secrets_file().stat().st_mode & 0o777) == "0o600"
+
+    # a restart passes the same config, the secret included
+    seen_file.unlink()
+    restarted = client.post("/dimos/runs/restart").json()
+    assert (restarted["modules"], restarted["oneOff"]) == (launched["modules"], launched["oneOff"])
+    for _ in range(200):
+        if seen_file.exists() and seen_file.read_text():
+            break
+        time.sleep(0.05)
+    again = json.loads(seen_file.read_text())
+    assert again == seen
+    client.post("/dimos/runs/stop")
 
 
 def test_launch_refuses_a_version_outside_desktops_range(

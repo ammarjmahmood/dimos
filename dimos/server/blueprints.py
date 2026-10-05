@@ -121,3 +121,23 @@ async def introspect(
     if isinstance(value.get("error"), str):
         raise IntrospectError(value["error"])
     return value
+
+
+def shown_config(name: str, value: dict[str, Any]) -> dict[str, Any]:
+    """A blueprint's introspected config as the API answers it: Desktop's saved module config for it (`overrides`),
+    each arg marked `secret`, every secret value as •••."""
+    from dimos.server import config, overrides
+
+    saved = config.module_config(name)
+    _, shown = overrides.redact({}, saved, overrides.secret_paths({}, saved))
+    modules = []
+    for module in value.get("modules", []):
+        args = []
+        for arg in module.get("args", []):
+            secret = overrides.is_secret_name(arg["name"])
+            arg = {**arg, "secret": secret}
+            if secret and arg.get("value") is not None:
+                arg["value"] = overrides.HIDDEN
+            args.append(arg)
+        modules.append({**module, "args": args})
+    return {**value, "modules": modules, "overrides": shown}

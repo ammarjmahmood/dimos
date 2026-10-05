@@ -24,7 +24,7 @@ from __future__ import annotations
 import typing
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, create_model
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, WithJsonSchema, create_model
 
 from dimos.core.coordination.blueprints import StreamRef
 from dimos.core.run_registry import RunEntry
@@ -169,7 +169,24 @@ class ConfigArg(ApiModel):
         examples=[["webrtc", "ros"]],
     )
     value: JsonValue = Field(
-        default=None, description="Only when the blueprint sets it: the value it sets"
+        default=None,
+        description="Only when the blueprint sets it: the value it sets (••• for a secret)",
+    )
+    json_compatible: bool | None = Field(
+        default=None,
+        description="Absent when pydantic can't be imported. It can be set from a launch or saved config: its `schema` could be built, its default "
+        "survives JSON, and it isn't a nested model (dimos sets those field by field)",
+    )
+    json_schema: dict[str, JsonValue] | None = Field(
+        default=None,
+        alias="schema",
+        description="Only when it can be built: the field's own JSON Schema (its $refs point into its own $defs); "
+        "a launch's value for it is checked against it",
+        examples=[{"type": "boolean"}],
+    )
+    secret: bool = Field(
+        description="Its name says it's a secret (key, *_key, secret, token, password, passwd): shown as ••• and "
+        "passed to dimos in the environment, never on the command line"
     )
 
 
@@ -187,6 +204,19 @@ class ModuleConfig(ApiModel):
 class BlueprintConfig(ApiModel):
     name: str = Field(description="The blueprint", examples=["unitree-go2"])
     modules: list[ModuleConfig] = Field(description="Each module's configurable args")
+    overrides: dict[str, dict[str, JsonValue]] = Field(
+        description="Desktop's saved module config for this blueprint (config.yaml `dimos.module_config.<name>`), "
+        "`--<module>.<field>=value` on every launch of it; secrets as •••",
+        examples=[{"go2connection": {"lidar": False}}],
+    )
+
+
+class BlueprintConfigUpdate(ApiModel):
+    overrides: dict[str, dict[str, JsonValue]] = Field(
+        description="The blueprint's new saved module config, {module: {field: value}}, replacing the old one; null "
+        "drops a field; ••• keeps a saved secret",
+        examples=[{"go2connection": {"lidar": False}, "voxelgridmapper": {"voxel_size": 0.1}}],
+    )
 
 
 class Port(ApiModel):
@@ -378,8 +408,13 @@ class GlobalConfig(ApiModel):
         examples=[{"n_workers": 2, "simulation": False}],
     )
     overrides: dict[str, JsonValue] = Field(
-        description="Desktop's overrides (config.yaml `dimos.global_config`): `--key value` on every launch",
+        description="Desktop's overrides (config.yaml `dimos.global_config`): `--key value` on every launch; "
+        "secrets as •••",
         examples=[{"robot_ip": "192.168.12.1"}],
+    )
+    secrets: list[str] = Field(
+        description="The GlobalConfig keys named like a secret: shown as •••, passed in the environment",
+        examples=[["unitree_aes_128_key", "dimos_api_key"]],
     )
 
 
@@ -462,6 +497,14 @@ class LaunchProblem(ApiModel):
     )
 
 
+class LaunchOneOff(ApiModel):
+    global_: dict[str, JsonValue] = Field(alias="global", description="{GlobalConfig key: value}")
+    modules: dict[str, dict[str, JsonValue]] = Field(description="{module: {field: value}}")
+    secrets: list[str] | None = Field(
+        default=None, description="Only when the request listed some: its extra secret paths"
+    )
+
+
 class Launch(ApiModel):
     """The last launch this server started; its phase is worked out from disk on every call."""
 
@@ -490,6 +533,14 @@ class Launch(ApiModel):
         "replay); POST /dimos/runs/restart launches with them again",
         examples=[{"replay": True, "n_workers": 2}],
     )
+    modules: dict[str, dict[str, JsonValue]] = Field(
+        description="The module config it was launched with (Desktop's saved one for this blueprint, then the "
+        "launch's own); secrets as •••",
+        examples=[{"go2connection": {"lidar": False}}],
+    )
+    oneOff: LaunchOneOff = Field(
+        description="What the launch request itself set, as sent (nulls kept, `replay` added); secrets as •••"
+    )
     steps: list[LaunchStep] = Field(
         description="starting, building, starting_modules, then running or stopped: how far startup got"
     )
@@ -506,11 +557,39 @@ class RunList(ApiModel):
 class LaunchRequest(ApiModel):
     blueprint: str = Field(description="blueprint name", examples=["unitree-go2"])
     replay: bool = Field(default=False, description="Run on a recording: adds `--replay`")
-    overrides: dict[str, JsonValue] = Field(
-        default_factory=dict,
-        description='GlobalConfig overrides for this launch, e.g. {"simulation": "mujoco"}; they win over '
-        "Desktop's saved ones",
-        examples=[{"simulation": "mujoco"}, {"robot_ip": "192.168.12.1"}],
+    # any JSON, so a wrong shape gets the server's own 400 message (`overrides must be an object, not list`)
+    overrides: Annotated[
+        JsonValue,
+        WithJsonSchema(
+            {
+                "type": "object",
+                "properties": {
+                    "global": {"type": "object", "description": "{GlobalConfig key: value}"},
+                    "modules": {
+                        "type": "object",
+                        "description": "{module (its name in the blueprint): {field: value}}",
+                    },
+                    "secrets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "More paths to treat as secrets (`robot_ip`, `<module>.<field>`)",
+                    },
+                },
+            }
+        ),
+    ] = Field(
+        default=None,
+        description="This launch's own config, on top of Desktop's saved config and never saved: "
+        "`{global?, modules?, secrets?}`, or (the older form) a flat `{GlobalConfig key: value}`. null drops a "
+        "saved value for this launch; ••• keeps a saved secret. Checked against dimos's schemas: 400 with the path "
+        "and why. Secret values (by name, or listed) go to `dimos run` as environment variables, never argv.",
+        examples=[
+            {
+                "global": {"n_workers": 4, "robot_ip": None},
+                "modules": {"go2connection": {"lidar": False}},
+            },
+            {"simulation": "mujoco"},
+        ],
     )
 
 

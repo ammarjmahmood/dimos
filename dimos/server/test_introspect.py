@@ -42,7 +42,9 @@ def test_a_blueprint_lists_its_modules_and_streams(check_model: Any) -> None:
 def test_a_blueprints_config_and_a_modules_own(check_model: Any) -> None:
     for name in ("demo-camera", "camera-module"):
         answer = introspect.config(name)
-        check_model(models.BlueprintConfig, answer, f"{name}'s config")
+        check_model(
+            models.BlueprintConfig, blueprints.shown_config(name, answer), f"{name}'s config"
+        )
         for module in answer["modules"]:
             assert "error" not in module, module
             names = {arg["name"] for arg in module["args"]}

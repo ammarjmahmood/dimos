@@ -45,6 +45,16 @@ KNOWN_DIFFERENCES = {
     "get /dimos/blueprints.blueprints[]: field only here: missing_module",
 }
 
+# secrets (launch_overrides_contract.md section 5) are served here ahead of Desktop's doc
+KNOWN_DIFFERENCES |= {
+    "get /dimos/blueprints/{}/config.modules[].args[]: field only here: secret",
+    "get /dimos/global-config: field only here: secrets",
+    "put /dimos/global-config: field only here: secrets",
+    "get /dimos/runs.launch.oneOff: field only here: secrets",
+    "post /dimos/runs.oneOff: field only here: secrets",
+    "post /dimos/runs/restart.oneOff: field only here: secrets",
+}
+
 # a launch's steps and problems are stable codes with data here, read from dimos's structured log; Desktop's doc still
 # has its own words for them (Desktop moves to the codes and owns the words: launch_diagnostics_contract.md)
 CODED_DIAGNOSTICS = {
@@ -201,6 +211,14 @@ def compare_shape(
         if schema.get("type") != "object" or "additionalProperties" not in schema:
             return [f"{where}: Desktop has a map, here {kind(schema)}"]
         return compare_shape(doc, schema["additionalProperties"], shape[1], named, f"{where}{{}}")
+    if (
+        "properties" not in schema
+        and isinstance(schema.get("additionalProperties"), dict)
+        and len(shape[1]) == 1
+    ):
+        # Desktop writes a map with a placeholder key: `{ module: { field: value } }`
+        [(_, inner)] = shape[1].values()
+        return compare_shape(doc, schema["additionalProperties"], inner, named, f"{where}{{}}")
     properties, required = schema.get("properties", {}), set(schema.get("required", []))
     problems = [
         f"{where}: field only in Desktop's doc: {n}" for n in shape[1] if n not in properties

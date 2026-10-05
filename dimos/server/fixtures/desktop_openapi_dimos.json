@@ -1,8 +1,8 @@
 {
   "info": {
     "title": "dimos server (from dimOS Desktop openapi)",
-    "version": "0.2.0",
-    "x-copied-from": "GET /api/desktop/openapi of dimOS Desktop 0.2.0 (jeff/agent_chat, at or after 86a41a5), 2026-10-05, /dimos paths only. Kept as the only check that this server serves what Desktop documents, until Desktop's CI compares its doc against dimos's dimos/server/openapi.json (which it reads per tag anyway)."
+    "version": "0.2.2",
+    "x-copied-from": "GET /api/desktop/openapi of dimOS Desktop 0.2.2 (jeff/agent_chat, at or after e97897a: launch overrides), 2026-10-05, /dimos paths only. Kept as the only check that this server serves what Desktop documents, until Desktop's CI compares its doc against dimos's dimos/server/openapi.json (which it reads per tag anyway)."
   },
   "openapi": "3.1.0",
   "paths": {
@@ -69,7 +69,7 @@
         ],
         "responses": {
           "200": {
-            "description": "`{ name, modules: [{ module, class, args: [{ name, type, default, description, required, base, choices?, value? }], error? }] }`"
+            "description": "`{ name, modules: [{ module, class, args: [{ name, type, default, description, required, base, choices?, value?, schema?, json_compatible? }], error? }], overrides: { module: { field: value } } }`"
           }
         },
         "summary": "A blueprint's configurable args per module: name, type, default, description, and the value the blueprint sets (a module that can't be read carries its own error)",
@@ -77,6 +77,50 @@
           "Config introspection"
         ],
         "x-agent": true,
+        "x-family": "dimos"
+      },
+      "put": {
+        "description": "Save Desktop's module config for a blueprint (the whole map; null removes a field), checked against its fields; it becomes `--<module>.<field>=value` after `run <name>` on every launch of it.",
+        "operationId": "put_dimos_blueprints_name_config",
+        "parameters": [
+          {
+            "description": "blueprint name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "overrides": {
+                    "description": "{module: {field: value}}",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "overrides"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "as GET"
+          }
+        },
+        "summary": "Save Desktop's module config for a blueprint (the whole map; null removes a field), checked against its fields; it becomes `--<module>.<field>=value` after `run <name>` on every launch of it",
+        "tags": [
+          "Config introspection"
+        ],
+        "x-agent": false,
         "x-family": "dimos"
       }
     },
@@ -328,6 +372,24 @@
         "x-family": "dimos"
       }
     },
+    "/dimos/robots": {
+      "get": {
+        "description": "Every robot dimos supports and its blueprints, from dimos's robots.json: title, description, tags, modes (robot, replay, sim) with the GlobalConfig values each sets and its essential args, the recommended app, starter picks, hidden ones.",
+        "operationId": "get_dimos_robots",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON"
+          }
+        },
+        "summary": "Every robot dimos supports and its blueprints, from dimos's robots.json: title, description, tags, modes (robot, replay, sim) with the GlobalConfig values each sets and its essential args, the recommended app, starter picks, hidden ones",
+        "tags": [
+          "Blueprints"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
     "/dimos/runs": {
       "get": {
         "description": "Running blueprints (run id, blueprint, pid, log_dir) and the launch Desktop started.",
@@ -359,7 +421,7 @@
                     "type": "string"
                   },
                   "overrides": {
-                    "description": "GlobalConfig overrides, e.g. {\"simulation\": \"mujoco\"}",
+                    "description": "this launch's own config on top of Desktop's saved config: {\"global\": {\"simulation\": \"mujoco\"}, \"modules\": {\"go2connection\": {\"lidar\": false}}} (a flat {key: value} means global; null drops a saved value); checked against dimos's schemas, 400 on an unknown name or a wrong type",
                     "type": "object"
                   },
                   "replay": {
@@ -376,7 +438,7 @@
         },
         "responses": {
           "200": {
-            "description": "`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error, overrides, steps: [{ label, state: done|now|todo|failed, detail }], problems: [{ level, text, fix, line }] }`"
+            "description": "`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error, overrides, steps: [{ label, state: done|now|todo|failed, detail }], problems: [{ level, text, fix, line }], modules: { module: { field: value } }, oneOff: { global, modules } }`"
           }
         },
         "summary": "Launch a blueprint (stops nothing; check /dimos/runs first)",
@@ -465,21 +527,21 @@
             }
           },
           {
-            "description": null,
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
             "description": "text to match",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": null,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer"
             }
           }
         ],
