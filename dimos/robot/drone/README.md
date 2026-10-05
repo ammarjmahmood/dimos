@@ -15,7 +15,7 @@ dimos --replay run drone-agentic
 dimos run drone-basic
 
 # Real drone — outdoor (GPS-based odometry)
-dimos run drone-basic --set outdoor=true
+dimos run drone-basic --outdoor=true
 
 # Agentic with LLM control
 dimos run drone-agentic
@@ -35,7 +35,10 @@ Connection + camera + visualization. The foundation layer.
 | `WebsocketVisModule` | Web-based visualization |
 | `RerunBridgeModule` | 3D viewer (selected by `--viewer`) |
 
-**Indoor vs Outdoor:** By default, the drone uses velocity integration for odometry (indoor mode). For outdoor flights with GPS, set `outdoor=true` — this switches to GPS-only positioning which is more reliable in open environments but less precise for close-range maneuvers.
+**Indoor vs Outdoor:** By default, the drone uses velocity integration for
+odometry (indoor mode). For outdoor flights with GPS, pass `--outdoor=true`;
+this switches to GPS-only positioning, which is more reliable in open
+environments but less precise for close-range maneuvers.
 
 ### `drone-agentic`
 Composes on top of `drone-basic`, adding autonomous capabilities:
@@ -208,7 +211,7 @@ Parameters: `(Kp, Ki, Kd, (min_output, max_output), integral_limit, deadband_pix
 
 ## Available Skills
 
-All skills are exposed to the LLM agent via the `@skill` decorator on `DroneConnectionModule`:
+All skills are exposed to the LLM agent via the `@skill` decorator on `DroneConnectionModule`, except `observe()`, which comes from the shared `ObserveSkill` container (`dimos/agents/skills/observe_skill.py`, remapped to the drone's `video` stream in `drone_agentic`):
 
 ### Movement & Control
 - `move(x, y, z, duration)` — Move with velocity (m/s)

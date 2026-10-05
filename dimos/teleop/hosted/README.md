@@ -1,7 +1,7 @@
 # Remote Teleop
 
 Robot dials out to the dimensional-teleop broker —
-no inbound ports needed. The browser/VR operator connects through the broker;
+no inbound ports needed. The browser/WebXR operator connects through the broker;
 commands arrive over WebRTC datachannels, robot video goes out as a WebRTC
 track.
 
@@ -16,7 +16,7 @@ that all run in one worker so everything shares that single session (the
 
 - **`go2_command.py`** — `Go2CommandModule`: operator command / E-STOP dispatch
   and the manual-drive guard. Reaches the driver over `@rpc` (`GO2Connection`).
-- **`arm_command.py`** — `ArmCommandModule`: VR controller poses and browser
+- **`arm_command.py`** — `ArmCommandModule`: WebXR controller poses and browser
   EE-twist → ControlCoordinator tasks (stale/reorder/future-stamp guarded).
 - **`camera_mux.py`** — `CameraMuxModule`: N cameras → one composited, capped
   video track (operator-selectable views).
@@ -25,6 +25,8 @@ that all run in one worker so everything shares that single session (the
   messages above ~64 KB).
 - **`hosted_stats.py`** — `HostedStatsModule`: telemetry frame, command acks,
   and command-link latency/rate stats.
+- **`go2_audio_bridge.py`** — operator microphone PCM → the Go2 Pro speaker
+  through the existing Unitree WebRTC audio-hub/megaphone APIs.
 - **`command_executor.py`** — `SerializedCommandExecutor`: serializes blocking
   driver commands with nonce dedup and a safety-epoch fence (E-STOP aborts).
 - **`robot_type.py`** — `RobotType`: carried in the broker session config so
@@ -38,9 +40,8 @@ The operator HTML lives in the dimensional-teleop broker repo (`web/`).
 ## How a session connects
 
 1. Robot creates an `RTCPeerConnection` (MAX_BUNDLE, **must**),
-   `addTrack(video)`, adds a recvonly audio transceiver if `audio_in` is set
-   (plumbing only for now — frames are dropped until something calls
-   `set_audio_frame_callback`; robot-side playback is a follow-up), opens a
+   `addTrack(video)`, adds a recvonly audio transceiver,
+   forwards decoded operator PCM to the Go2 audio bridge, and opens a
    throwaway negotiated DataChannel on SCTP id 0, creates an offer, gathers
    ICE non-trickle.
 2. `POST /api/v1/sessions` to the broker with the offer. Broker creates a CF
@@ -59,6 +60,24 @@ The operator HTML lives in the dimensional-teleop broker repo (`web/`).
    from the inbound twist stream) on `state_reliable_back` at `telemetry_hz`,
    so the operator HUD can show what *arrived* — the operator only knows what
    it *sent*.
+
+## Go2 speaker support
+
+Hosted Go2 blueprints default the audio bridge to `speaker=auto`. The first
+operator audio batch probes whether the Unitree audio-hub API responds. This is
+not a physical speaker test: Go2 Air and a Pro with a failed or muted speaker may
+still return success. Set `speaker=enabled` only for inventory known to have a
+working speaker, and set `speaker=disabled` for Go2 Air. The routing decision is
+local to the bridge and is not treated as hardware-health telemetry.
+
+```bash
+# Go2 Pro (skip probing)
+dimos run teleop-hosted-go2-transport -o go2audiobridgemodule.speaker=enabled
+
+# Go2 Air (never call the firmware audio hub)
+dimos run teleop-hosted-go2-transport \
+  -o go2audiobridgemodule.speaker=disabled
+```
 
 ## Datachannels
 

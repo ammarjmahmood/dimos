@@ -16,13 +16,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from dimos.perception.detection.type.detection3d.pointcloud import Detection3DPC
+from dimos.perception.detection.type.detection3d.pointcloud import Detection3DPC, lattice_quantum
 from dimos.perception.detection.type.imageDetections import ImageDetections
 
 if TYPE_CHECKING:
     from dimos_lcm.sensor_msgs import CameraInfo
 
     from dimos.msgs.geometry_msgs.Transform import Transform
+    from dimos.msgs.sensor_msgs.Image import Image
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
     from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
     from dimos.perception.detection.type.detection3d.pointcloud_filters import PointCloudFilter
@@ -40,14 +41,53 @@ class ImageDetections3DPC(ImageDetections[Detection3DPC]):
         world_to_optical_transform: Transform,
         filters: list[PointCloudFilter] | None = None,
     ) -> ImageDetections3DPC:
-        """Project every 2D detection into 3D, dropping any that yield no valid points."""
+        """Project every 2D detection into 3D, dropping any that yield no valid points.
+
+        The cloud is projected through the camera once; each detection then
+        selects its points from that shared projection, with the mask splat
+        radius taken from the cloud's own lattice pitch.
+        """
+        world_points, points_2d = Detection3DPC.project_cloud(
+            world_pointcloud, camera_info, world_to_optical_transform
+        )
+        quantum = lattice_quantum(world_points)
         detections_3d = [
             d3d
             for det in detections_2d
             if (
-                d3d := Detection3DPC.from_2d(
+                d3d := Detection3DPC.from_projection(
                     det,
-                    world_pointcloud,
+                    world_points,
+                    points_2d,
+                    camera_info,
+                    world_to_optical_transform,
+                    world_pointcloud.frame_id,
+                    world_pointcloud.ts,
+                    filters,
+                    splat_m=quantum / 2 if quantum is not None else None,
+                )
+            )
+            is not None
+        ]
+        return cls(image=detections_2d.image, detections=detections_3d)
+
+    @classmethod
+    def from_depth(
+        cls,
+        detections_2d: ImageDetections2D,
+        depth: Image,
+        camera_info: CameraInfo,
+        world_to_optical_transform: Transform,
+        filters: list[PointCloudFilter] | None = None,
+    ) -> ImageDetections3DPC:
+        """Unproject every detection's depth pixels into 3D, dropping empty results."""
+        detections_3d = [
+            d3d
+            for det in detections_2d
+            if (
+                d3d := Detection3DPC.from_depth(
+                    det,
+                    depth,
                     camera_info,
                     world_to_optical_transform,
                     filters,

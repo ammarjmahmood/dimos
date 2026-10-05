@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import functools
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 # Import LCM types
 from dimos_lcm.sensor_msgs.PointCloud2 import (
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     import open3d as o3d  # type: ignore[import-untyped]
     from rerun._baseclasses import Archetype
 
+    from dimos.msgs.geometry_msgs.Pose import Pose
     from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
     from dimos.msgs.sensor_msgs.Image import Image
 
@@ -74,19 +75,27 @@ def register_colormap_annotation(name: str = "turbo") -> None:
 
 
 # TODO: encode/decode need to be updated to work with full spectrum of pointcloud2 fields
+class SectorJson(TypedDict):
+    clear_m: float
+    state: str
+
+
 class PointCloud2(Timestamped):
     msg_name = "sensor_msgs.PointCloud2"
+    seq: int = 0
 
     def __init__(
         self,
         pointcloud: o3d.geometry.PointCloud | o3d.t.geometry.PointCloud | None = None,
         frame_id: str = "world",
         ts: float | None = None,
+        seq: int = 0,
     ) -> None:
         import open3d as o3d  # type: ignore[import-untyped]
 
         self.ts = ts  # type: ignore[assignment]
         self.frame_id = frame_id
+        self.seq = seq
 
         # Store internally as tensor pointcloud for speed
         if pointcloud is None:
@@ -186,6 +195,10 @@ class PointCloud2(Timestamped):
         frame_id: str = "world",
         timestamp: float | None = None,
         intensities: np.ndarray | None = None,
+        offset_times: np.ndarray | None = None,
+        tags: np.ndarray | None = None,
+        lines: np.ndarray | None = None,
+        stamps: np.ndarray | None = None,
     ) -> PointCloud2:
         """Create PointCloud2 from numpy array of shape (N, 3).
 
@@ -194,6 +207,12 @@ class PointCloud2(Timestamped):
             frame_id: Frame ID for the point cloud
             timestamp: Timestamp for the point cloud (defaults to current time)
             intensities: Optional Nx1 or (N,) float array of per-point intensity values
+            offset_times: Optional (N,) uint32 array of per-point capture-time
+                offsets in nanoseconds relative to the header stamp
+            tags: Optional (N,) uint8 array of per-point sensor tag bytes
+            lines: Optional (N,) uint8 array of per-point laser line numbers
+            stamps: Optional (N,) float64 array of per-point capture times in
+                absolute seconds. In-memory only, not encoded on the wire.
 
         Returns:
             PointCloud2 instance
@@ -201,6 +220,15 @@ class PointCloud2(Timestamped):
         import open3d as o3d  # type: ignore[import-untyped]
         import open3d.core as o3c  # type: ignore[import-untyped]
 
+        for name, values in (
+            ("intensities", intensities),
+            ("offset_times", offset_times),
+            ("tags", tags),
+            ("lines", lines),
+            ("stamps", stamps),
+        ):
+            if values is not None and len(values) != len(points):
+                raise ValueError(f"{name} has {len(values)} entries for {len(points)} points")
         pcd_t = o3d.t.geometry.PointCloud()
         pcd_t.point["positions"] = o3c.Tensor(points.astype(np.float32), dtype=o3c.float32)
         if intensities is not None:
@@ -208,6 +236,20 @@ class PointCloud2(Timestamped):
             if arr.ndim == 1:
                 arr = arr.reshape(-1, 1)
             pcd_t.point["intensities"] = o3c.Tensor(arr, dtype=o3c.float32)
+        if offset_times is not None:
+            pcd_t.point["offset_times"] = o3c.Tensor(
+                offset_times.astype(np.uint32).reshape(-1, 1), dtype=o3c.uint32
+            )
+        if tags is not None:
+            pcd_t.point["tags"] = o3c.Tensor(tags.astype(np.uint8).reshape(-1, 1), dtype=o3c.uint8)
+        if lines is not None:
+            pcd_t.point["lines"] = o3c.Tensor(
+                lines.astype(np.uint8).reshape(-1, 1), dtype=o3c.uint8
+            )
+        if stamps is not None:
+            pcd_t.point["stamps"] = o3c.Tensor(
+                stamps.astype(np.float64).reshape(-1, 1), dtype=o3c.float64
+            )
         return cls(pointcloud=pcd_t, ts=timestamp, frame_id=frame_id)
 
     @classmethod
@@ -439,6 +481,30 @@ class PointCloud2(Timestamped):
             return arr.astype(np.float32) if arr.dtype != np.float32 else arr  # type: ignore[no-any-return]
         return None
 
+    def _per_point_field(self, name: str, np_dtype: type) -> np.ndarray | None:
+        """Read a per-point attribute from the tensor, or None if absent."""
+        self._ensure_tensor_initialized()
+        if name not in self._pcd_tensor.point:
+            return None
+        arr = self._pcd_tensor.point[name].numpy().flatten()
+        return arr.astype(np_dtype) if arr.dtype != np_dtype else arr  # type: ignore[no-any-return]
+
+    def offset_times_u32(self) -> np.ndarray | None:
+        """Per-point time offsets (ns relative to header stamp) as flat uint32, or None."""
+        return self._per_point_field("offset_times", np.uint32)
+
+    def tags_u8(self) -> np.ndarray | None:
+        """Per-point sensor tag bytes as flat uint8, or None if absent."""
+        return self._per_point_field("tags", np.uint8)
+
+    def lines_u8(self) -> np.ndarray | None:
+        """Per-point laser line numbers as flat uint8, or None if absent."""
+        return self._per_point_field("lines", np.uint8)
+
+    def stamps_f64(self) -> np.ndarray | None:
+        """Per-point capture times (absolute seconds) as flat float64, or None if absent."""
+        return self._per_point_field("stamps", np.float64)
+
     @functools.cached_property
     def axis_aligned_bounding_box(self) -> o3d.geometry.AxisAlignedBoundingBox:
         """Get axis-aligned bounding box of the point cloud."""
@@ -484,7 +550,7 @@ class PointCloud2(Timestamped):
 
         # Header
         msg.header = Header()
-        msg.header.seq = 0
+        msg.header.seq = self.seq
         msg.header.frame_id = frame_id or self.frame_id
 
         msg.header.stamp.sec = int(self.ts)
@@ -548,8 +614,45 @@ class PointCloud2(Timestamped):
 
             point_data = np.column_stack([points, intensities]).astype(np.float32)
 
+        # Optional per-point attributes (offset_time/tag/line) extend the
+        # base 16-byte layout with packed extra fields, emitted only when present.
+        extras: list[tuple[str, np.dtype, int, np.ndarray]] = []
+        offset_times = self.offset_times_u32()
+        if offset_times is not None:
+            extras.append(("offset_time", np.dtype("<u4"), PointField.UINT32, offset_times))
+        tags = self.tags_u8()
+        if tags is not None:
+            extras.append(("tag", np.dtype("u1"), PointField.UINT8, tags))
+        lines = self.lines_u8()
+        if lines is not None:
+            extras.append(("line", np.dtype("u1"), PointField.UINT8, lines))
+
+        wire_array: np.ndarray = point_data
+        if extras:
+            base_names = ["x", "y", "z", "rgb" if has_colors else "intensity"]
+            packed_dtype = np.dtype(
+                [(name, "<f4") for name in base_names]
+                + [(name, dt.str) for name, dt, _, _ in extras]
+            )
+            packed = np.zeros(len(points), dtype=packed_dtype)
+            for column, name in enumerate(base_names):
+                packed[name] = point_data[:, column]
+            byte_offset = msg.point_step
+            for name, dt, pf_datatype, values in extras:
+                packed[name] = values
+                extra_field = PointField()
+                extra_field.name = name
+                extra_field.offset = byte_offset
+                extra_field.datatype = pf_datatype
+                extra_field.count = 1
+                msg.fields.append(extra_field)
+                byte_offset += dt.itemsize
+            msg.fields_length = len(msg.fields)
+            msg.point_step = byte_offset
+            wire_array = packed
+
         msg.row_step = msg.point_step * msg.width
-        data_bytes = point_data.tobytes()
+        data_bytes = wire_array.tobytes()
         msg.data_length = len(data_bytes)
         msg.data = data_bytes
 
@@ -557,6 +660,15 @@ class PointCloud2(Timestamped):
         msg.is_bigendian = False
 
         return msg.lcm_encode()  # type: ignore[no-any-return]
+
+    @classmethod
+    def lcm_warmup(cls) -> None:
+        """Preload the heavy imports lcm_decode needs.
+
+        Called at subscribe time (see LCMEncoderMixin.subscribe) so the first
+        decode doesn't stall the LCM handler thread on the open3d import.
+        """
+        import open3d.core  # type: ignore[import-untyped] # noqa: F401
 
     @classmethod
     def lcm_decode(cls, data: bytes) -> PointCloud2:
@@ -573,11 +685,27 @@ class PointCloud2(Timestamped):
                 ts=msg.header.stamp.sec + msg.header.stamp.nsec / 1e9
                 if hasattr(msg, "header") and msg.header.stamp.sec > 0
                 else None,
+                seq=msg.header.seq if hasattr(msg, "header") else 0,
             )
 
-        # Parse field offsets
+        # Parse field offsets. The message is self-describing; a known field is
+        # honored only when its advertised datatype matches what we read it as,
+        # otherwise it is treated as absent rather than misread.
+        _expected_datatype = {
+            "x": PointField.FLOAT32,
+            "y": PointField.FLOAT32,
+            "z": PointField.FLOAT32,
+            "rgb": PointField.FLOAT32,
+            "intensity": PointField.FLOAT32,
+            "offset_time": PointField.UINT32,
+            "tag": PointField.UINT8,
+            "line": PointField.UINT8,
+        }
         x_offset = y_offset = z_offset = rgb_offset = intensity_offset = None
+        offset_time_offset = tag_offset = line_offset = None
         for msgfield in msg.fields:
+            if _expected_datatype.get(msgfield.name) != msgfield.datatype:
+                continue
             if msgfield.name == "x":
                 x_offset = msgfield.offset
             elif msgfield.name == "y":
@@ -588,6 +716,12 @@ class PointCloud2(Timestamped):
                 rgb_offset = msgfield.offset
             elif msgfield.name == "intensity":
                 intensity_offset = msgfield.offset
+            elif msgfield.name == "offset_time":
+                offset_time_offset = msgfield.offset
+            elif msgfield.name == "tag":
+                tag_offset = msgfield.offset
+            elif msgfield.name == "line":
+                line_offset = msgfield.offset
 
         if any(offset is None for offset in [x_offset, y_offset, z_offset]):
             raise ValueError("PointCloud2 message missing X, Y, or Z msgfields")
@@ -640,6 +774,35 @@ class PointCloud2(Timestamped):
                     intensities.reshape(-1, 1), dtype=o3c.float32
                 )
 
+        # Extract per-point attributes (offset_time/tag/line) if present. Unlike
+        # intensity, zero is a meaningful value (first point's offset_time is 0),
+        # so field presence alone decides — no nonzero check.
+        def _extract_scalar_field(field_offset: int, np_dtype: str) -> np.ndarray:
+            item_size = np.dtype(np_dtype).itemsize
+            dt_s = np.dtype(
+                [
+                    ("_pre", f"V{field_offset}"),
+                    ("value", np_dtype),
+                    ("_post", f"V{point_step - field_offset - item_size}"),
+                ]
+            )
+            structured_s = np.frombuffer(raw_data, dtype=dt_s, count=num_points)
+            return np.ascontiguousarray(structured_s["value"])
+
+        if offset_time_offset is not None:
+            pcd_t.point["offset_times"] = o3c.Tensor(
+                _extract_scalar_field(offset_time_offset, "<u4").reshape(-1, 1),
+                dtype=o3c.uint32,
+            )
+        if tag_offset is not None:
+            pcd_t.point["tags"] = o3c.Tensor(
+                _extract_scalar_field(tag_offset, "u1").reshape(-1, 1), dtype=o3c.uint8
+            )
+        if line_offset is not None:
+            pcd_t.point["lines"] = o3c.Tensor(
+                _extract_scalar_field(line_offset, "u1").reshape(-1, 1), dtype=o3c.uint8
+            )
+
         # Extract RGB colors if present
         if rgb_offset is not None:
             dt = np.dtype(
@@ -663,6 +826,7 @@ class PointCloud2(Timestamped):
             ts=msg.header.stamp.sec + msg.header.stamp.nsec / 1e9
             if hasattr(msg, "header") and msg.header.stamp.sec > 0
             else None,
+            seq=msg.header.seq if hasattr(msg, "header") else 0,
         )
 
     def _create_xyz_fields(self) -> list:  # type: ignore[type-arg]
@@ -712,6 +876,8 @@ class PointCloud2(Timestamped):
         mode: str = "spheres",
         fill_mode: str = "solid",
         bottom_cutoff: float | None = None,
+        ui_radius: float = 2.0,
+        rgb: bool = True,
         **kwargs: object,
     ) -> Archetype:
         """Convert to Rerun archetype for visualization.
@@ -721,8 +887,13 @@ class PointCloud2(Timestamped):
             colors: Optional RGB color [r, g, b] for all points (0-255).
                 If None, uses height-based turbo colormap via class_ids
                 (requires register_colormap_annotation() called once).
-            mode: "points" for raw points, "boxes" for cubes (default), or "spheres" for sized spheres
+            mode: "points" for flat screen-space dots, "boxes" for cubes, or
+                "spheres" (default) for world-sized spheres. Only "points" holds a
+                constant on-screen size as you zoom; the others scale with voxel_size.
             fill_mode: Fill mode for boxes - "solid", "majorwireframe", or "densewireframe"
+            ui_radius: Dot radius in screen-space UI points; "points" mode only.
+            rgb: Paint with the cloud's own per-point colors when it has any (an
+                RGBD cloud); off, or on a colorless cloud, the height colormap.
             **kwargs: Additional args (ignored for compatibility)
 
         Returns:
@@ -742,16 +913,22 @@ class PointCloud2(Timestamped):
         # Use class_ids for height-based colormap (viewer resolves colors via AnnotationContext)
         # Fall back to explicit colors when provided
         class_ids = None
-        point_colors = None
+        point_colors: Any = None
         if colors is not None:
             point_colors = colors
+        elif rgb and self.pointcloud.has_colors():
+            own = np.asarray(self.pointcloud.colors)
+            if bottom_cutoff is not None:
+                own = own[np.asarray(self.pointcloud.points)[:, 2] >= bottom_cutoff]
+            point_colors = (own * 255).astype(np.uint8)
         else:
             z = points[:, 2]
             class_ids = ((z - z.min()) / (z.max() - z.min() + 1e-8) * 255).astype(np.uint8)
 
         if mode == "points":
+            # Negative radii are screen-space UI points in rerun.
             return rr.Points3D(
-                positions=points, colors=point_colors, class_ids=class_ids, radii=voxel_size / 2
+                positions=points, colors=point_colors, class_ids=class_ids, radii=-ui_radius
             )
         elif mode == "boxes":
             half = voxel_size / 2
@@ -843,6 +1020,41 @@ class PointCloud2(Timestamped):
             frame_id=self.frame_id,
             timestamp=self.ts,
         )
+
+    def to_json(
+        self,
+        origin: Pose | None = None,
+        *,
+        sectors: tuple[str, ...],
+        z_min: float = -0.2,
+        z_max: float = 0.8,
+        max_range: float = 5.0,
+    ) -> dict[str, SectorJson]:
+        """Nearest obstacle per angular sector around ``origin`` (None: cloud already in the robot frame).
+
+        ``sectors`` names equal angular bins counter-clockwise from ahead. The z band is
+        relative to the origin. ``state`` is blocked (< 0.5 m), tight (< 1 m) or clear.
+        """
+        pts = self.points_f32().astype(np.float64)
+        if origin is not None:
+            pts = pts - np.array([origin.x, origin.y, origin.z])
+            c, s = np.cos(-origin.yaw), np.sin(-origin.yaw)
+            pts = np.column_stack(
+                (c * pts[:, 0] - s * pts[:, 1], s * pts[:, 0] + c * pts[:, 1], pts[:, 2])
+            )
+        r = np.hypot(pts[:, 0], pts[:, 1])
+        keep = (pts[:, 2] > z_min) & (pts[:, 2] < z_max) & (r > 0.05) & (r < max_range)
+        pts, r = pts[keep], r[keep]
+        n = len(sectors)
+        sector = np.round(np.arctan2(pts[:, 1], pts[:, 0]) / (2 * np.pi / n)).astype(int) % n
+        out: dict[str, SectorJson] = {}
+        for i, name in enumerate(sectors):
+            clear_m = float(r[sector == i].min()) if (sector == i).any() else max_range
+            out[name] = {
+                "clear_m": round(clear_m, 2),
+                "state": "blocked" if clear_m < 0.5 else "tight" if clear_m < 1.0 else "clear",
+            }
+        return out
 
     def __repr__(self) -> str:
         """String representation."""

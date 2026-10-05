@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING, BinaryIO, TypeAlias
+from typing import TYPE_CHECKING, Any, BinaryIO, TypeAlias, TypedDict
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype
 
 from dimos_lcm.geometry_msgs import PoseStamped as LCMPoseStamped
-from plum import dispatch
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion, QuaternionConvertable
@@ -43,16 +42,56 @@ def sec_nsec(ts):  # type: ignore[no-untyped-def]
     return [s, int((ts - s) * 1_000_000_000)]
 
 
+class XyzJson(TypedDict):
+    x: float
+    y: float
+    z: float
+
+
+class PoseJson(TypedDict):
+    position: XyzJson
+    yaw_deg: float
+    heading: str
+
+
+_HEADINGS = (
+    "east",
+    "north_east",
+    "north",
+    "north_west",
+    "west",
+    "south_west",
+    "south",
+    "south_east",
+)
+
+
 class PoseStamped(Pose, Timestamped):
     msg_name = "geometry_msgs.PoseStamped"
     ts: float
     frame_id: str
 
-    @dispatch
-    def __init__(self, ts: float = 0.0, frame_id: str = "", **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize a stamped pose.
+
+        Takes ``(ts, frame_id)`` positionally, plus every Pose keyword. Any other
+        positional form belongs to Pose, so ``PoseStamped(x, y, z)`` and
+        ``PoseStamped(x, y, z, qx, qy, qz, qw)`` work as they do on the base class.
+        """
+        ts: Any
+        # A leading number or string is a timestamp; anything else is a Pose argument.
+        if args and len(args) < 3 and isinstance(args[0], int | float | str):
+            ts = args[0]
+            frame_id = args[1] if len(args) > 1 else kwargs.pop("frame_id", "")
+            pose_args: tuple[Any, ...] = ()
+        else:
+            ts = kwargs.pop("ts", None)
+            frame_id = kwargs.pop("frame_id", "")
+            pose_args = args
+
         self.frame_id = frame_id
-        self.ts = ts if ts != 0 else time.time()
-        super().__init__(**kwargs)
+        self.ts = time.time() if ts is None else ts
+        super().__init__(*pose_args, **kwargs)
 
     def lcm_encode(self) -> bytes:
         lcm_mgs = LCMPoseStamped()
@@ -81,6 +120,15 @@ class PoseStamped(Pose, Timestamped):
             f"PoseStamped(pos=[{self.x:.3f}, {self.y:.3f}, {self.z:.3f}], "
             f"euler=[{math.degrees(self.roll):.1f}, {math.degrees(self.pitch):.1f}, {math.degrees(self.yaw):.1f}])"
         )
+
+    def to_json(self) -> PoseJson:
+        """Position, yaw and an 8-way compass word (+x east, +y north)."""
+        yaw_deg = math.degrees(self.yaw)
+        return {
+            "position": {"x": round(self.x, 2), "y": round(self.y, 2), "z": round(self.z, 2)},
+            "yaw_deg": round(yaw_deg, 1),
+            "heading": _HEADINGS[round(yaw_deg / 45.0) % 8],
+        }
 
     def to_rerun(self) -> Archetype:
         """Convert to rerun Transform3D format.

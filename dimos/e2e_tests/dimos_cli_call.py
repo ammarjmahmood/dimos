@@ -17,6 +17,24 @@ import signal
 import subprocess
 import time
 
+import requests
+
+
+def wait_for_http(call: "DimosCliCall", url: str, timeout_s: float) -> None:
+    """Poll `url` until it answers 2xx, failing fast when the process died."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            requests.get(url, timeout=2).raise_for_status()
+            return
+        except requests.RequestException:
+            assert call.process is not None and call.process.poll() is None, (
+                f"dimos exited with {call.process and call.process.returncode} before {url} came up"
+            )
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"{url} not reachable after {timeout_s} s") from None
+            time.sleep(0.5)
+
 
 class DimosCliCall:
     process: subprocess.Popen[bytes] | None
@@ -44,11 +62,11 @@ class DimosCliCall:
         # defaults to a hard-coded `http://localhost:9990/mcp`) so server
         # and client agree on the same port.
         #
-        # The McpClient URL goes through an env var rather than a `-o`
-        # blueprint override: `load_config_args` silently skips env-var
-        # overrides whose module is absent from the blueprint, but rejects
-        # unknown `-o` keys outright. Blueprints without an mcpclient (e.g.
-        # `coordinator-mock`) would otherwise fail config validation.
+        # The McpClient URL goes through an env var rather than a dynamic
+        # blueprint flag: BlueprintConfigParser skips environment overrides
+        # whose module is absent from the blueprint, but rejects unknown CLI
+        # configuration flags. Blueprints without an mcpclient (e.g.
+        # `coordinator-mock`) would otherwise fail configuration validation.
         global_overrides: list[str] = list(self.global_args)
         env = os.environ.copy()
         env.update(self.extra_env)

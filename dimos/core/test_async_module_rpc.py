@@ -23,7 +23,7 @@ from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.core.transport import pLCMTransport
+from dimos.core.transport_factory import make_transport
 from dimos.spec.utils import Spec
 
 
@@ -50,7 +50,7 @@ class StartModule(Module):
 
 
 @pytest.fixture
-def start_cube_module():
+def start_cube_module(each_transport):
     blueprint = autoconnect(StartModule.blueprint(), MakeCube.blueprint())
     coordinator = ModuleCoordinator.build(blueprint)
     yield
@@ -58,16 +58,16 @@ def start_cube_module():
 
 
 @pytest.fixture
-def a_transport():
-    a_tr = pLCMTransport("/a")
+def a_transport(each_transport):
+    a_tr = make_transport("/a")
     a_tr.start()
     yield a_tr
     a_tr.stop()
 
 
 @pytest.fixture
-def cube_a_transport():
-    cube_a_tr = pLCMTransport("/cube_a")
+def cube_a_transport(each_transport):
+    cube_a_tr = make_transport("/cube_a")
     cube_a_tr.start()
     yield cube_a_tr
     cube_a_tr.stop()
@@ -76,6 +76,10 @@ def cube_a_transport():
 def test_async_module_rpc(start_cube_module, a_transport, cube_a_transport):
     queue = Queue()
     cube_a_transport.subscribe(queue.put)
+    # Warm up: the first cross-process LCM message pays a ~50 ms cold-start; a
+    # throwaway round-trip absorbs it so the timed exchange below is on the warm path.
+    a_transport.publish(3)
+    queue.get(timeout=1.0)
     a_transport.publish(3)
     cubed = queue.get(timeout=0.1)
     assert cubed == 27

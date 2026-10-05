@@ -18,31 +18,39 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import field
+import functools
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import (
     TYPE_CHECKING,
     Any,
+    NamedTuple,
     Protocol,
     TypeAlias,
     TypeGuard,
+    TypeVar,
     cast,
     get_args,
     runtime_checkable,
 )
 from urllib.parse import urlparse
 
+import numpy as np
 from reactivex.disposable import Disposable
 from toolz import pipe  # type: ignore[import-untyped]
 
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
+from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.tf2_msgs.TFMessage import TfFrameTree, TFMessage
 from dimos.protocol.pubsub.impl.lcmpubsub import LCM
-from dimos.protocol.pubsub.impl.zenohpubsub import Zenoh
+from dimos.protocol.pubsub.impl.zenohpubsub import Topic as ZenohTopic, Zenoh
 from dimos.protocol.pubsub.patterns import Glob, pattern_matches
 from dimos.protocol.pubsub.spec import SubscribeAllCapable
 from dimos.protocol.service.lcmservice import autoconf
@@ -55,7 +63,7 @@ from dimos.visualization.rerun.constants import (
     RERUN_WEB_VIEWER_PORT,
     RerunOpenOption,
 )
-from dimos.visualization.rerun.init import rerun_init
+from dimos.visualization.rerun.init import rerun_init, spawn_viewer
 
 if TYPE_CHECKING:
     from rerun._baseclasses import Archetype
@@ -79,41 +87,69 @@ if TYPE_CHECKING:
 #
 # as well as pubsubs={} to specify which protocols to listen to.
 
-# TODO better TF processing
-#
-# this is rerun bridge specific, rerun has a specific (better) way of handling TFs
-# using entity path conventions, each of these nodes in a path are TF frames:
-#
-# /world/robot1/base_link/camera/optical
-#
-# While here since we are just listening on TFMessage messages which optionally contain
-# just a subset of full TF tree we don't know the full tree structure to build full entity
-# path for a transform being published
-#
-# This is easy to reconstruct but a service/tf.py already does this so should be integrated here
-#
-# we have decoupled entity paths and actual transforms (like ROS TF frames)
-# https://rerun.io/docs/concepts/logging-and-ingestion/transforms
-#
-# tf#/world
-# tf#/base_link
-# tf#/camera
-#
-# In order to solve this, bridge needs to own it's own tf service
-# and render it's tf tree into correct rerun entity paths
-
 logger = setup_logger()
 
-RerunMulti: TypeAlias = "list[tuple[str, Archetype]]"
+
+class RerunEntry(NamedTuple):
+    """One entity to log. Static entries survive the viewer's memory limit."""
+
+    path: str
+    archetype: Archetype
+    static: bool = False
+
+
+RerunMulti: TypeAlias = "list[tuple[str, Archetype] | RerunEntry]"
 RerunData: TypeAlias = "Archetype | RerunMulti"
+
+# A region cell packed into a header seq: i in the high half, j in the low half,
+# both signed 16 bit. pack_cell in mls_planner/rust/src/region_viz.rs owns this
+# layout, the ray tracer copies it.
+CELL_SHIFT = 16
+CELL_MASK = 0xFFFF
+CELL_SIGN = 0x8000
+
+
+def region_entity(base: str, seq: int) -> str:
+    """The entity of the region cell a native packed into a header seq."""
+    i = seq >> CELL_SHIFT
+    j = ((seq & CELL_MASK) ^ CELL_SIGN) - CELL_SIGN
+    return f"{base}/{i}_{j}"
+
 
 if TYPE_CHECKING:
     BlueprintFactory: TypeAlias = Callable[[], "Blueprint"]
-    VisualOverride: TypeAlias = Callable[[Any], "Archetype"]
+    # A renderer for an entity, or None to hide it.
+    VisualOverride: TypeAlias = Callable[[Any], "RerunData | None"] | None
 else:
     # Pydantic evaluates Config's annotations at runtime, so keep rerun types
     # out of them - importing rerun here would defeat the lazy import below.
-    BlueprintFactory = VisualOverride = Callable[..., Any]
+    BlueprintFactory = Callable[..., Any]
+    VisualOverride = Callable[..., Any] | None
+
+
+@runtime_checkable
+class KeyedRenderer(Protocol):
+    """A renderer whose entities are keyed by the message's header seq."""
+
+    keyed_by_seq: bool
+
+    def __call__(self, *args: object, **kwargs: object) -> object: ...
+
+
+RendererT = TypeVar("RendererT", bound=Callable[..., object])
+
+
+def keyed_by_seq(renderer: RendererT) -> RendererT:
+    """Mark a renderer whose topic carries one message per key, taken unconflated."""
+    renderer.keyed_by_seq = True  # type: ignore[attr-defined]
+    return renderer
+
+
+def is_keyed_by_seq(renderer: object) -> bool:
+    """Whether a renderer, or the function under a partial, is marked keyed."""
+    while isinstance(renderer, functools.partial):
+        renderer = renderer.func
+    return isinstance(renderer, KeyedRenderer) and renderer.keyed_by_seq
 
 
 def is_rerun_multi(data: Any) -> TypeGuard[RerunMulti]:
@@ -124,7 +160,7 @@ def is_rerun_multi(data: Any) -> TypeGuard[RerunMulti]:
         isinstance(data, list)
         and bool(data)
         and isinstance(data[0], tuple)
-        and len(data[0]) == 2
+        and len(data[0]) in (2, 3)
         and isinstance(data[0][0], str)
         and isinstance(data[0][1], Archetype)
     )
@@ -143,6 +179,22 @@ def _hex_to_rgba(hex_color: str) -> int:
     if len(h) == 6:
         return int(h + "ff", 16)
     return int(h[:8], 16)
+
+
+def _graphviz_plain_lines(output: str) -> list[str]:
+    """Join physical lines that Graphviz wraps with a trailing backslash."""
+    lines: list[str] = []
+    pending = ""
+    for physical_line in output.splitlines():
+        pending += physical_line
+        if pending.endswith("\\"):
+            pending = pending[:-1]
+            continue
+        lines.append(pending)
+        pending = ""
+    if pending:
+        lines.append(pending)
+    return lines
 
 
 def _with_graph_tab(bp: Blueprint) -> Blueprint:
@@ -220,11 +272,17 @@ class Config(ModuleConfig):
 
     pubsubs: list[SubscribeAllCapable[Any, Any]] = field(default_factory=lambda: [LCM()])
 
-    visual_override: dict[Glob | str, VisualOverride | None] = field(default_factory=dict)
+    visual_override: dict[Glob | str, VisualOverride] = field(default_factory=dict)
     static: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
     max_hz: dict[str, float] = field(default_factory=dict)
 
+    # Topic names without the `dimos/` prefix; empty means every topic.
+    # On zenoh an unlisted topic never crosses the link, unlike `visual_override: None`.
+    topics: list[str] = field(default_factory=list)
+
     entity_prefix: str = "world"
+    # Length of the triads to draw
+    tf_axes: float = 0.0
     topic_to_entity: Callable[[Any], str] | None = None
     connect_url: str | None = None
     memory_limit: str = "25%"
@@ -264,6 +322,19 @@ class RerunBridgeModule(Module):
         self._last_log = {}
         self._override_cache: dict[str, Callable[[Any], RerunData | None]] = {}
         self._frame_attached: dict[str, str] = {}
+        self._camera_infos: dict[str, CameraInfo] = {}
+        self._image_entities: set[str] = set()
+        self._min_intervals: dict[str, float] = {}
+        self._tf_lock = threading.Lock()
+        self._tf_tree = self._new_tf_tree()
+
+    def _new_tf_tree(self) -> TfFrameTree | None:
+        if self.config.tf_axes <= 0:
+            return None
+        return TfFrameTree(
+            axis_length=self.config.tf_axes,
+            root=f"{self.config.entity_prefix}/tf",
+        )
 
     @property
     def host(self) -> str:
@@ -315,6 +386,15 @@ class RerunBridgeModule(Module):
         self._override_cache[entity_path] = composed
         return composed
 
+    def _keyed_topics(self) -> list[str]:
+        """Channels whose renderer keys entities by seq, so every message must arrive."""
+        prefix = f"{self.config.entity_prefix}/"
+        return [
+            str(path).removeprefix(prefix)
+            for path, renderer in self.config.visual_override.items()
+            if is_keyed_by_seq(renderer)
+        ]
+
     def _get_entity_path(self, topic: Any) -> str:
         if self.config.topic_to_entity:
             return self.config.topic_to_entity(topic)
@@ -344,6 +424,16 @@ class RerunBridgeModule(Module):
                 return
             self._last_log[entity_path] = now
 
+        if self._tf_tree is not None and isinstance(msg, TFMessage):
+            with self._tf_lock:
+                for path, archetype in msg.to_rerun(self._tf_tree):
+                    rr.log(path, archetype)
+            return
+
+        if isinstance(msg, CameraInfo) and entity_path not in self.config.visual_override:
+            self._log_camera_info(entity_path, msg)
+            return
+
         rerun_data: RerunData | None = self._visual_override_for_entity_path(entity_path)(msg)
 
         if not rerun_data:
@@ -351,10 +441,18 @@ class RerunBridgeModule(Module):
 
         # TFMessage for example returns list of (entity_path, archetype) tuples
         if is_rerun_multi(rerun_data):
-            for path, archetype in rerun_data:
-                rr.log(path, archetype)
+            for entry in rerun_data:
+                rr.log(entry[0], entry[1], static=isinstance(entry, RerunEntry) and entry.static)
+            # Pin the base entity to the message frame once, so child entities
+            # follow it the way a single archetype does below.
+            frame_id = getattr(msg, "frame_id", None)
+            if frame_id and self._frame_attached.get(entity_path) != frame_id:
+                rr.log(entity_path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
+                self._frame_attached[entity_path] = frame_id
         else:
             rr.log(entity_path, cast("Archetype", rerun_data))
+            if isinstance(msg, Image):
+                self._image_entities.add(entity_path)
             # if source msg carries a frame_id, attach the entity to that TF frame
             # should skip if archetype is a Transform3D
             if not isinstance(rerun_data, rr.Transform3D):
@@ -362,6 +460,25 @@ class RerunBridgeModule(Module):
                 if frame_id and self._frame_attached.get(entity_path) != frame_id:
                     rr.log(entity_path, rr.Transform3D(parent_frame=f"tf#/{frame_id}"))
                     self._frame_attached[entity_path] = frame_id
+                    if isinstance(msg, Image) and frame_id in self._camera_infos:
+                        rr.log(entity_path, self._camera_infos[frame_id].to_rerun_pinhole())
+
+    def _log_camera_info(self, entity_path: str, info: CameraInfo) -> None:
+        """A CameraInfo is the pinhole of every image in its optical frame.
+
+        Rerun draws the frustum only when the Pinhole sits on the image entity,
+        so the info is paired with images by frame_id rather than logged on
+        its own topic; an image that arrives later picks it up on attach.
+        """
+        import rerun as rr
+
+        if not info.frame_id:
+            rr.log(entity_path, info.to_rerun_pinhole())
+            return
+        self._camera_infos[info.frame_id] = info
+        for image_path, frame_id in self._frame_attached.items():
+            if frame_id == info.frame_id and image_path in self._image_entities:
+                rr.log(image_path, info.to_rerun_pinhole())
 
     @rpc
     def start(self) -> None:
@@ -373,7 +490,10 @@ class RerunBridgeModule(Module):
 
         self._last_log = {}
         self._frame_attached = {}
-        self._min_intervals: dict[str, float] = {
+        self._camera_infos = {}
+        self._image_entities = set()
+        self._tf_tree = self._new_tf_tree()
+        self._min_intervals = {
             entity: 1.0 / hz for entity, hz in self.config.max_hz.items() if hz > 0
         }
 
@@ -401,37 +521,7 @@ class RerunBridgeModule(Module):
 
         spawned = False
         if self.config.rerun_open in ("native", "both"):
-            try:
-                import rerun_bindings
-
-                # Use --connect so the viewer connects to the bridge's gRPC
-                # server rather than starting its own (which would conflict).
-                rerun_bindings.spawn(
-                    executable_name="dimos-viewer",
-                    memory_limit=self.config.memory_limit,
-                    extra_args=["--connect", server_uri],
-                )
-                spawned = True
-            except ImportError:
-                pass  # dimos-viewer not installed
-            except Exception:
-                logger.warning(
-                    "dimos-viewer found but failed to spawn, falling back to stock rerun",
-                    exc_info=True,
-                )
-
-            # fallback on normal (non-dimos-viewer) rerun
-            if not spawned:
-                try:
-                    rr.spawn(connect=True, memory_limit=self.config.memory_limit)
-                    spawned = True
-                except (RuntimeError, FileNotFoundError):
-                    logger.warning(
-                        "Rerun native viewer not available (headless?). "
-                        "Bridge will continue without a viewer — data is still "
-                        "accessible via --rerun-open web or by connecting a viewer to the gRPC server.",
-                        exc_info=True,
-                    )
+            spawned = spawn_viewer(server_uri, self.config.memory_limit)
 
         open_web = self.config.rerun_open == "web" or self.config.rerun_open == "both"
         if open_web or self.config.rerun_web:
@@ -462,8 +552,7 @@ class RerunBridgeModule(Module):
             logger.info(f"bridge listening on {pubsub.__class__.__name__}")
             if hasattr(pubsub, "start"):
                 pubsub.start()
-            unsub = pubsub.subscribe_all(self._on_message)
-            self.register_disposable(Disposable(unsub))
+            self.register_disposable(Disposable(self._subscribe(pubsub)))
 
         # Add pubsub stop as disposable
         for pubsub in pubsubs:
@@ -471,6 +560,36 @@ class RerunBridgeModule(Module):
                 self.register_disposable(Disposable(pubsub.stop))  # type: ignore[union-attr]
 
         self._log_static()
+
+    def _subscribe(self, pubsub: SubscribeAllCapable[Any, Any]) -> Callable[[], None]:
+        """Subscribe to the named topics, or to everything when none are named.
+
+        A zenoh key is `dimos/<topic>/<Type>`, so one wildcard per name needs no type; LCM cannot do this.
+        """
+        if not self.config.topics:
+            if isinstance(pubsub, Zenoh):
+                return pubsub.subscribe_all(self._on_message, unconflated=self._keyed_topics())
+            return pubsub.subscribe_all(self._on_message)
+
+        if not isinstance(pubsub, Zenoh):
+            logger.warning(
+                f"{pubsub.__class__.__name__} cannot subscribe per topic; "
+                f"listening to everything and ignoring topics={self.config.topics}"
+            )
+            return pubsub.subscribe_all(self._on_message)
+
+        # a pattern over the type segment, not the concrete Topic LCMTopicProto asks for
+        unsubs = [
+            pubsub.subscribe(ZenohTopic(f"dimos/{name.strip('/')}/*"), self._on_message)  # type: ignore[arg-type]
+            for name in self.config.topics
+        ]
+        logger.info(f"bridge subscribed to {len(unsubs)} topics: {', '.join(self.config.topics)}")
+
+        def unsubscribe() -> None:
+            for unsub in unsubs:
+                unsub()
+
+        return unsubscribe
 
     def _log_connect_hints(self, grpc_port: int) -> None:
         """Log CLI commands for connecting a viewer to this bridge."""
@@ -508,10 +627,10 @@ class RerunBridgeModule(Module):
                 logger.info(
                     "Rerun static entity",
                     entity_path=entity_path,
-                    archetypes=[type(archetype).__name__ for _, archetype in data],
+                    archetypes=[type(entry[1]).__name__ for entry in data],
                 )
-                for path, archetype in data:
-                    rr.log(path, archetype, static=True)
+                for entry in data:
+                    rr.log(entry[0], entry[1], static=True)
                 continue
 
             if isinstance(data, list):
@@ -560,7 +679,7 @@ class RerunBridgeModule(Module):
         edges: list[tuple[str, str]] = []
         module_set = set(module_names)
 
-        for line in result.stdout.splitlines():
+        for line in _graphviz_plain_lines(result.stdout):
             if line.startswith("node "):
                 parts = line.split()
                 node_id = parts[1].strip('"')
@@ -587,7 +706,7 @@ class RerunBridgeModule(Module):
             rr.GraphNodes(
                 node_ids=node_ids,
                 labels=node_labels,
-                colors=node_colors,
+                colors=np.asarray(node_colors, dtype=np.uint32),
                 positions=positions,
                 radii=radii,
                 show_labels=True,
@@ -600,6 +719,7 @@ class RerunBridgeModule(Module):
     def stop(self) -> None:
         self._override_cache.clear()
         self._frame_attached.clear()
+        self._tf_tree = None
         super().stop()
 
 

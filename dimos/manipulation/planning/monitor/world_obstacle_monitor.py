@@ -37,6 +37,8 @@ from dimos.manipulation.planning.spec.models import (
     Obstacle,
 )
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -44,7 +46,7 @@ if TYPE_CHECKING:
 
     from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
     from dimos.msgs.vision_msgs.Detection3D import Detection3D
-    from dimos.perception.detection.type.detection3d.object import Object
+    from dimos.perception.experimental.object import Object
 
 logger = setup_logger()
 
@@ -458,7 +460,7 @@ class WorldObstacleMonitor:
         if not self._running:
             return
 
-        from dimos.perception.detection.type.detection3d.object import Object
+        from dimos.perception.experimental.object import Object
 
         now = time.time()
         seen: set[str] = set()
@@ -489,7 +491,7 @@ class WorldObstacleMonitor:
         Returns:
             List of added obstacles with object_id, obstacle_id, name, center, size
         """
-        from dimos.perception.detection.type.detection3d.object import Object
+        from dimos.perception.experimental.object import Object
 
         # Step 1: snapshot eligible objects under lock (fast)
         eligible: list[tuple[str, Object]] = []
@@ -578,14 +580,14 @@ class WorldObstacleMonitor:
 
         Returns raw Object instances for typed access to .name, .center, .size etc.
         """
-        from dimos.perception.detection.type.detection3d.object import Object as _Object
+        from dimos.perception.experimental.object import Object as _Object
 
         with self._lock:
             return [obj for obj, _, _ in self._object_cache.values() if isinstance(obj, _Object)]
 
     def list_cached_detections(self) -> list[dict[str, Any]]:
         """List cached detections from perception."""
-        from dimos.perception.detection.type.detection3d.object import Object
+        from dimos.perception.experimental.object import Object
 
         with self._lock:
             result: list[dict[str, Any]] = []
@@ -606,7 +608,7 @@ class WorldObstacleMonitor:
 
     def list_added_obstacles(self) -> list[dict[str, Any]]:
         """List perception obstacles currently in the planning world."""
-        from dimos.perception.detection.type.detection3d.object import Object
+        from dimos.perception.experimental.object import Object
 
         with self._lock:
             result: list[dict[str, Any]] = []
@@ -630,7 +632,7 @@ class WorldObstacleMonitor:
 
     def _object_to_obstacle(self, obj: object) -> Obstacle:
         """Convert Object to obstacle. Uses bounding box by default, convex hull if use_mesh_obstacles=True."""
-        from dimos.perception.detection.type.detection3d.object import Object
+        from dimos.perception.experimental.object import Object
 
         assert isinstance(obj, Object)
         name = f"object_{obj.object_id}"
@@ -644,14 +646,25 @@ class WorldObstacleMonitor:
 
                 points, _ = obj.pointcloud.as_numpy()
                 if points is not None and points.shape[0] >= 4:
-                    mesh_path = pointcloud_to_convex_hull_obj(points)
-                    if mesh_path is not None:
+                    # Keyed on the object's stable unique id: rescans overwrite
+                    # in place, and no two objects share a file.
+                    hull = pointcloud_to_convex_hull_obj(points, cache_key=name)
+                    if hull is not None:
+                        # The hull is world-axis-aligned about its own centroid,
+                        # so that is the only pose that leaves it on its points.
+                        # obj.pose carries the bbox center and the oriented-box
+                        # rotation, neither of which the vertices were built from.
                         return Obstacle(
                             name=name,
                             obstacle_type=ObstacleType.MESH,
-                            pose=obj.pose,
+                            pose=PoseStamped(
+                                ts=obj.pose.ts,
+                                frame_id=obj.pose.frame_id,
+                                position=Vector3(hull.centroid),
+                                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+                            ),
                             color=(0.2, 0.8, 0.2, 0.6),
-                            mesh_path=mesh_path,
+                            mesh_path=hull.path,
                         )
             except Exception as e:
                 logger.debug(f"Convex hull failed for {name}, falling back to box: {e}")

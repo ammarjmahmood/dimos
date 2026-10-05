@@ -19,7 +19,7 @@ import pytest
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.core.module import Module
 from dimos.core.stream import In, Out
-from dimos.core.transport import pLCMTransport
+from dimos.core.transport_factory import make_transport
 
 
 class DoubleModule(Module):
@@ -31,7 +31,7 @@ class DoubleModule(Module):
 
 
 @pytest.fixture
-def start_double_module():
+def start_double_module(each_transport):
     blueprint = DoubleModule.blueprint()
     coordinator = ModuleCoordinator.build(blueprint)
     yield
@@ -39,16 +39,16 @@ def start_double_module():
 
 
 @pytest.fixture
-def a_transport():
-    a_tr = pLCMTransport("/a")
+def a_transport(each_transport):
+    a_tr = make_transport("/a")
     a_tr.start()
     yield a_tr
     a_tr.stop()
 
 
 @pytest.fixture
-def double_a_transport():
-    double_a_tr = pLCMTransport("/double_a")
+def double_a_transport(each_transport):
+    double_a_tr = make_transport("/double_a")
     double_a_tr.start()
     yield double_a_tr
     double_a_tr.stop()
@@ -57,6 +57,10 @@ def double_a_transport():
 def test_async_module_handles(start_double_module, a_transport, double_a_transport):
     queue = Queue()
     double_a_transport.subscribe(queue.put)
+    # Warm up: the first cross-process LCM message pays a ~50 ms cold-start; a
+    # throwaway round-trip absorbs it so the timed exchange below is on the warm path.
+    a_transport.publish(42)
+    queue.get(timeout=1.0)
     a_transport.publish(42)
     doubled = queue.get(timeout=0.1)
     assert doubled == 84

@@ -28,13 +28,18 @@ from dimos.core.transport_factory import (
     default_zenoh_qos,
     make_transport,
     rpc_backend,
+    session_config,
     transport_topic,
 )
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.protocol.pubsub.impl.zenohpubsub import QOS_LATEST_WINS, QOS_NEVER_DROP
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
 from dimos.protocol.rpc.zenohrpc import ZenohRPC
+from dimos.protocol.service.lcmservice import LCMConfig
+from dimos.protocol.service.zenohservice import ZenohConfig
 
 LCM = GlobalConfig(transport="lcm")
 ZENOH = GlobalConfig(transport="zenoh")
@@ -87,6 +92,12 @@ def test_default_zenoh_qos_agent_channels_never_drop() -> None:
     assert default_zenoh_qos("/agent_idle") == QOS_NEVER_DROP
 
 
+def test_default_zenoh_qos_seed_channels_never_drop_despite_their_types() -> None:
+    assert default_zenoh_qos("/loaded_map", PointCloud2) == QOS_NEVER_DROP
+    assert default_zenoh_qos("/seed_map", PointCloud2) == QOS_NEVER_DROP
+    assert default_zenoh_qos("/seed_bounds", PoseStamped) == QOS_NEVER_DROP
+
+
 def test_default_zenoh_qos_everything_else_uses_zenoh_defaults() -> None:
     assert default_zenoh_qos("/cmd_vel", Twist) is None
     assert default_zenoh_qos("/tool_stream") is None
@@ -105,6 +116,18 @@ def test_make_transport_zenoh_pickled_carries_qos() -> None:
 def test_rpc_backend_resolves_per_transport() -> None:
     assert rpc_backend(LCM) is LCMRPC
     assert rpc_backend(ZENOH) is ZenohRPC
+
+
+def test_session_config_resolves_per_transport() -> None:
+    assert type(session_config(ZENOH)) is ZenohConfig
+    assert type(session_config(LCM)) is LCMConfig
+
+
+def test_session_config_unknown_transport_raises() -> None:
+    # The field validator rejects unknown backends, so bypass validation.
+    g = GlobalConfig.model_construct(transport="carrier_pigeon")
+    with pytest.raises(ValueError, match="carrier_pigeon"):
+        session_config(g)
 
 
 def test_apply_transport_arg() -> None:

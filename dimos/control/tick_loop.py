@@ -154,21 +154,24 @@ class TickLoop:
 
     def _loop(self) -> None:
         """Main control loop - deterministic read → compute → arbitrate → write."""
-        period = 1.0 / self._tick_rate
+        period_ns = round(1_000_000_000 / self._tick_rate)
+        next_tick_time = time.perf_counter_ns()
 
         while not self._stop_event.is_set():
-            tick_start = time.perf_counter()
-
             try:
                 self._tick()
             except Exception as e:
                 logger.error(f"TickLoop tick error: {e}")
 
-            # Rate control - recalculate sleep time to account for overhead
-            next_tick_time = tick_start + period
-            sleep_time = next_tick_time - time.perf_counter()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            # We simply increment the time from the last loop so we correct for long
+            # sleeps (e.g. Mac OS typically oversleeps upto 25%).
+            next_tick_time += period_ns
+            sleep_ns = next_tick_time - time.perf_counter_ns()
+            if sleep_ns > 0:
+                time.sleep(sleep_ns / 1_000_000_000)
+            else:
+                # Over a full period behind, reset the timer.
+                next_tick_time = time.perf_counter_ns()
 
     def _tick(self) -> None:
         """Single tick: read → compute → arbitrate → route → write."""
@@ -217,6 +220,8 @@ class TickLoop:
 
         with self._hardware_lock:
             for hw in self._hardware.values():
+                if not hw.ready_for_control():
+                    continue
                 try:
                     state = hw.read_state()
                     for joint_name, joint_state in state.items():
@@ -249,6 +254,8 @@ class TickLoop:
         with self._hardware_lock:
             for hw_id, hw in self._hardware.items():
                 if not isinstance(hw, ConnectedWholeBody):
+                    continue
+                if not hw.ready_for_control():
                     continue
                 read_imu = getattr(hw.adapter, "read_imu", None)
                 if not callable(read_imu):
@@ -405,11 +412,18 @@ class TickLoop:
         hw_commands: dict[str, tuple[dict[str, float], ControlMode]],
     ) -> None:
         """Write commands to all hardware interfaces."""
+        hardware = self._hardware
         with self._hardware_lock:
             for hw_id, (positions, mode) in hw_commands.items():
-                if hw_id in self._hardware:
+                if hw_id in hardware:
+                    if not hardware[hw_id].ready_for_control():
+                        continue
                     try:
-                        self._hardware[hw_id].write_command(positions, mode)
+                        accepted = hardware[hw_id].write_command(positions, mode)
+                        if not accepted:
+                            logger.error(
+                                f"Hardware {hw_id} rejected {mode.name} command from control task"
+                            )
                     except Exception as e:
                         logger.error(f"Failed to write to {hw_id}: {e}")
 
