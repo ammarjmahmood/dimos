@@ -58,11 +58,10 @@ class Cache:
 
 def blueprint_list() -> list[dict[str, str]]:
     """What `dimos list` prints: built-ins (not demo-*) then external blueprints."""
-    from dimos.robot.all_blueprints import all_blueprints
+    from dimos.cli.commands.info import builtin_blueprint_names
     from dimos.robot.external_blueprints import list_external_blueprint_names
 
-    builtin = sorted(name for name in all_blueprints if not name.startswith("demo-"))
-    return [{"name": name, "kind": "builtin"} for name in builtin] + [
+    return [{"name": name, "kind": "builtin"} for name in builtin_blueprint_names()] + [
         {"name": name, "kind": "external"} for name in list_external_blueprint_names()
     ]
 
