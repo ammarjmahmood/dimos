@@ -1,7 +1,8 @@
 {
   "info": {
     "title": "dimos server (from dimOS Desktop openapi)",
-    "version": "0.2.0"
+    "version": "0.2.0",
+    "x-copied-from": "GET /api/desktop/openapi of dimOS Desktop 0.2.0 (jeff/agent_chat, at or after 86a41a5), 2026-10-05, /dimos paths only. Kept as the only check that this server serves what Desktop documents, until Desktop's CI compares its doc against dimos's dimos/server/openapi.json (which it reads per tag anyway)."
   },
   "openapi": "3.1.0",
   "paths": {

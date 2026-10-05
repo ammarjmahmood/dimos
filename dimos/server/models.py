@@ -21,9 +21,14 @@ fields (an answer never loses one), and the tests check no answer carries one th
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+import typing
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, create_model
+
+from dimos.core.coordination.blueprints import StreamRef
+from dimos.core.run_registry import RunEntry
+from dimos.server.diagnose import ProblemCode, StepCode
 
 
 class ApiModel(BaseModel):
@@ -119,10 +124,17 @@ class BlueprintList(ApiModel):
     )
 
 
+# dimos's own StreamRef.direction (a Literal; mypy sees the str it is)
+if typing.TYPE_CHECKING:
+    StreamDirection = str
+else:
+    StreamDirection = typing.get_type_hints(StreamRef)["direction"]
+
+
 class Stream(ApiModel):
     name: str = Field(description="The stream's name on its module", examples=["color_image"])
     type: str = Field(description="Its message type", examples=["dimos.msgs.sensor_msgs.Image"])
-    direction: Literal["in", "out", "inout"] = Field(
+    direction: StreamDirection = Field(
         description="in: the module reads it; out: it publishes it; inout: both"
     )
 
@@ -382,41 +394,72 @@ class GlobalConfigUpdate(ApiModel):
 # runs
 
 
-class RegistryRun(ApiModel):
-    """A live run in dimos's run registry (also runs started from a terminal)."""
+def _run_entry_fields(docs: dict[str, tuple[str, list[Any]]]) -> dict[str, Any]:
+    """These fields of dimos's RunEntry, with its types: the answer can't drift from what the registry holds."""
+    hints = typing.get_type_hints(RunEntry)
+    return {
+        name: (hints[name], Field(description=text, examples=examples))
+        for name, (text, examples) in docs.items()
+    }
 
-    run_id: str = Field(description="The run's id", examples=["20260101-120000-unitree-go2"])
-    pid: int = Field(description="Its process id", examples=[41233])
-    blueprint: str = Field(description="What it runs", examples=["unitree-go2"])
-    started_at: str = Field(description="When it started (ISO 8601)")
-    log_dir: str = Field(description="Its log folder (main.jsonl is there)")
+
+RegistryRun = create_model(
+    "RegistryRun",
+    __base__=ApiModel,
+    __doc__="A live run in dimos's run registry (also runs started from a terminal): a RunEntry's fields.",
+    **_run_entry_fields(
+        {
+            "run_id": ("The run's id", ["20260101-120000-unitree-go2"]),
+            "pid": ("Its process id", [41233]),
+            "blueprint": ("What it runs", ["unitree-go2"]),
+            "started_at": ("When it started (ISO 8601)", ["2026-01-01T12:00:00+00:00"]),
+            "log_dir": (
+                "Its log folder (main.jsonl is there)",
+                ["/home/me/dimos/logs/20260101-120000-unitree-go2"],
+            ),
+        }
+    ),
+)
 
 
 class LaunchStep(ApiModel):
-    """A startup step, read from the launch's output."""
+    """A startup step, from the `stage` records dimos logs as it starts. The words for it are the client's."""
 
-    label: str = Field(
-        description="Starting dimOS, Building the blueprint, Starting modules, then Running (or Stopped)",
-        examples=["Starting modules"],
+    code: StepCode = Field(
+        description="starting (dimos began), building (the blueprint), starting_modules, then running (in the run "
+        "registry) or stopped",
+        examples=["starting_modules"],
     )
     state: Literal["done", "now", "todo", "failed"] = Field(description="How far it got")
-    detail: str | None = Field(
-        description="More, e.g. how many modules started", examples=["4 started"]
+    data: dict[str, JsonValue] = Field(
+        description="For starting_modules: `deployed` (modules started so far) and `total` (null until known)",
+        examples=[{"deployed": 3, "total": 7}],
     )
 
 
 class LaunchProblem(ApiModel):
-    """Something that went wrong (or looks wrong), in words, from the launch's output."""
+    """Something that went wrong, from the launch's error records: a stable code and that record's data. The words
+    and the fix for each code are the client's (Desktop's)."""
 
-    level: Literal["error", "warning"] = Field(description="How bad")
-    text: str = Field(
-        description="What it means", examples=["This blueprint needs the robot's IP address."]
+    code: ProblemCode = Field(
+        description="What kind of problem; `error` is one without a known kind (its `message` says what)",
+        examples=["missing_python_package"],
     )
-    fix: str | None = Field(
-        description="What to do about it (null: no known fix)",
-        examples=["Pick Robot as the source and fill in Robot IP."],
+    level: Literal["error"] = Field(description="How bad")
+    message: str = Field(
+        description="The record's own message (the exception's, else the log event's), for a person who wants the "
+        "detail",
+        examples=["No module named 'unitree_sdk2py'"],
     )
-    line: str = Field(description="The output line it came from (at most 300 characters)")
+    data: dict[str, JsonValue] = Field(
+        description="The record's fields, e.g. `missing_module`, `exception_code` (an errno name), `module` and "
+        "`method` (where in a worker it failed), `requirement`, `name`",
+        examples=[{"missing_module": "unitree_sdk2py", "module": "G1Connection", "method": None}],
+    )
+    timestamp: str = Field(description="When it was logged (ISO 8601)")
+    logger: str = Field(
+        description="Where it was logged", examples=["dimos/core/coordination/python_worker.py"]
+    )
 
 
 class Launch(ApiModel):
@@ -448,15 +491,15 @@ class Launch(ApiModel):
         examples=[{"replay": True, "n_workers": 2}],
     )
     steps: list[LaunchStep] = Field(
-        description="starting dimOS, building, starting modules, running: how far startup got"
+        description="starting, building, starting_modules, then running or stopped: how far startup got"
     )
     problems: list[LaunchProblem] = Field(
-        description="What went wrong, most specific first: known causes with their fix, else the error lines"
+        description="What went wrong: the errors of a known kind, else the last three errors"
     )
 
 
 class RunList(ApiModel):
-    runs: list[RegistryRun] = Field(description="Live runs, newest first")
+    runs: list[RegistryRun] = Field(description="Live runs, newest first")  # type: ignore[valid-type]
     launch: Launch | None = Field(description="The launch this server started (null: none yet)")
 
 

@@ -47,6 +47,24 @@ Operations carry Desktop's extensions: `x-family: dimos`; `x-agent: true` for wh
 | `extras`        | dimos's optional extras, which are installed, and installing more                    |
 | `jobs`          | long jobs (an extras install): their output, live on zenoh and as a snapshot         |
 
+## Launch diagnostics
+
+A launch's `steps` and `problems` are stable codes with data, never words: clients own the wording. The server reads
+them from the run's structured log (`main.jsonl`), not from the console:
+
+- **Steps:** dimos logs a `stage` field as it starts: `starting`, `run_log` (where the run's log goes on, with
+  `run_id` and `log_dir`), `building`, `starting_modules` (with `modules`, how many), `module_deployed`, and
+  `started`.
+- **Problems:** a refusal dimos knows logs a `problem` field (`bad_arguments`, `unknown_blueprint`,
+  `requirement_unmet`). An exception is logged with `exception_chain` (every exception class behind it),
+  `exception_code` (an errno or SQLite error name) and `missing_module` (`exception_fields` in
+  [`dimos/utils/logging_config.py`](/dimos/utils/logging_config.py)). The server maps a class or code to a problem
+  code in [`dimos/server/diagnose.py`](/dimos/server/diagnose.py).
+
+To make a new failure recognizable, raise a dedicated exception class (like `MissingRobotIpError`) or log a `problem`
+field, then add its code to `diagnose.py`. Don't match on message text. The server starts `dimos run` with
+`DIMOS_RUN_LOG_DIR` set, so even the records from before the run has an id are in a file it can read.
+
 ## Events
 
 The server publishes its events on zenoh at `<ns>/dimos/events/<type>` (`<ns>` is Desktop's namespace): `launch`,

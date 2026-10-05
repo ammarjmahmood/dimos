@@ -45,6 +45,20 @@ KNOWN_DIFFERENCES = {
     "get /dimos/blueprints.blueprints[]: field only here: missing_module",
 }
 
+# a launch's steps and problems are stable codes with data here, read from dimos's structured log; Desktop's doc still
+# has its own words for them (Desktop moves to the codes and owns the words: launch_diagnostics_contract.md)
+CODED_DIAGNOSTICS = {
+    "steps[]": ({"code", "data"}, {"label", "detail"}),
+    "problems[]": ({"code", "data", "logger", "message", "timestamp"}, {"text", "fix", "line"}),
+}
+KNOWN_DIFFERENCES |= {
+    f"{launch}{part}: field only {side}: {field}"
+    for launch in ("get /dimos/runs.launch.", "post /dimos/runs.", "post /dimos/runs/restart.")
+    for part, (ours, theirs) in CODED_DIAGNOSTICS.items()
+    for side, fields in (("here", ours), ("in Desktop's doc", theirs))
+    for field in fields
+}
+
 
 @pytest.fixture(scope="module")
 def spec() -> dict[str, Any]:

@@ -2076,7 +2076,7 @@
             "type": "integer"
           },
           "problems": {
-            "description": "What went wrong, most specific first: known causes with their fix, else the error lines",
+            "description": "What went wrong: the errors of a known kind, else the last three errors",
             "items": {
               "$ref": "#/components/schemas/LaunchProblem"
             },
@@ -2104,7 +2104,7 @@
             "type": "string"
           },
           "steps": {
-            "description": "starting dimOS, building, starting modules, running: how far startup got",
+            "description": "starting, building, starting_modules, then running or stopped: how far startup got",
             "items": {
               "$ref": "#/components/schemas/LaunchStep"
             },
@@ -2159,51 +2159,84 @@
       },
       "LaunchProblem": {
         "additionalProperties": true,
-        "description": "Something that went wrong (or looks wrong), in words, from the launch's output.",
+        "description": "Something that went wrong, from the launch's error records: a stable code and that record's data. The words\nand the fix for each code are the client's (Desktop's).",
         "properties": {
-          "fix": {
-            "anyOf": [
+          "code": {
+            "description": "What kind of problem; `error` is one without a known kind (its `message` says what)",
+            "enum": [
+              "bad_arguments",
+              "unknown_blueprint",
+              "requirement_unmet",
+              "missing_python_package",
+              "robot_ip_missing",
+              "robot_unreachable",
+              "replay_streams_missing",
+              "lfs_data_missing",
+              "port_in_use",
+              "host_unreachable",
+              "connection_refused",
+              "timed_out",
+              "recording_unopenable",
+              "out_of_memory",
+              "gpu_out_of_memory",
+              "error"
+            ],
+            "examples": [
+              "missing_python_package"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "The record's fields, e.g. `missing_module`, `exception_code` (an errno name), `module` and `method` (where in a worker it failed), `requirement`, `name`",
+            "examples": [
               {
-                "type": "string"
-              },
-              {
-                "type": "null"
+                "method": null,
+                "missing_module": "unitree_sdk2py",
+                "module": "G1Connection"
               }
             ],
-            "description": "What to do about it (null: no known fix)",
-            "examples": [
-              "Pick Robot as the source and fill in Robot IP."
-            ],
-            "title": "Fix"
+            "title": "Data",
+            "type": "object"
           },
           "level": {
+            "const": "error",
             "description": "How bad",
-            "enum": [
-              "error",
-              "warning"
-            ],
             "title": "Level",
             "type": "string"
           },
-          "line": {
-            "description": "The output line it came from (at most 300 characters)",
-            "title": "Line",
+          "logger": {
+            "description": "Where it was logged",
+            "examples": [
+              "dimos/core/coordination/python_worker.py"
+            ],
+            "title": "Logger",
             "type": "string"
           },
-          "text": {
-            "description": "What it means",
+          "message": {
+            "description": "The record's own message (the exception's, else the log event's), for a person who wants the detail",
             "examples": [
-              "This blueprint needs the robot's IP address."
+              "No module named 'unitree_sdk2py'"
             ],
-            "title": "Text",
+            "title": "Message",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "When it was logged (ISO 8601)",
+            "title": "Timestamp",
             "type": "string"
           }
         },
         "required": [
+          "code",
           "level",
-          "text",
-          "fix",
-          "line"
+          "message",
+          "data",
+          "timestamp",
+          "logger"
         ],
         "title": "LaunchProblem",
         "type": "object"
@@ -2250,30 +2283,36 @@
       },
       "LaunchStep": {
         "additionalProperties": true,
-        "description": "A startup step, read from the launch's output.",
+        "description": "A startup step, from the `stage` records dimos logs as it starts. The words for it are the client's.",
         "properties": {
-          "detail": {
-            "anyOf": [
+          "code": {
+            "description": "starting (dimos began), building (the blueprint), starting_modules, then running (in the run registry) or stopped",
+            "enum": [
+              "starting",
+              "building",
+              "starting_modules",
+              "running",
+              "stopped"
+            ],
+            "examples": [
+              "starting_modules"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "For starting_modules: `deployed` (modules started so far) and `total` (null until known)",
+            "examples": [
               {
-                "type": "string"
-              },
-              {
-                "type": "null"
+                "deployed": 3,
+                "total": 7
               }
             ],
-            "description": "More, e.g. how many modules started",
-            "examples": [
-              "4 started"
-            ],
-            "title": "Detail"
-          },
-          "label": {
-            "description": "Starting dimOS, Building the blueprint, Starting modules, then Running (or Stopped)",
-            "examples": [
-              "Starting modules"
-            ],
-            "title": "Label",
-            "type": "string"
+            "title": "Data",
+            "type": "object"
           },
           "state": {
             "description": "How far it got",
@@ -2288,9 +2327,9 @@
           }
         },
         "required": [
-          "label",
+          "code",
           "state",
-          "detail"
+          "data"
         ],
         "title": "LaunchStep",
         "type": "object"
@@ -3028,7 +3067,7 @@
       },
       "RegistryRun": {
         "additionalProperties": true,
-        "description": "A live run in dimos's run registry (also runs started from a terminal).",
+        "description": "A live run in dimos's run registry (also runs started from a terminal): a RunEntry's fields.",
         "properties": {
           "blueprint": {
             "description": "What it runs",
@@ -3040,6 +3079,9 @@
           },
           "log_dir": {
             "description": "Its log folder (main.jsonl is there)",
+            "examples": [
+              "/home/me/dimos/logs/20260101-120000-unitree-go2"
+            ],
             "title": "Log Dir",
             "type": "string"
           },
@@ -3061,6 +3103,9 @@
           },
           "started_at": {
             "description": "When it started (ISO 8601)",
+            "examples": [
+              "2026-01-01T12:00:00+00:00"
+            ],
             "title": "Started At",
             "type": "string"
           }

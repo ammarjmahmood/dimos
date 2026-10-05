@@ -26,6 +26,7 @@ from dimos.robot.external_blueprints import (
     is_namespaced_blueprint_name,
     resolve_external_blueprint_by_name,
 )
+from dimos.utils.logging_config import setup_logger
 
 all_names = sorted(set(all_blueprints.keys()) | set(all_modules.keys()))
 
@@ -105,7 +106,11 @@ def get_by_name(name: str) -> Blueprint:
         _raise_unknown(name, all_names)
 
 
+logger = setup_logger()
+
+
 def _fail_or_exit(name: str, candidates: list[str]) -> NoReturn:
+    logger.error("Unknown blueprint or module", problem="unknown_blueprint", name=name)
     typer.echo(typer.style(f"Unknown blueprint or module: {name}", fg=typer.colors.RED), err=True)
     suggestions = difflib.get_close_matches(name, candidates, n=5, cutoff=0.4)
     if suggestions:

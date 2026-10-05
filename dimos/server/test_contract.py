@@ -13,8 +13,11 @@
 # limitations under the License.
 
 
-"""Every /dimos path and method in dimOS Desktop's OpenAPI (fixtures/desktop_openapi_dimos.json, saved from
-`GET /api/desktop/openapi` on Desktop 0.2.0, jeff/agent_chat as of 2026-10-05) is served here, so Desktop can switch to this server unchanged."""
+"""Every /dimos path and method in dimOS Desktop's OpenAPI (fixtures/desktop_openapi_dimos.json; where it was copied
+from is its `info.x-copied-from`) is served here, so Desktop can switch to this server unchanged.
+
+The fixture is a copy and goes stale on Desktop's side; it stays because it's the only parity check there is. Once
+Desktop's CI compares its own doc against dimos's dimos/server/openapi.json (Desktop reads that per tag), drop it."""
 
 import json
 from pathlib import Path

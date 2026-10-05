@@ -25,6 +25,7 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import threading
@@ -32,7 +33,7 @@ import time
 from typing import Any
 
 from dimos.core.run_registry import is_pid_alive
-from dimos.server import config, diagnose
+from dimos.server import config, diagnose, logs
 
 
 class RunError(Exception):
@@ -48,7 +49,50 @@ def launch_file() -> Path:
 
 
 def launch_log() -> Path:
+    """The launch's console output (shown as is; never read for meaning)."""
     return config.logs_dir() / "launch.log"
+
+
+def launch_records_dir() -> Path:
+    """Where the launch's structured log starts (DIMOS_RUN_LOG_DIR): dimos logs there until it knows its run id, then
+    says where it goes on (a `stage: run_log` record) and moves to the run's own log dir."""
+    return config.server_dir() / "launch"
+
+
+# the records a launch's diagnosis needs (a stage, a problem, an error) carry one of these; the rest of a log, which
+# can be megabytes, is skipped without parsing it
+_WANTED = (b'"stage"', b'"problem"', b'"level": "error"', b'"level": "critical"')
+_records_cache: dict[Path, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
+
+
+def _records(file: Path) -> list[dict[str, Any]]:
+    """`file`'s stage, problem and error records (its last 4 MB), cached while the file is unchanged."""
+    try:
+        stat = file.stat()
+    except OSError:
+        return []
+    key = (stat.st_size, stat.st_mtime_ns)
+    cached = _records_cache.get(file)
+    if cached and cached[0] == key:
+        return cached[1]
+    with file.open("rb") as handle:
+        handle.seek(max(0, stat.st_size - logs.MAX_READ))
+        lines = [line for line in handle if any(wanted in line for wanted in _WANTED)]
+    parsed = [logs.parse_line(line.decode("utf-8", "replace")) for line in lines]
+    records = [record for record in parsed if record is not None and record["level"] != "raw"]
+    _records_cache[file] = (key, records)
+    return records
+
+
+def launch_records() -> list[dict[str, Any]]:
+    """The current launch's records: from before it had a run id, then from its run's main.jsonl."""
+    records = _records(launch_records_dir() / "main.jsonl")
+    moved = next(
+        (r["extra"].get("log_dir") for r in records if r["extra"].get("stage") == "run_log"), None
+    )
+    if isinstance(moved, str):
+        records = records + _records(Path(moved) / "main.jsonl")
+    return records
 
 
 def registry_runs() -> list[dict[str, Any]]:
@@ -99,11 +143,9 @@ def current_launch() -> dict[str, Any] | None:
         phase = "stopped"
     else:
         phase = "failed"
-    error = None
-    if phase == "failed":
-        lines = output.splitlines()
-        error = next((line for line in lines if line.startswith("Error: ")), None)
-        error = error or (output.strip().splitlines() or ["dimos exited during startup"])[-1]
+    records = launch_records()
+    problems = diagnose.problems(records)
+    error = diagnose.error_text(problems, output) if phase == "failed" else None
     overrides = record.get("overrides")
     return {
         "blueprint": blueprint,
@@ -115,8 +157,8 @@ def current_launch() -> dict[str, Any] | None:
         "logDir": entry["log_dir"] if entry else None,
         "error": error,
         "overrides": overrides if isinstance(overrides, dict) else {},
-        "steps": diagnose.steps(output, phase),
-        "problems": diagnose.problems(output),
+        "steps": diagnose.steps(records, phase),
+        "problems": problems,
     }
 
 
@@ -149,6 +191,7 @@ def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[st
     args = [*config.global_config_flags(overrides), "run", blueprint]
     launch_log().parent.mkdir(parents=True, exist_ok=True)
     launch_log().write_text(f"$ dimos {' '.join(args)}\n")
+    shutil.rmtree(launch_records_dir(), ignore_errors=True)
     venv = config.venv_dir(dimos_dir)
     env = {
         **os.environ,
@@ -157,6 +200,8 @@ def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[st
         "VIRTUAL_ENV": str(venv),
         "PYTHONUNBUFFERED": "1",
         "NO_COLOR": "1",
+        # its structured log starts here, so even what it logs before it has a run id can be read
+        "DIMOS_RUN_LOG_DIR": str(launch_records_dir()),
     }
     with launch_log().open("a") as log:
         child = subprocess.Popen(

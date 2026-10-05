@@ -376,7 +376,7 @@ class ModuleCoordinator(Resource):
         sources); :meth:`load_blueprint` instead applies only explicitly-set
         fields.
         """
-        logger.info("Building the blueprint")
+        logger.info("Building the blueprint", stage="building")
         global_values, module_kwargs, transport_overrides = _resolve_blueprint_config(
             blueprint, parsed_config
         )
@@ -387,7 +387,11 @@ class ModuleCoordinator(Resource):
         _check_requirements(blueprint)
         _verify_no_name_conflicts(blueprint)
 
-        logger.info("Starting the modules")
+        logger.info(
+            "Starting the modules",
+            stage="starting_modules",
+            modules=len(blueprint.active_blueprints),
+        )
         coordinator = cls(g=global_config)
         coordinator.start()
 
@@ -413,6 +417,7 @@ class ModuleCoordinator(Resource):
         slowest = sorted(start_durations.items(), key=lambda item: item[1], reverse=True)[:5]
         logger.info(
             "Blueprint started",
+            stage="started",
             deploy_s=round(t1 - t0, 3),
             wire_s=round(t2 - t1, 3),
             build_s=round(t3 - t2, 3),
@@ -923,6 +928,9 @@ def _check_requirements(blueprint: Blueprint) -> None:
 
     if errors:
         for error in errors:
+            logger.error(
+                "Blueprint requirement not met", problem="requirement_unmet", requirement=error
+            )
             print(f"{red}Error: {error}{reset}", file=sys.stderr)
         sys.exit(1)
 

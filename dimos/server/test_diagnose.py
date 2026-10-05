@@ -12,70 +12,191 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The same cases as Desktop's Rust diagnose.rs tests."""
+"""Launch steps and problems from structured records, and the dimos code that logs what they read."""
 
+import ast
+import builtins
+import errno
+import importlib
+from pathlib import Path
+import sqlite3
 from typing import Any
 
-from dimos.server.diagnose import problems, steps
+import pytest
 
-START = (
-    "$ dimos --replay run unitree-go2-basic\n"
-    "16:37:45.859 [inf][imos/cli/commands/lifecycle.py] Starting DimOS\n"
-    "16:37:46.771 [inf][dination/module_coordinator.py] Building the blueprint\n"
-    "16:37:46.772 [inf][dination/module_coordinator.py] Starting the modules\n"
-    "16:37:48.056 [inf][/coordination/python_worker.py] Deployed module. module=MovementManager\n"
-    "16:37:48.195 [inf][/coordination/python_worker.py] Deployed module. module=WebsocketVisModule\n"
-)
+from dimos.server import diagnose
+from dimos.server.diagnose import problems, steps
+from dimos.utils.logging_config import exception_fields
+
+ROOT = Path(__file__).parents[1]
+
+
+def record(level: str = "info", event: str = "x", **extra: Any) -> dict[str, Any]:
+    return {
+        "timestamp": "t",
+        "level": level,
+        "logger": "l",
+        "event": event,
+        "extra": extra,
+        "raw": "",
+    }
+
+
+def failure(error: BaseException) -> dict[str, Any]:
+    """What dimos logs for an exception (the worker's `Worker request failed`, the uncaught-exception hook)."""
+    return record("error", "Worker request failed", **exception_fields(error))
+
+
+START = [
+    record(stage="starting"),
+    record(stage="run_log", run_id="r", log_dir="/d"),
+    record(stage="building"),
+    record(stage="starting_modules", modules=5),
+    record(stage="module_deployed", module="A"),
+    record(stage="module_deployed", module="B"),
+]
 
 
 def states(found: list[dict[str, Any]]) -> list[str]:
     return [step["state"] for step in found]
 
 
-def test_steps_follow_the_output() -> None:
+def test_steps_follow_the_stages() -> None:
     starting = steps(START, "starting")
+    assert [step["code"] for step in starting] == [
+        "starting",
+        "building",
+        "starting_modules",
+        "running",
+    ]
     assert states(starting) == ["done", "done", "now", "todo"]
-    assert starting[2]["detail"] == "2 started"
-    assert [step["label"] for step in starting] == [
-        "Starting dimOS",
-        "Building the blueprint",
-        "Starting modules",
-        "Running",
-    ]
+    assert starting[2]["data"] == {"deployed": 2, "total": 5}
     assert states(steps(START, "running")) == ["done", "done", "done", "done"]
-    assert steps(START, "stopped")[3]["label"] == "Stopped"
-    assert states(steps("$ dimos run x\n", "starting")) == ["now", "todo", "todo", "todo"]
-    assert states(steps("$ dimos run x\n", "failed")) == ["failed", "todo", "todo", "todo"]
-    assert states(steps(START + "Error: boom\n", "failed")) == ["done", "done", "failed", "todo"]
+    assert steps(START, "stopped")[3]["code"] == "stopped"
+    assert states(steps([], "starting")) == ["now", "todo", "todo", "todo"]
+    assert states(steps([], "failed")) == ["failed", "todo", "todo", "todo"]
+    assert states(steps(START[:3], "failed")) == ["done", "failed", "todo", "todo"]
 
 
-def test_known_problems_get_their_fix() -> None:
-    output = (
-        '$ dimos run unitree-g1\nTraceback (most recent call last):\n  File "x.py"\n'
-        "ModuleNotFoundError: No module named 'unitree_sdk2py'\n"
-    )
-    found = problems(output)
-    assert len(found) == 1 and "`unitree_sdk2py`" in found[0]["text"] and found[0]["fix"]
-    output = "$ dimos run unitree-go2-multi\nValueError: No robot IPs specified. Must have at least one IP.\n"
-    assert problems(output)[0]["text"] == "This blueprint needs the robot's IP address."
-    assert problems(output)[0]["level"] == "error"
-    output = "$ dimos run x\nKeyError: \"None of ('go2_lidar', 'lidar') in dataset '/r/spot.db'; available: []\"\n"
-    assert "doesn't have the streams" in problems(output)[0]["text"]
+def raised(error: BaseException, cause: BaseException | None = None) -> BaseException:
+    try:
+        try:
+            if cause:
+                raise cause
+        except BaseException:
+            raise error
+        raise error
+    except BaseException as caught:
+        return caught
 
 
-def test_unknown_errors_are_shown_as_they_are() -> None:
-    found = problems(
-        "$ dimos run x\n12:00:00.000 [inf][a] fine\nRuntimeError: the flux capacitor is cold\n"
-    )
-    assert found == [
-        {
-            "level": "error",
-            "text": "RuntimeError: the flux capacitor is cold",
-            "fix": None,
-            "line": "RuntimeError: the flux capacitor is cold",
-        }
-    ]
+@pytest.mark.parametrize(
+    "error, code",
+    [
+        (
+            ModuleNotFoundError("No module named 'unitree_sdk2py'", name="unitree_sdk2py"),
+            "missing_python_package",
+        ),
+        (OSError(errno.EADDRINUSE, "in use"), "port_in_use"),
+        (OSError(errno.EHOSTUNREACH, "no route"), "host_unreachable"),
+        (ConnectionRefusedError(errno.ECONNREFUSED, "refused"), "connection_refused"),
+        (TimeoutError("timed out"), "timed_out"),
+        (MemoryError(), "out_of_memory"),
+        # behind a wrapper, as a worker's failure reaches the coordinator
+        (
+            raised(RuntimeError("Failed to deploy module"), cause=OSError(errno.EADDRINUSE, "x")),
+            "port_in_use",
+        ),
+        (ValueError("something else"), "error"),
+    ],
+)
+def test_exceptions_get_their_code(error: BaseException, code: str) -> None:
+    assert problems([failure(error)])[0]["code"] == code
+
+
+def test_a_missing_package_says_which() -> None:
+    found = problems([failure(ModuleNotFoundError("No module named 'x'", name="x"))])[0]
+    assert found["data"]["missing_module"] == "x" and found["message"] == "No module named 'x'"
+
+
+def test_dimos_own_errors_and_refusals_get_their_code() -> None:
+    from dimos.core.global_config import GlobalConfig
+
+    with pytest.raises(ValueError) as caught:
+        GlobalConfig(robot_ips="").processed_robot_ips  # noqa: B018
+    assert problems([failure(caught.value)])[0]["code"] == "robot_ip_missing"
+    refused = record("error", "Run refused", problem="bad_arguments", error="bad --robot-ip")
+    assert problems([refused])[0] | {"data": None} == {
+        "code": "bad_arguments",
+        "level": "error",
+        "message": "bad --robot-ip",
+        "data": None,
+        "timestamp": "t",
+        "logger": "l",
+    }
+
+
+def test_a_sqlite_file_that_cant_open() -> None:
+    try:
+        sqlite3.connect("/nonexistent/dir/x.db")
+    except sqlite3.OperationalError as error:
+        if not getattr(error, "sqlite_errorname", None):
+            pytest.skip("python < 3.11 has no sqlite_errorname")
+        assert problems([failure(error)])[0]["code"] == "recording_unopenable"
+
+
+def test_known_problems_win_else_the_last_three_errors() -> None:
+    generic = [record("error", f"boom {i}") for i in range(5)]
+    assert [p["message"] for p in problems(generic)] == ["boom 2", "boom 3", "boom 4"]
+    known = failure(MemoryError())
+    assert [p["code"] for p in problems([*generic, known, known])] == ["out_of_memory"]
     assert problems(START) == []
-    many = "$ dimos run x\n" + "".join(f"RuntimeError: {i}\n" for i in range(5))
-    assert [p["text"] for p in problems(many)] == [f"RuntimeError: {i}" for i in (2, 3, 4)]
-    assert problems("$ dimos run x\nError: " + "x" * 400 + "\n")[0]["text"].endswith("…")
+
+
+def test_exception_classes_it_names_exist() -> None:
+    for name in diagnose.EXCEPTION_CODES:
+        module, _, attribute = name.rpartition(".")
+        if not module:
+            assert hasattr(builtins, attribute), name
+            continue
+        try:
+            kind = getattr(importlib.import_module(module), attribute)
+        except ModuleNotFoundError:
+            if module.startswith("dimos."):
+                raise
+            continue  # a third-party package that isn't installed here (torch, unitree_webrtc_connect)
+        # how exception_fields names a class
+        assert f"{kind.__module__}.{kind.__qualname__}" == name, name
+
+
+def logged_fields() -> dict[str, set[str]]:
+    """Every `stage=` and `problem=` value passed to a logger call in dimos's own code."""
+    found: dict[str, set[str]] = {"stage": set(), "problem": set()}
+    for file in ROOT.rglob("*.py"):
+        if "/server/" in str(file) or file.name.startswith("test_"):
+            continue
+        text = file.read_text()
+        if "stage=" not in text and "problem=" not in text:
+            continue
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) in (
+                "info",
+                "error",
+                "warning",
+            ):
+                for keyword in node.keywords:
+                    if keyword.arg in found and isinstance(keyword.value, ast.Constant):
+                        found[keyword.arg].add(keyword.value.value)
+    return found
+
+
+def test_dimos_logs_the_stages_and_problems_read_here() -> None:
+    logged = logged_fields()
+    assert {*diagnose.STAGES, "run_log", "module_deployed"} <= logged["stage"]
+    assert set(diagnose.PROBLEM_FIELDS) <= logged["problem"]
+
+
+def test_error_text() -> None:
+    assert diagnose.error_text([], "$ dimos run x\n\x1b[31mError: nope\x1b[0m\n\n") == "Error: nope"
+    assert diagnose.error_text([], "$ dimos run x\n") == "dimos exited during startup"
+    assert diagnose.error_text(problems([failure(MemoryError("big"))]), "") == "big"

@@ -12,182 +12,169 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A launch's output (`dimos run`'s stdout and stderr) read for a person: how far startup got, and what went wrong in
-plain words with the fix. Only the patterns below; anything else falls back to the error line itself. The same rules as
-Desktop's Rust (src/dimos/diagnose.rs), so a launch reads the same whichever server ran it."""
+"""How far a launch got and what went wrong, as stable codes with data, read from its structured log records.
+
+dimos marks its startup with a `stage` field (`starting`, `run_log`, `building`, `starting_modules`,
+`module_deployed`, `started`), marks refusals it knows with a `problem` field, and logs exceptions with
+`exception_chain` / `exception_code` / `missing_module` (logging_config.exception_fields). Nothing here reads the
+wording of a message. The words (and the fixes) are Desktop's, per code.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+import re
+from typing import Any, Literal
 
-# (the step's label, the output line that marks it), in order; the lines after the `$ dimos ...` command line count
-MARKS = [
-    ("Starting dimOS", "Starting DimOS"),
-    ("Building the blueprint", "Building the blueprint"),
-    ("Starting modules", "Starting the modules"),
+StepCode = Literal["starting", "building", "starting_modules", "running", "stopped"]
+StepState = Literal["done", "now", "todo", "failed"]
+ProblemCode = Literal[
+    "bad_arguments",
+    "unknown_blueprint",
+    "requirement_unmet",
+    "missing_python_package",
+    "robot_ip_missing",
+    "robot_unreachable",
+    "replay_streams_missing",
+    "lfs_data_missing",
+    "port_in_use",
+    "host_unreachable",
+    "connection_refused",
+    "timed_out",
+    "recording_unopenable",
+    "out_of_memory",
+    "gpu_out_of_memory",
+    "error",
 ]
 
-# (a piece of the line, what it means, the fix)
-KNOWN = [
-    (
-        "No robot IPs specified",
-        "This blueprint needs the robot's IP address.",
-        "Pick Robot as the source and fill in Robot IP.",
-    ),
-    (
-        "IP address must be provided",
-        "This blueprint needs the robot's IP address.",
-        "Pick Robot as the source and fill in Robot IP.",
-    ),
-    (
-        "in dataset",
-        "That recording doesn't have the streams this blueprint replays.",
-        "Pick a recording the Launcher marks as usable.",
-    ),
-    (
-        "Address already in use",
-        "A network port it needs is taken, most likely by another run.",
-        "Stop the other run (Running, at the top) and launch again.",
-    ),
-    (
-        "No route to host",
-        "This computer can't reach the robot.",
-        "Check the robot is on and on the same network, and that the IP is right.",
-    ),
-    (
-        "Connection refused",
-        "The robot (or a service it needs) refused the connection.",
-        "Check the robot is on and finished booting, and that the IP is right.",
-    ),
-    (
-        "timed out",
-        "Something it connects to didn't answer in time.",
-        "Check the robot is on and on the same network, and that the IP is right.",
-    ),
-    (
-        "git lfs",
-        "It needs data that isn't downloaded yet (git LFS).",
-        "Run `git lfs pull` in the dimos checkout, or pick another recording.",
-    ),
-    (
-        "unable to open database file",
-        "A recording file it needs can't be opened.",
-        "Check the recording still exists, or pick another one.",
-    ),
-    (
-        "outside the range this Desktop supports",
-        "This dimos version is newer or older than Desktop supports.",
-        "Update Desktop or dimos (Settings), or set dimos.ignore_version_range.",
-    ),
-    ("MemoryError", "It ran out of memory.", "Stop other runs or apps, then launch again."),
-    (
-        "CUDA out of memory",
-        "The GPU ran out of memory.",
-        "Stop other runs using the GPU, then launch again.",
-    ),
-]
+# the startup stages a step stands for, in order (the last, running, is dimos's run registry entry)
+STAGES: tuple[StepCode, ...] = ("starting", "building", "starting_modules")
+
+# a `problem` field dimos logs -> its code
+PROBLEM_FIELDS: dict[str, ProblemCode] = {
+    "bad_arguments": "bad_arguments",
+    "unknown_blueprint": "unknown_blueprint",
+    "requirement_unmet": "requirement_unmet",
+}
+
+# an exception class in a record's exception_chain -> its code (test_diagnose checks each dimos class still exists)
+EXCEPTION_CODES: dict[str, ProblemCode] = {
+    "ModuleNotFoundError": "missing_python_package",
+    "dimos.core.global_config.MissingRobotIpError": "robot_ip_missing",
+    "dimos.robot.unitree.go2.connection.MissingReplayStreamError": "replay_streams_missing",
+    "dimos.simulation.dimsim.dimsim_process.LfsStubError": "lfs_data_missing",
+    "unitree_webrtc_connect.unitree_auth.LocalSignalingPortError": "robot_unreachable",
+    "ConnectionRefusedError": "connection_refused",
+    "TimeoutError": "timed_out",
+    "MemoryError": "out_of_memory",
+    "torch.OutOfMemoryError": "gpu_out_of_memory",
+}
+
+# a record's exception_code (an errno name or a SQLite error name) -> its code
+ERROR_CODES: dict[str, ProblemCode] = {
+    "EADDRINUSE": "port_in_use",
+    "EHOSTUNREACH": "host_unreachable",
+    "ENETUNREACH": "host_unreachable",
+    "ECONNREFUSED": "connection_refused",
+    "ETIMEDOUT": "timed_out",
+    "SQLITE_CANTOPEN": "recording_unopenable",
+}
+
+# record fields that are about the log call, not the problem
+NOT_DATA = {
+    "func_name",
+    "lineno",
+    "exception",
+    "traceback_lines",
+    "problem",
+    "stage",
+    "exception_chain",
+    "exception_type",
+    "exception_message",
+}
+
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def steps(output: str, phase: str) -> list[dict[str, Any]]:
-    """Each startup step's state: done, now, todo or failed; then Running (or Stopped)."""
-    lines = output.splitlines()
-    started = any(line.strip() for line in lines[1:])
-    # the last step the output shows it reached (0 once dimos printed anything)
-    reached = 0 if started else None
-    for index, (_, mark) in enumerate(MARKS):
-        if mark in output:
-            reached = index
-    deployed = output.count("Deployed module.")
+def stage(record: dict[str, Any]) -> Any:
+    return record["extra"].get("stage")
+
+
+def steps(records: list[dict[str, Any]], phase: str) -> list[dict[str, Any]]:
+    """starting, building, starting_modules (with how many modules started of how many), then running or stopped;
+    each done, now, todo or failed."""
+    reached: int | None = None
+    deployed, total = 0, None
+    for record in records:
+        found = stage(record)
+        if found in STAGES:
+            reached = max(reached or 0, STAGES.index(found))
+        if found == "starting_modules" and isinstance(record["extra"].get("modules"), int):
+            total = record["extra"]["modules"]
+        if found == "module_deployed":
+            deployed += 1
     result = []
-    for index, (label, _) in enumerate(MARKS):
+    for index, code in enumerate(STAGES):
         if phase in ("running", "stopped"):
-            state = "done"
+            state: StepState = "done"
         elif reached is None:
-            state = (
-                "now"
-                if index == 0 and phase == "starting"
-                else "failed"
-                if index == 0 and phase == "failed"
-                else "todo"
-            )
+            state = "todo" if index else "failed" if phase == "failed" else "now"
         elif index < reached:
             state = "done"
         elif index == reached:
             state = "failed" if phase == "failed" else "now"
         else:
             state = "todo"
-        detail = f"{deployed} started" if index == 2 and deployed > 0 else None
-        result.append({"label": label, "state": state, "detail": detail})
+        data = {"deployed": deployed, "total": total} if code == "starting_modules" else {}
+        result.append({"code": code, "state": state, "data": data})
+    last: StepCode = "stopped" if phase == "stopped" else "running"
     result.append(
-        {
-            "label": "Stopped" if phase == "stopped" else "Running",
-            "state": "done" if phase in ("running", "stopped") else "todo",
-            "detail": None,
-        }
+        {"code": last, "state": "done" if phase in ("running", "stopped") else "todo", "data": {}}
     )
     return result
 
 
-def short(line: str) -> str:
-    line = line.strip()
-    return line[:300] + "…" if len(line) > 300 else line
+def classify(extra: dict[str, Any]) -> ProblemCode:
+    if extra.get("problem") in PROBLEM_FIELDS:
+        return PROBLEM_FIELDS[extra["problem"]]
+    chain = extra.get("exception_chain")
+    for name in chain if isinstance(chain, list) else []:
+        if name in EXCEPTION_CODES:
+            return EXCEPTION_CODES[name]
+    return ERROR_CODES.get(str(extra.get("exception_code")), "error")
 
 
-def missing_module(line: str) -> str | None:
-    """`No module named 'unitree_sdk2py'` -> `unitree_sdk2py`"""
-    at = line.find("No module named ")
-    if at < 0:
-        return None
-    rest = line[at + len("No module named ") :].lstrip("'\"")
-    ends = [i for i in (rest.find("'"), rest.find('"')) if i >= 0]
-    return rest[: min(ends)] if ends else rest or None
+def problem(record: dict[str, Any]) -> dict[str, Any]:
+    extra = record["extra"]
+    message = extra.get("exception_message") or extra.get("error") or record["event"]
+    return {
+        "code": classify(extra),
+        "level": "error",
+        "message": str(message),
+        "data": {key: value for key, value in extra.items() if key not in NOT_DATA},
+        "timestamp": record["timestamp"],
+        "logger": record["logger"],
+    }
 
 
-def is_error_line(line: str) -> bool:
-    if "[err]" in line or "[cri]" in line or line.startswith("Error: "):
-        return True
-    # a Python exception line: `SomeError: text` / `pkg.SomeError: text`
-    head = line.split(":")[0]
-    return " " not in head and head.endswith(("Error", "Exception")) and ": " in line
+def problems(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every error record as a problem, the ones with a known code first; when none has one, the last three
+    distinct errors (the last is usually the one that ended it)."""
+    found = [
+        problem(record)
+        for record in records
+        if record["level"] in ("error", "critical") or "problem" in record["extra"]
+    ]
+    distinct: list[dict[str, Any]] = []
+    for item in found:
+        if not any((p["code"], p["message"]) == (item["code"], item["message"]) for p in distinct):
+            distinct.append(item)
+    known = [p for p in distinct if p["code"] != "error"]
+    return known or distinct[-3:]
 
 
-def problems(output: str) -> list[dict[str, Any]]:
-    """What went wrong, most specific first: known patterns with their fix, else the error lines themselves (at most
-    3, the last usually the one that ended it)."""
-    found: list[dict[str, Any]] = []
-
-    def add(level: str, text: str, fix: str | None, line: str) -> None:
-        if not any(problem["text"] == text for problem in found):
-            found.append({"level": level, "text": text, "fix": fix, "line": short(line)})
-
-    generic = []
-    for line in output.splitlines()[1:]:
-        module = missing_module(line)
-        if module:
-            add(
-                "error",
-                f"dimos is missing the Python package `{module}`, which this blueprint needs.",
-                "Install it into the dimos checkout's environment (`uv sync --all-extras` there installs every "
-                "extra), or pick a blueprint for hardware you have.",
-                line,
-            )
-            continue
-        known = next((entry for entry in KNOWN if entry[0] in line), None)
-        if known:
-            level = "error" if is_error_line(line) or "Error" in line else "warning"
-            add(level, known[1], known[2], line)
-            continue
-        if is_error_line(line):
-            generic.append(line)
-    if not found:
-        seen: list[str] = []
-        for line in reversed(generic):
-            text = short(line)
-            if text not in seen:
-                seen.append(text)
-            if len(seen) == 3:
-                break
-        found = [
-            {"level": "error", "text": text, "fix": None, "line": text} for text in reversed(seen)
-        ]
-    return found
+def error_text(problems_found: list[dict[str, Any]], output: str) -> str:
+    """One line saying why a launch failed: its first problem, else its output's last line."""
+    if problems_found:
+        return str(problems_found[0]["message"])
+    lines = [ANSI.sub("", line).strip() for line in output.splitlines()[1:]]
+    return next((line for line in reversed(lines) if line), "dimos exited during startup")
