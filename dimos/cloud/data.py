@@ -38,7 +38,7 @@ from typing import Any
 
 from dimos.cli.cloud import api_key
 from dimos.cloud import codecs
-from dimos.cloud.cloud_request import CloudRequest, HttpCloudRequest
+from dimos.cloud.cloud_request import CloudRequest, HttpCloudRequest, NotLoggedInError
 from dimos.constants import DOWNLOADS_DIR, RECORDINGS_DIR
 from dimos.core.global_config import global_config
 
@@ -248,7 +248,7 @@ class CloudData:
         if backend is None:
             key = global_config.dimos_api_key or api_key()
             if not key:
-                raise RuntimeError("not logged in — run `dimos login`")
+                raise NotLoggedInError("not logged in — run `dimos login`")
             request = HttpCloudRequest(
                 global_config.dimos_cloud_url, key, global_config.dimos_http_timeout
             )
@@ -315,6 +315,15 @@ class CloudData:
 
     def quota(self) -> dict[str, Any]:
         return self.backend.quota()
+
+
+def console_datasets_url() -> str | None:
+    """The web console's page listing the account's datasets: dimos_cloud_url's api.X -> console.X (None for a cloud
+    URL without an api. host). The console has no per-dataset URL yet."""
+    base = global_config.dimos_cloud_url.rstrip("/")
+    if "://api." not in base:
+        return None
+    return base.replace("://api.", "://console.", 1) + "/console/data"
 
 
 def recordings(newer_than_s: float | None = None) -> list[Path]:

@@ -34,8 +34,8 @@ import time
 from typing import Any
 
 from dimos.server import config
-from dimos.server.cloud_worker import MARKER
 from dimos.server.events import Bus
+from dimos.server.introspect import MARKER
 
 FINISHED = ("done", "failed", "cancelled")
 # seconds of ticks before a time left is given: the first ones include connecting and are far off
@@ -93,8 +93,11 @@ def check_path(text: str) -> tuple[Path, int]:
         raise ValueError(f"no such file: {path}")
     if not path.is_file():
         raise ValueError(f"not a file: {path}")
-    if not path.name.endswith((".mcap", ".db")):
-        raise ValueError(f"not a recording (.mcap or .db): {path.name}")
+    from dimos.cloud.data import kind_of
+
+    # what dimos's cloud upload calls a recording (an .mcap, or a .db with dimos's streams in it)
+    if kind_of(path) != "recording":
+        raise ValueError(f"not a dimos recording (.mcap, or a .db dimos recorded): {path.name}")
     return path, path.stat().st_size
 
 

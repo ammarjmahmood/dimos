@@ -36,7 +36,8 @@ import time
 import traceback
 from typing import Any
 
-MARKER = "@@DIMOS_SERVER@@"
+# the same answer marker as the server's other child (introspect.py)
+from dimos.server.introspect import MARKER
 
 
 def emit(value: dict[str, Any]) -> None:
@@ -50,36 +51,35 @@ def causes(error: BaseException | None) -> Iterator[BaseException]:
         error = error.__cause__ or error.__context__
 
 
-def classify(error: BaseException) -> tuple[str, str]:
-    """(code, readable message) for an exception from dimos's cloud code."""
+def http_status(chain: list[BaseException]) -> int | None:
     import urllib.error
 
+    return next((e.code for e in chain if isinstance(e, urllib.error.HTTPError)), None)
+
+
+def classify(error: BaseException) -> tuple[str, str]:
+    """(code, readable message) for an exception from dimos's cloud code, by its type and HTTP status (never its
+    wording, which dimos is free to change)."""
+    import urllib.error
+
+    from dimos.cloud.cloud_request import NotLoggedInError
+
     text = str(error)
-    lowered = text.lower()
     chain = list(causes(error))
+    status = http_status(chain)
     if isinstance(error, FileNotFoundError):
         return "file_missing", f"The file is gone: {error.filename or text}"
-    if (
-        "not logged in" in lowered
-        or "invalid or revoked" in lowered
-        or any(isinstance(e, urllib.error.HTTPError) and e.code == 401 for e in chain)
-    ):
+    if any(isinstance(e, NotLoggedInError) for e in chain) or status == 401:
         return (
             "not_logged_in",
             "Not logged in to Dimensional cloud (or the login was revoked). Log in, then retry.",
         )
-    if "quota" in lowered or any(
-        isinstance(e, urllib.error.HTTPError) and e.code in (402, 413, 507) for e in chain
-    ):
+    if status in (402, 413, 507):
         return "quota", f"Your Dimensional cloud storage quota doesn't allow this upload: {text}"
-    if (
-        any(
-            isinstance(e, (TimeoutError, ConnectionError))
-            or (isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError))
-            for e in chain
-        )
-        or "urlopen error" in lowered
-        or "timed out" in lowered
+    if any(
+        isinstance(e, (TimeoutError, ConnectionError))
+        or (isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError))
+        for e in chain
     ):
         return (
             "network",
@@ -90,31 +90,24 @@ def classify(error: BaseException) -> tuple[str, str]:
 
 def account() -> dict[str, Any]:
     import urllib.error
-    import urllib.request
 
     from dimos.cli import cloud
     from dimos.core.global_config import global_config
 
-    base = global_config.dimos_cloud_url.rstrip("/")
-    source = "env" if global_config.dimos_api_key else None
     key = cloud.api_key()
     result: dict[str, Any] = {
         "loggedIn": False,
         "email": None,
         "scopes": None,
         "source": None,
-        "cloudUrl": base,
+        "cloudUrl": global_config.dimos_cloud_url.rstrip("/"),
         "error": None,
     }
     if not key:
         return result
-    result["source"] = source or "stored"
-    request = urllib.request.Request(
-        f"{base}/auth/whoami", headers={"Authorization": f"Bearer {key}"}
-    )
+    result["source"] = "env" if global_config.dimos_api_key else "stored"
     try:
-        with urllib.request.urlopen(request, timeout=global_config.dimos_http_timeout) as response:
-            who = json.load(response)
+        who = cloud.whoami_info(key)
         result.update(loggedIn=True, email=who.get("email"), scopes=who.get("scopes"))
     except urllib.error.HTTPError as error:
         if error.code == 401:
@@ -128,11 +121,9 @@ def account() -> dict[str, Any]:
 
 
 def login() -> dict[str, Any]:
-    import socket
-
     from dimos.cli import cloud
 
-    device = cloud._post("/auth/device", label=socket.gethostname())
+    device = cloud.start_device_login()
     emit(
         {
             "event": "code",
@@ -143,39 +134,20 @@ def login() -> dict[str, Any]:
             "interval": device["interval"],
         }
     )
-    deadline = time.time() + device["expires_in"]
-    while time.time() < deadline:
-        time.sleep(device["interval"])
-        answer = cloud._post("/auth/token", device_code=device["device_code"])
-        if answer["status"] == "ok":
-            cloud._store(answer["api_key"])
-            return {"event": "done", "status": "ok", "email": answer.get("email")}
-        if answer["status"] in ("denied", "expired"):
-            return {"event": "done", "status": answer["status"], "email": None}
-    return {"event": "done", "status": "expired", "email": None}
+    outcome = cloud.finish_device_login(device)
+    return {"event": "done", "status": outcome["status"], "email": outcome.get("email")}
 
 
 def logout() -> dict[str, Any]:
     from dimos.cli import cloud
 
-    return {"loggedOut": cloud._forget()}
-
-
-def console_link(upload_id: str | None) -> str | None:
-    """The console page that lists the account's (and org's) datasets: api.X -> console.X. The console has no per-dataset
-    URL that is known, so it is the list, not the item."""
-    from dimos.core.global_config import global_config
-
-    base = global_config.dimos_cloud_url.rstrip("/")
-    if not upload_id or "://api." not in base:
-        return None
-    return base.replace("://api.", "://console.", 1) + "/console/data"
+    return {"loggedOut": cloud.forget()}
 
 
 def upload(path: str, robot_id: str | None = None, kind: str | None = None) -> dict[str, Any]:
     from pathlib import Path
 
-    from dimos.cloud.data import CloudData
+    from dimos.cloud.data import CloudData, console_datasets_url
 
     last: list[Any] = [0.0, None]
 
@@ -194,7 +166,7 @@ def upload(path: str, robot_id: str | None = None, kind: str | None = None) -> d
     )
     return {
         "event": "result",
-        "link": console_link(result.get("upload_id")),
+        "link": console_datasets_url() if result.get("upload_id") else None,
         "uploadId": result.get("upload_id"),
         "state": result.get("state"),
         "skipped": bool(result.get("skipped")),

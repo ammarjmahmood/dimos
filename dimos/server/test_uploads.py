@@ -16,6 +16,7 @@
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
@@ -128,12 +129,18 @@ def test_checks_paths(tmp_path: Path) -> None:
     (tmp_path / "a.mcap").write_bytes(b"1234")
     (tmp_path / "b.txt").write_bytes(b"x")
     (tmp_path / "c.db-wal").write_bytes(b"x")
+    with sqlite3.connect(tmp_path / "memory.db") as db:
+        db.execute("CREATE TABLE _streams (name TEXT, config TEXT)")
+    with sqlite3.connect(tmp_path / "other.db") as db:
+        db.execute("CREATE TABLE t (x)")
     assert check_path(str(tmp_path / "a.mcap"))[1] == 4
+    assert check_path(str(tmp_path / "memory.db"))[0].name == "memory.db"
     for bad, why in [
         ("relative.mcap", "absolute"),
         (str(tmp_path / "gone.mcap"), "no such file"),
-        (str(tmp_path / "b.txt"), "not a recording"),
-        (str(tmp_path / "c.db-wal"), "not a recording"),
+        (str(tmp_path / "b.txt"), "not a dimos recording"),
+        (str(tmp_path / "c.db-wal"), "not a dimos recording"),
+        (str(tmp_path / "other.db"), "not a dimos recording"),
         (str(tmp_path), "not a file"),
     ]:
         with pytest.raises(ValueError, match=why):
@@ -153,7 +160,7 @@ async def test_uploads_run_in_a_worker_and_are_remembered(
 ) -> None:
     events: list[dict[str, Any]] = []
     bus = Bus()
-    bus.send = events.append  # type: ignore[method-assign]
+    bus.send = events.append  # type: ignore[method-assign, assignment]
     file = tmp_path / "state" / "uploads.json"
     uploads = Uploads(tmp_path, bus, file, tmp_path / "uploads.log", worker=fake_worker)
     worker = asyncio.create_task(uploads.work())
