@@ -530,9 +530,10 @@ class Launch(ApiModel):
     """The last launch this server started; its phase is worked out from disk on every call."""
 
     blueprint: str = Field(description="What was launched", examples=["unitree-go2"])
-    phase: Literal["starting", "running", "stopped", "failed"] = Field(
+    phase: Literal["starting", "running", "stopping", "stopped", "failed"] = Field(
         description="starting: alive, not registered yet; running: in dimos's run registry (every module built); "
-        "stopped: ran and is gone; failed: exited before running"
+        "stopping: asked to stop (or out of the registry) and still exiting; stopped: ran, or was stopped, and is "
+        "gone; failed: exited before running without being asked to"
     )
     startedAt: str = Field(
         description="When it was launched (ISO 8601, UTC)", examples=["2026-01-01T12:00:00Z"]

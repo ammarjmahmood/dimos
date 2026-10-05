@@ -2205,10 +2205,11 @@
             "type": "object"
           },
           "phase": {
-            "description": "starting: alive, not registered yet; running: in dimos's run registry (every module built); stopped: ran and is gone; failed: exited before running",
+            "description": "starting: alive, not registered yet; running: in dimos's run registry (every module built); stopping: asked to stop (or out of the registry) and still exiting; stopped: ran, or was stopped, and is gone; failed: exited before running without being asked to",
             "enum": [
               "starting",
               "running",
+              "stopping",
               "stopped",
               "failed"
             ],
@@ -4664,7 +4665,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "openapi": "3.1.0",
   "paths": {

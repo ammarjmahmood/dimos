@@ -23,7 +23,11 @@ wording of a message. The words (and the fixes) are Desktop's, per code.
 from __future__ import annotations
 
 import re
+import subprocess
+import time
 from typing import Any, Literal
+
+import psutil
 
 StepCode = Literal["starting", "building", "starting_modules", "running", "stopped"]
 StepState = Literal["done", "now", "todo", "failed"]
@@ -114,7 +118,7 @@ def steps(records: list[dict[str, Any]], phase: str) -> list[dict[str, Any]]:
             deployed += 1
     result = []
     for index, code in enumerate(STAGES):
-        if phase in ("running", "stopped"):
+        if phase in ("running", "stopping", "stopped"):
             state: StepState = "done"
         elif reached is None:
             state = "todo" if index else "failed" if phase == "failed" else "now"
@@ -128,7 +132,11 @@ def steps(records: list[dict[str, Any]], phase: str) -> list[dict[str, Any]]:
         result.append({"code": code, "state": state, "data": data})
     last: StepCode = "stopped" if phase == "stopped" else "running"
     result.append(
-        {"code": last, "state": "done" if phase in ("running", "stopped") else "todo", "data": {}}
+        {
+            "code": last,
+            "state": "done" if phase in ("running", "stopping", "stopped") else "todo",
+            "data": {},
+        }
     )
     return result
 
@@ -143,14 +151,82 @@ def classify(extra: dict[str, Any]) -> ProblemCode:
     return ERROR_CODES.get(str(extra.get("exception_code")), "error")
 
 
+# the address an OSError names, `('127.0.0.1', 3030)` (asyncio's and socket's bind errors print the address tuple)
+ADDRESS = re.compile(r"\(\s*'[^']*'\s*,\s*(\d{1,5})\s*\)")
+HOLDER_TTL_S = 10.0
+_holders: dict[int, tuple[float, dict[str, Any]]] = {}
+
+
+def port_of(*texts: Any) -> int | None:
+    """The port in the address an OSError's text names, when it names one."""
+    for text in texts:
+        found = ADDRESS.search(str(text or ""))
+        if found:
+            return int(found.group(1))
+    return None
+
+
+def listening_pid(port: int) -> int | None:
+    """lsof (macOS and most Linux; no root needed for the user's own processes), else psutil (Linux, no lsof)."""
+    try:
+        listed = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        return next((int(line[1:]) for line in listed.splitlines() if line[:1] == "p"), None)
+    except FileNotFoundError:
+        pass
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    try:
+        return next(
+            (
+                c.pid
+                for c in psutil.net_connections(kind="tcp")
+                if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port and c.pid
+            ),
+            None,
+        )
+    except psutil.Error:
+        return None
+
+
+def port_holder(port: int) -> dict[str, Any]:
+    """Which process listens on this TCP port: `{holder_pid, holder_command}`, or {} when that can't be told (lsof,
+    which needs no root for the user's own processes; kept 10 s, the launch is re-read every second)."""
+    now = time.monotonic()
+    cached = _holders.get(port)
+    if cached and now - cached[0] < HOLDER_TTL_S:
+        return cached[1]
+    holder: dict[str, Any] = {}
+    pid = listening_pid(port)
+    if pid is not None:
+        holder["holder_pid"] = pid
+        try:
+            holder["holder_command"] = " ".join(psutil.Process(pid).cmdline())[:300] or None
+        except psutil.Error:
+            holder["holder_command"] = None
+    _holders[port] = (now, holder)
+    return holder
+
+
 def problem(record: dict[str, Any]) -> dict[str, Any]:
     extra = record["extra"]
     message = extra.get("exception_message") or extra.get("error") or record["event"]
+    code = classify(extra)
+    data = {key: value for key, value in extra.items() if key not in NOT_DATA}
+    if code == "port_in_use":
+        port = port_of(extra.get("exception_message"), extra.get("error"), record["event"])
+        if port is not None:
+            data["port"] = port
+            data.update(port_holder(port))
     return {
-        "code": classify(extra),
+        "code": code,
         "level": "error",
         "message": str(message),
-        "data": {key: value for key, value in extra.items() if key not in NOT_DATA},
+        "data": data,
         "timestamp": record["timestamp"],
         "logger": record["logger"],
     }

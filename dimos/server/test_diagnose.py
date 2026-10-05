@@ -200,3 +200,32 @@ def test_error_text() -> None:
     assert diagnose.error_text([], "$ dimos run x\n\x1b[31mError: nope\x1b[0m\n\n") == "Error: nope"
     assert diagnose.error_text([], "$ dimos run x\n") == "dimos exited during startup"
     assert diagnose.error_text(problems([failure(MemoryError("big"))]), "") == "big"
+
+
+def test_a_port_in_use_says_which_port_and_who_holds_it() -> None:
+    import asyncio
+    import os
+    import socket
+
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen()
+    port = holder.getsockname()[1]
+
+    async def bind() -> BaseException:
+        try:
+            await asyncio.start_server(lambda *_: None, "127.0.0.1", port)
+        except OSError as error:
+            return error
+        raise AssertionError("bound a port that's taken")
+
+    try:
+        error = asyncio.run(bind())
+        found = problems([failure(error)])[0]
+    finally:
+        holder.close()
+    assert found["code"] == "port_in_use" and found["data"]["exception_code"] == "EADDRINUSE"
+    assert found["data"]["port"] == port and found["data"]["holder_pid"] == os.getpid()
+    assert "python" in (found["data"]["holder_command"] or "")
+    # an address the error doesn't name: no port, nothing looked up
+    assert "port" not in problems([failure(OSError(errno.EADDRINUSE, "in use"))])[0]["data"]

@@ -292,7 +292,11 @@ def test_global_config_overrides_live_in_desktops_config(client: TestClient) -> 
     assert client.put("/dimos/global-config", json={}).status_code == 400
 
 
-def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_log_and_stop(
+    client: TestClient, state: ServerState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[dict[str, Any]] = []
+    state.bus.sinks.append(sent.append)
     assert client.get("/dimos/runs").json() == {"runs": [], "launch": None}
     nothing_yet = client.post("/dimos/runs/restart")
     assert (
@@ -329,11 +333,19 @@ def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch
         "running",
         "r1",
     )
+    # out of the registry while its process still exits: stopping, never starting again
     monkeypatch.setattr(runs, "registry_runs", lambda: [])
+    assert client.get("/dimos/runs").json()["launch"]["phase"] == "stopping"
 
     stopped = client.post("/dimos/runs/stop")
     assert stopped.json() == {"output": f"stopped unitree-go2 (pid {launched['pid']})"}
     assert client.get("/dimos/runs").json()["launch"]["phase"] == "stopped"
+    # each phase once: the route's event and the watcher's are one
+    assert [e["launch"]["phase"] for e in sent if e["type"] == "launch"] == [
+        "starting",
+        "stopping",
+        "stopped",
+    ]
     nothing = client.post("/dimos/runs/stop", json={"runId": "nope"})
     assert nothing.status_code == 500 and nothing.json() == {"error": "no live run nope"}
     assert client.post("/dimos/runs", json={"blueprint": "-x"}).status_code == 400
@@ -349,6 +361,36 @@ def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch
         assert restarted["pid"] != launched["pid"]
         launched = restarted
     assert client.post("/dimos/runs/stop").json()["output"].startswith("stopped unitree-go2")
+    # stopped while it was still starting: stopped, not failed
+    assert client.get("/dimos/runs").json()["launch"]["phase"] == "stopped"
+
+
+def test_a_launch_event_goes_out_once_per_change() -> None:
+    bus = events.Bus()
+    sent: list[dict[str, Any]] = []
+    bus.sinks.append(sent.append)
+    launch = {
+        "blueprint": "b",
+        "phase": "starting",
+        "startedAt": "t",
+        "pid": 1,
+        "output": "",
+        "runId": None,
+        "logDir": None,
+        "error": None,
+        "overrides": {},
+        "modules": {},
+        "oneOff": {"global": {}, "modules": {}},
+        "steps": [],
+        "problems": [],
+    }
+    bus.launch(launch)
+    bus.launch(
+        {**launch, "output": "more"}
+    )  # the watcher, a second later: same (blueprint, phase, runId)
+    bus.launch({**launch, "phase": "running", "runId": "r1", "logDir": "d"})
+    bus.launch(None)
+    assert [e["launch"] and e["launch"]["phase"] for e in sent] == ["starting", "running", None]
 
 
 # a `dimos run` that logs as the real one does (dimos's own logger, to DIMOS_RUN_LOG_DIR, then to its run's dir) and

@@ -21,6 +21,7 @@ re-derived from the registry and the pid on every call, so a restarted server pi
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 import json
 import os
@@ -137,7 +138,8 @@ def _tail(path: Path, size: int) -> str:
 
 
 def current_launch() -> dict[str, Any] | None:
-    """The last launch this server started, with its phase: starting, running, stopped or failed."""
+    """The last launch this server started, with its phase: starting, running, stopping (asked to stop, or out of
+    dimos's run registry while its process still exits), stopped or failed (gone before it ever ran, unasked)."""
     try:
         record = json.loads(launch_file().read_text())
         pid, blueprint, started_at = (
@@ -153,11 +155,15 @@ def current_launch() -> dict[str, Any] | None:
         record["ever_ran"] = True
         config.write_atomic(launch_file(), json.dumps(record))
     output = _tail(launch_log(), 200_000)
-    if entry:
+    alive = is_pid_alive(pid)
+    stopping = bool(record.get("stopping"))
+    if alive and (stopping or (record.get("ever_ran") and not entry)):
+        phase = "stopping"
+    elif entry:
         phase = "running"
-    elif is_pid_alive(pid):
+    elif alive:
         phase = "starting"
-    elif record.get("ever_ran"):
+    elif record.get("ever_ran") or stopping:
         phase = "stopped"
     else:
         phase = "failed"
@@ -273,7 +279,7 @@ def start(dimos_dir: Path, blueprint: str, launch_config: LaunchConfig) -> dict[
     foreground of its own session (not `--daemon`: on macOS the daemon's post-fork build segfaults inside
     CoreFoundation). The launch keeps its config (secrets shown as •••), so it can be launched again the same way."""
     previous = current_launch()
-    if previous and previous["phase"] in ("starting", "running"):
+    if previous and previous["phase"] in ("starting", "running", "stopping"):
         raise StillRunningError(
             f"{previous['blueprint']} is still {previous['phase']}; stop it first"
         )
@@ -335,9 +341,21 @@ def start(dimos_dir: Path, blueprint: str, launch_config: LaunchConfig) -> dict[
     return launch
 
 
-async def stop(run_id: str | None) -> str:
+def mark_stopping(pid: int) -> None:
+    """Records that the launch with this pid was asked to stop: it's `stopping` while it exits, then `stopped`."""
+    try:
+        record = json.loads(launch_file().read_text())
+    except (OSError, ValueError):
+        return
+    if isinstance(record, dict) and record.get("pid") == pid and not record.get("stopping"):
+        record["stopping"] = True
+        config.write_atomic(launch_file(), json.dumps(record))
+
+
+async def stop(run_id: str | None, marked: Callable[[], None] | None = None) -> str:
     """Stops this server's launch, or any live registry run by id: its process group gets Ctrl-C, then SIGTERM, then
-    SIGKILL, as a terminal would (not `dimos stop`, which picks its own target)."""
+    SIGKILL, as a terminal would (not `dimos stop`, which picks its own target). `marked` is called once the launch
+    is marked `stopping`, before the first signal."""
     if run_id:
         run = next((r for r in registry_runs() if r["run_id"] == run_id), None)
         if run is None:
@@ -345,9 +363,12 @@ async def stop(run_id: str | None) -> str:
         pid, name = int(run["pid"]), str(run["blueprint"])
     else:
         launch = current_launch()
-        if not launch or launch["phase"] not in ("starting", "running"):
+        if not launch or launch["phase"] not in ("starting", "running", "stopping"):
             raise RunError("the dimos server hasn't launched anything that's still running")
         pid, name = launch["pid"], launch["blueprint"]
+    mark_stopping(pid)
+    if marked is not None:
+        marked()
     for signum, wait in ((signal.SIGINT, 20), (signal.SIGTERM, 10), (signal.SIGKILL, 5)):
         try:
             # a launch is its own session, so its pgid is its pid; a run from a terminal may not be

@@ -566,7 +566,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             raise ApiError(400, str(error))
         except runs.RunError as error:
             raise ApiError(500, str(error))
-        s.bus.send({"type": "launch", "launch": started})
+        s.bus.launch(started)
         return started
 
     @app.post(
@@ -592,12 +592,12 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         checked_overrides(launch_config.global_)
         current = await asyncio.to_thread(runs.current_launch)
         try:
-            if current and current["phase"] in ("starting", "running"):
-                await runs.stop(None)
+            if current and current["phase"] in ("starting", "running", "stopping"):
+                await runs.stop(None, lambda: s.bus.launch(runs.current_launch()))
             started = runs.start(s.dimos_dir, blueprint, launch_config)
         except runs.RunError as error:
             raise ApiError(500, str(error))
-        s.bus.send({"type": "launch", "launch": started})
+        s.bus.launch(started)
         return started
 
     @app.post(
@@ -617,9 +617,17 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
     )
     async def stop(request: models.StopRequest | None = None) -> dict[str, Any]:
         try:
-            return {"output": await runs.stop(request.runId if request else None)}
+            # `stopping` goes out before the first signal (runs.stop marks the launch), `stopped` once it's gone
+            return {
+                "output": await runs.stop(
+                    request.runId if request else None,
+                    lambda: s.bus.launch(runs.current_launch()),
+                )
+            }
         except runs.RunError as error:
             raise ApiError(500, str(error))
+        finally:
+            s.bus.launch(await asyncio.to_thread(runs.current_launch))
 
     @app.get(
         "/dimos/runs/{runId}/log",

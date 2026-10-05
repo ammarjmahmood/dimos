@@ -48,6 +48,16 @@ class Bus:
         self.sinks: list[Callable[[dict[str, Any]], None]] = []
         # (key under `<ns>/dimos/`, payload): what isn't an event, e.g. a job's lines on `jobs/<job>`
         self.publishers: list[Callable[[str, dict[str, Any]], None]] = []
+        # the (blueprint, phase, runId) last sent as a `launch` event: the route that changed it and the watcher that
+        # notices it a second later send it once between them
+        self.launch_key: tuple[Any, ...] | None = None
+
+    def launch(self, launch: dict[str, Any] | None) -> None:
+        """A `launch` event, when (blueprint, phase, runId) changed since the last one."""
+        key = (launch["blueprint"], launch["phase"], launch["runId"]) if launch else None
+        if key != self.launch_key:
+            self.launch_key = key
+            self.send({"type": "launch", "launch": launch})
 
     def publish(self, key: str, payload: dict[str, Any]) -> None:
         for publisher in self.publishers:
@@ -89,7 +99,6 @@ class Bus:
 
 async def watch_launch(bus: Bus, interval: float = 1.0) -> None:
     """Turns the launch's phase changes and its run's new warnings and errors into events, for as long as it runs."""
-    last_key: tuple[Any, ...] | None = None
     tailing: tuple[Path, int] | None = None
     last_failure = ""
     while True:
@@ -103,10 +112,7 @@ async def watch_launch(bus: Bus, interval: float = 1.0) -> None:
                 logger.exception("reading the launch failed; no launch events until it works")
             continue
         last_failure = ""
-        key = (launch["blueprint"], launch["phase"], launch["runId"]) if launch else None
-        if key != last_key:
-            last_key = key
-            bus.send({"type": "launch", "launch": launch})
+        bus.launch(launch)
         log_dir = launch["logDir"] if launch else None
         file = Path(log_dir) / "main.jsonl" if log_dir else None
         if file is None:

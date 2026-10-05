@@ -124,6 +124,7 @@ def _configure_structlog() -> Path:
                 CallsiteParameter.LINENO,
             ]
         ),
+        _add_exception_fields,
         structlog.processors.format_exc_info,  # Add this to format exception info
     ]
 
@@ -201,6 +202,9 @@ def _compact_console_processor(logger: Any, method_name: str, event_dict: Mappin
         "exc_info",
         "exception_type",
         "exception_message",
+        "exception_chain",
+        "exception_code",
+        "missing_module",
         "traceback_lines",
         "_record",
         "_from_structlog",
@@ -331,6 +335,24 @@ def exception_fields(error: BaseException) -> dict[str, Any]:
         "exception_code": code,
         "missing_module": missing,
     }
+
+
+def _add_exception_fields(
+    logger: Any, method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Every record logged with an exception (`logger.exception`, `exc_info=`) gets exception_fields, so a reader
+    (the dimos server's launch diagnosis) knows it by its class and errno, not its wording; fields the call set win."""
+    exc_info = event_dict.get("exc_info")
+    if exc_info is True:
+        error = sys.exc_info()[1]
+    elif isinstance(exc_info, tuple) and len(exc_info) == 3:
+        error = exc_info[1]
+    else:
+        error = exc_info if isinstance(exc_info, BaseException) else None
+    if error is not None:
+        for key, value in exception_fields(error).items():
+            event_dict.setdefault(key, value)
+    return event_dict
 
 
 def setup_exception_handler() -> None:
