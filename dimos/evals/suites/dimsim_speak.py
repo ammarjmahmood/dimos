@@ -16,13 +16,15 @@
 
 The mesh is Quaternius's Casual Character (CC0) at
 ``misc/DimSim/scenes/apartment/person.glb``. Idle_Neutral keeps them standing.
-Full credit is the last odom within 2 m and a ``speak`` call.
+Full credit is a successful ``speak`` while the robot is already within 2 m.
+The person cannot report that they heard it.
 
     dimos evals run dimos.evals.suites.dimsim_speak --agent dimos.evals.agents.mcp_client_adapter
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from dimos.evals.environments.dimsim import DimSimEnvironment
@@ -32,6 +34,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 
 if TYPE_CHECKING:
     from dimos.e2e_tests.dim_sim_client import DimSimClient
+    from dimos.memory.store.base import Store
 
 # Scene Y-up (x, y, z) is published as odom (z, x). Feet on the floor.
 _SCENE = (-1.332, 0.0, -3.567)
@@ -51,25 +54,59 @@ def _place_person(sim: DimSimClient) -> None:
     )
 
 
-def _spoke(outcome: Outcome) -> bool:
-    return any(
-        call.function_name == "speak"
-        for step in outcome.trajectory.steps
-        for call in step.tool_calls or ()
-    )
+def _speak_succeeded(content: str) -> bool:
+    text = content.lstrip()
+    return bool(text) and not text.startswith(("Error", "Warning"))
+
+
+def _speak_times(outcome: Outcome) -> list[float]:
+    times: list[float] = []
+    for step in outcome.trajectory.steps:
+        calls = {
+            call.tool_call_id for call in step.tool_calls or () if call.function_name == "speak"
+        }
+        if not calls or step.observation is None or not step.timestamp:
+            continue
+        if not any(
+            result.source_call_id in calls and _speak_succeeded(result.content)
+            for result in step.observation.results
+        ):
+            continue
+        try:
+            times.append(datetime.fromisoformat(step.timestamp).timestamp())
+        except ValueError:
+            continue
+    return times
+
+
+def _position_at(store: Store, when: float) -> Vector3 | None:
+    latest = None
+    for sample in store.streams.odom:
+        if sample.ts <= when and (latest is None or sample.ts >= latest.ts):
+            latest = sample
+    if latest is None:
+        return None
+    return latest.data.position
 
 
 def spoke_nearby(outcome: Outcome) -> float:
-    """1.0 at the bed after a ``speak`` call, 0.0 with no speech or 4 m away."""
-    if not _spoke(outcome):
+    """1.0 for a successful speak within 2 m, 0.0 if it failed or was 4 m away."""
+    times = _speak_times(outcome)
+    if not times:
         return 0.0
     with recording(outcome) as store:
         try:
-            position = store.streams.odom.last().data.position
+            positions = [_position_at(store, when) for when in times]
         except (LookupError, AttributeError):
             return 0.0
-    distance = Vector3(position.x - PERSON.x, position.y - PERSON.y, 0.0).length()
-    return ramp(max(0.0, distance - _NEAR_M), band=_NEAR_M)
+    distances = [
+        Vector3(position.x - PERSON.x, position.y - PERSON.y, 0.0).length()
+        for position in positions
+        if position is not None
+    ]
+    if not distances:
+        return 0.0
+    return ramp(max(0.0, min(distances) - _NEAR_M), band=_NEAR_M)
 
 
 speak_to_person = EvalCase(

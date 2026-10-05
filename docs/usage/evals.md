@@ -472,9 +472,8 @@ instead of its default `scene.xml`. The planner's base pose is
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
 modules disabled: pick up the cylinder, then put the red ball on top of it.
 `dimos.evals.suites.mujoco_restore` moves that cylinder 0.10 m in +y and scores
-0 if the height changes enough to leave the table. `dimos.evals.suites.dimsim_speak`
-places a person beside the apartment bed; credit needs the last odom within 2 m
-and a `speak` call.
+0 if it leaves the tabletop. `dimos.evals.suites.dimsim_speak` places a person
+beside the apartment bed; credit needs a successful speak while already within 2 m.
 
 ## Running
 

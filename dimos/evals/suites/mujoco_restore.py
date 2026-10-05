@@ -14,7 +14,8 @@
 
 """xArm7 moves the cylinder 0.10 m in +y and leaves it on the table.
 
-Graded on the recorded ``tf`` pose. A height change past 2 cm scores 0.
+Graded on the recorded ``tf`` pose. A height change past 2 cm scores 0,
+as does a final pose whose cup would hang off the tabletop.
 
     dimos evals run dimos.evals.suites.mujoco_restore --agent dimos.evals.agents.pi
 """
@@ -36,6 +37,19 @@ PERCEPTION_MODULES = (
     "heuristic-grasp-module",
 )
 
+# table_top box is centered at (0.45, 0) with half-size (0.15, 0.20).
+# The cup cylinder radius is 0.035, so its center must stay that far inside.
+_TABLE_X = (0.30, 0.60)
+_TABLE_Y = (-0.20, 0.20)
+_CUP_RADIUS = 0.035
+
+
+def _cup_on_table(x: float, y: float) -> bool:
+    return (
+        _TABLE_X[0] + _CUP_RADIUS <= x <= _TABLE_X[1] - _CUP_RADIUS
+        and _TABLE_Y[0] + _CUP_RADIUS <= y <= _TABLE_Y[1] - _CUP_RADIUS
+    )
+
 
 def restored_offset(
     dx: float,
@@ -47,11 +61,13 @@ def restored_offset(
     end_z: float | None = None,
     z_band: float = 0.02,
 ) -> float:
-    """1.0 when ``end`` is ``(dx, dy)`` from ``start`` and the height did not change.
+    """1.0 when ``end`` is ``(dx, dy)`` from ``start``, still on the table.
 
-    A height change past ``z_band`` means the body was lifted or fell off the table.
+    A height change past ``z_band``, or a center that would hang off the top, scores 0.
     """
     if start_z is not None and end_z is not None and abs(end_z - start_z) > z_band:
+        return 0.0
+    if not _cup_on_table(end[0], end[1]):
         return 0.0
     err = math.hypot((end[0] - start[0]) - dx, (end[1] - start[1]) - dy)
     return ramp(err, band=band)

@@ -23,3 +23,8 @@ def test_restored_scores_one_on_the_table_and_zero_off_it() -> None:
     assert restored_offset(**(on_table | {"end": (0.50, 0.0)})) == 0.0
     assert restored_offset(**(on_table | {"end_z": 0.06})) == 0.0
     assert restored_offset(**(on_table | {"end_z": 0.24})) == 0.0
+    # Start near the +y edge and move the requested 0.10 m: the cup hangs off.
+    off_table = dict(
+        dx=0.0, dy=0.10, start=(0.50, 0.12), end=(0.50, 0.22), start_z=0.19, end_z=0.19
+    )
+    assert restored_offset(**off_table) == 0.0

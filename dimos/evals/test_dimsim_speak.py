@@ -14,12 +14,15 @@
 
 """Grader smoke for speaking to a person on the bed (no live DimSim)."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dimos.evals.suites.dimsim_speak import PERSON, SUITE, spoke_nearby
 from dimos.evals.types import (
     AgentInfo,
     FinalMetrics,
+    Observation,
+    ObservationResult,
     Outcome,
     RunExtra,
     Step,
@@ -32,29 +35,42 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 
 
-def _recording(path: Path, x: float, y: float) -> Path:
+def _recording(path: Path, points: tuple[tuple[float, float, float], ...]) -> Path:
     with SqliteStore(path=str(path)) as store:
-        store.stream("odom", PoseStamped).append(
-            PoseStamped(
-                position=make_vector3(x, y, 0.0),
-                orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
-                frame_id="world",
-            ),
-            ts=1.0,
-        )
+        stream = store.stream("odom", PoseStamped)
+        for x, y, ts in points:
+            stream.append(
+                PoseStamped(
+                    position=make_vector3(x, y, 0.0),
+                    orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+                    frame_id="world",
+                ),
+                ts=ts,
+            )
     return path
 
 
-def _outcome(path: Path, *, spoke: bool) -> Outcome:
-    calls = (
-        (ToolCall(tool_call_id="c1", function_name="speak", arguments={"text": "Hello."}),)
-        if spoke
-        else None
-    )
+def _outcome(path: Path, *, content: str | None, when: float) -> Outcome:
+    calls = None
+    observation = None
+    if content is not None:
+        calls = (ToolCall(tool_call_id="c1", function_name="speak", arguments={"text": "Hello."}),)
+        observation = Observation(
+            results=(ObservationResult(source_call_id="c1", content=content),)
+        )
     return Outcome(
         trajectory=Trajectory(
             agent=AgentInfo(name="test", version="1", model_name="test"),
-            steps=(Step(step_id=1, timestamp="", source="agent", message="", tool_calls=calls),),
+            steps=(
+                Step(
+                    step_id=1,
+                    timestamp=datetime.fromtimestamp(when, timezone.utc).isoformat(),
+                    source="agent",
+                    message="",
+                    tool_calls=calls,
+                    observation=observation,
+                ),
+            ),
             final_metrics=FinalMetrics(
                 total_prompt_tokens=0,
                 total_completion_tokens=0,
@@ -68,12 +84,24 @@ def _outcome(path: Path, *, spoke: bool) -> Outcome:
     )
 
 
-def test_spoke_nearby_needs_both_the_person_and_a_speak_call(tmp_path: Path) -> None:
-    near = _recording(tmp_path / "near.db", PERSON.x, PERSON.y)
-    far = _recording(tmp_path / "far.db", PERSON.x + 10.0, PERSON.y)
-    assert spoke_nearby(_outcome(near, spoke=True)) == 1.0
-    assert spoke_nearby(_outcome(near, spoke=False)) == 0.0
-    assert spoke_nearby(_outcome(far, spoke=True)) == 0.0
+def test_spoke_nearby_needs_a_successful_speak_after_arrival(tmp_path: Path) -> None:
+    near = _recording(tmp_path / "near.db", ((PERSON.x, PERSON.y, 1.0),))
+    far = _recording(tmp_path / "far.db", ((PERSON.x + 10.0, PERSON.y, 1.0),))
+    arrived_later = _recording(
+        tmp_path / "later.db",
+        ((PERSON.x + 10.0, PERSON.y, 1.0), (PERSON.x, PERSON.y, 5.0)),
+    )
+    assert spoke_nearby(_outcome(near, content="Spoke: Hello.", when=1.0)) == 1.0
+    assert spoke_nearby(_outcome(near, content=None, when=1.0)) == 0.0
+    assert spoke_nearby(_outcome(near, content="Error: TTS not initialized", when=1.0)) == 0.0
+    assert (
+        spoke_nearby(
+            _outcome(near, content="Warning: TTS timeout while speaking: Hello.", when=1.0)
+        )
+        == 0.0
+    )
+    assert spoke_nearby(_outcome(far, content="Spoke: Hello.", when=1.0)) == 0.0
+    assert spoke_nearby(_outcome(arrived_later, content="Spoke: Hello.", when=1.0)) == 0.0
 
 
 def test_suite_sends_the_robot_to_the_person_and_asks_it_to_speak() -> None:
