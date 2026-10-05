@@ -25,12 +25,17 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import shutil
+import sys
 from typing import Any
 
 from packaging.markers import Marker
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
-import tomllib
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 
 def is_checkout(dimos_dir: Path) -> bool:
