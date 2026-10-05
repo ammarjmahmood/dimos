@@ -34,11 +34,12 @@ from dimos.server.models import DimosEvent, ErrorResponse
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-API_VERSION = "1.1.0"
+API_VERSION = "1.2.0"
 SPEC_FILE = Path(__file__).parent / "openapi.json"
 
 DESCRIPTION = """\
-The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads.
+The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,
+discovery (blueprints, modules, message types), docs, extras and jobs.
 
 dimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.
 Every answer is JSON unless the operation says otherwise; every error is `{"error": "<message>"}` (ErrorResponse).
@@ -94,9 +95,33 @@ TAGS: list[dict[str, Any]] = [
         "`upload-removed` events follow it.",
     },
     {
+        "name": "discovery",
+        "description": "The discovery cache: every blueprint in dimos's registry imported once (in child processes, a "
+        "hang or crash costs one blueprint), whether it imports and why not, its modules and their streams and topics, "
+        "every module's config, the message types between them, and modules ranked per robot. It starts with the "
+        "server, is saved to disk keyed by the checkout's commit, dirty files and installed packages (a restart "
+        "answers at once) and rescans when those change. `discovery` events follow a scan.",
+    },
+    {
+        "name": "docs",
+        "description": "dimos's own docs, found in the checkout's docs/ and linked to the published site "
+        "(mkdocs.yml site_url).",
+    },
+    {
+        "name": "extras",
+        "description": "dimos's optional-dependency extras (pyproject.toml), which are installed in the checkout's "
+        "python, and installing more (a job; scripts/install.sh's command, never sudo).",
+    },
+    {
+        "name": "jobs",
+        "description": "Long jobs (an extras install), shaped like Desktop's: each output line is published on zenoh "
+        'at `<ns>/dimos/jobs/<job>` as `{type: "line", n, line}`, then `{type: "done", ok, error, failure, lines}`; a '
+        "`job` event says one started; `GET /dimos/jobs/{job}/log` is the snapshot.",
+    },
+    {
         "name": "events",
         "description": "The server's events, each a JSON object with a `type`: `launch`, `log`, `upload`, "
-        "`uploads`, `upload-removed`, `cloud-login` (schemas: DimosEvent). They are published on zenoh at "
+        "`uploads`, `upload-removed`, `cloud-login`, `discovery`, `job` (schemas: DimosEvent). They are published on zenoh at "
         "`<ns>/dimos/events/<type>` (Desktop's docs/events.md; `<ns>` is Desktop's namespace), which is where to "
         "listen. The SSE stream `GET /dimos/events` carries the same events and is deprecated (kept one release).",
     },

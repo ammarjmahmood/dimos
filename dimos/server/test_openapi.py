@@ -39,6 +39,10 @@ KNOWN_DIFFERENCES = {
     "get /dimos/blueprints: parameter only here: fresh",
     # Desktop's Rust takes `after` too (its Logs tag documents it) but leaves it out of the parameter list
     "get /dimos/runs/{}/log: parameter only here: after",
+    # the discovery cache's import status, new here (Desktop's doc follows this one)
+    "get /dimos/blueprints.blueprints[]: field only here: importable",
+    "get /dimos/blueprints.blueprints[]: field only here: import_error",
+    "get /dimos/blueprints.blueprints[]: field only here: missing_module",
 }
 
 
@@ -287,6 +291,10 @@ def test_every_operation_is_documented(spec: dict[str, Any]) -> None:
         "uploads",
         "events",
         "server",
+        "discovery",
+        "docs",
+        "extras",
+        "jobs",
     }
     found = operations(spec)
     assert len(found) >= 27
@@ -319,7 +327,16 @@ def test_events_are_documented_with_their_zenoh_keys(spec: dict[str, Any]) -> No
     schemas = spec["components"]["schemas"]
     union = schemas["DimosEvent"]
     types = set(union["discriminator"]["mapping"])
-    assert types == {"launch", "log", "upload", "uploads", "upload-removed", "cloud-login"}
+    assert types == {
+        "launch",
+        "log",
+        "upload",
+        "uploads",
+        "upload-removed",
+        "cloud-login",
+        "discovery",
+        "job",
+    }
     for event_type, ref in union["discriminator"]["mapping"].items():
         schema = schemas[ref.rsplit("/", 1)[1]]
         assert schema["x-zenoh-key"] == f"<ns>/dimos/events/{event_type}"

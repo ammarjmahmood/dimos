@@ -46,6 +46,15 @@ class Bus:
     def __init__(self) -> None:
         self.queues: set[asyncio.Queue[dict[str, Any]]] = set()
         self.sinks: list[Callable[[dict[str, Any]], None]] = []
+        # (key under `<ns>/dimos/`, payload): what isn't an event, e.g. a job's lines on `jobs/<job>`
+        self.publishers: list[Callable[[str, dict[str, Any]], None]] = []
+
+    def publish(self, key: str, payload: dict[str, Any]) -> None:
+        for publisher in self.publishers:
+            try:
+                publisher(key, payload)
+            except Exception:
+                logger.exception("a publisher failed", key=key)
 
     def send(self, event: dict[str, Any]) -> None:
         for sink in self.sinks:

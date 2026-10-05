@@ -108,6 +108,10 @@ class Publisher:
     def __call__(self, event: dict[str, Any]) -> None:
         self.put(event_key(self.namespace, event), json.dumps(event).encode())
 
+    def under(self, key: str, payload: dict[str, Any]) -> None:
+        """`payload` on `<ns>/dimos/<key>` (a job's lines: `jobs/<job>`)."""
+        self.put(f"{self.namespace}/dimos/{key}", json.dumps(payload).encode())
+
 
 def open_publisher(
     namespace: str, connect: list[str], pool: ZenohSessionPool | None = None

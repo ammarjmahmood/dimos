@@ -100,6 +100,16 @@ class BlueprintName(ApiModel):
     kind: Literal["builtin", "external"] = Field(
         description="builtin: in dimos itself; external: from an installed package's entry points"
     )
+    importable: bool | None = Field(
+        default=None,
+        description="From the discovery cache: it imports (null: not scanned yet; GET /dimos/discovery)",
+    )
+    import_error: str | None = Field(
+        default=None, description="From the discovery cache: why it doesn't import"
+    )
+    missing_module: str | None = Field(
+        default=None, description="From the discovery cache: the module its import couldn't find"
+    )
 
 
 class BlueprintList(ApiModel):
@@ -630,6 +640,355 @@ class Ok(ApiModel):
     ok: Literal[True] = Field(description="Always true")
 
 
+# discovery: the cache of every blueprint, module and message type (discovery.py)
+
+
+class DiscoveryStatus(ApiModel):
+    """Where the discovery scan is."""
+
+    state: Literal["idle", "scanning", "done", "failed"] = Field(
+        description="idle: not started; scanning: a scan runs; done: the answer is complete; failed: the scan itself "
+        "failed (see errors)"
+    )
+    reason: str | None = Field(
+        description="Why the last scan started: startup, changed (checkout or packages), requested, extras installed",
+        examples=["startup"],
+    )
+    key: str | None = Field(
+        description="The cache key the answer is for (checkout commit + dirty files + installed packages, hashed)",
+        examples=["d44db6593b78cd25"],
+    )
+    stale: bool = Field(
+        description="The checkout or its packages changed since the answer was made; a new one is being made"
+    )
+    started_at: str | None = Field(description="When the last scan started (UTC, ISO 8601)")
+    finished_at: str | None = Field(description="When the answer was completed (UTC, ISO 8601)")
+    blueprints_total: int = Field(
+        description="Blueprints in dimos's registry (and installed packages)"
+    )
+    blueprints_done: int = Field(description="Blueprints with an answer so far")
+    importable: int = Field(description="Of those, how many import")
+    not_importable: int = Field(
+        description="Of those, how many don't (see each one's import_error)"
+    )
+    modules_total: int = Field(description="Modules in dimos's module registry")
+    modules_done: int = Field(description="Registry modules with an answer so far")
+    current: str | None = Field(
+        description="What the scan is importing now (a blueprint, or module:<name>)",
+        examples=["unitree-go2"],
+    )
+    cached_from: str | None = Field(
+        description="When the answer being served was saved, while it comes from the disk cache"
+    )
+    errors: list[str] = Field(
+        description="Problems with the scan itself (a crash, a hang), newest last, at most 50; a blueprint that "
+        "just doesn't import is not one"
+    )
+
+
+class DiscoveryRefresh(ApiModel):
+    full: bool = Field(
+        default=False,
+        description="Forget the answer and import everything again (else only what's missing or changed)",
+    )
+
+
+class DiscoveredStream(ApiModel):
+    name: str = Field(description="The stream's name on its module", examples=["color_image"])
+    type: str = Field(
+        description="Its message type, `module.Class`",
+        examples=["dimos.msgs.sensor_msgs.Image.Image"],
+    )
+    direction: Literal["in", "out", "inout"] = Field(
+        description="in: the module reads it; out: it publishes it; inout: both"
+    )
+    topic: str | None = Field(
+        description="The topic it's on when the blueprint runs: a transport the blueprint pins, else `/<name>` "
+        "(after remapping) when only one type uses that name; null: a random topic at run time",
+        examples=["/color_image"],
+    )
+
+
+class DiscoveredModuleRef(ApiModel):
+    name: str = Field(description="The module's name in the blueprint", examples=["go2connection"])
+    class_: str = Field(alias="class", description="Its Python class, `module.QualName`")
+    module: str = Field(
+        description="Its name in dimos's module registry (else its class name): what /dimos/modules/{module} takes",
+        examples=["go2-connection"],
+    )
+    streams: list[DiscoveredStream] = Field(description="Its streams")
+
+
+class DiscoveredBlueprint(ApiModel):
+    name: str = Field(description="The blueprint", examples=["unitree-go2"])
+    ref: str | None = Field(
+        description="Where a built-in one is defined, `module:attribute` (null: external, or the scan failed)"
+    )
+    builtin: bool | None = Field(
+        description="In dimos's own registry (false: an installed package's)"
+    )
+    robot: str | None = Field(
+        description="The robot it's for: the robots.json robot (GET /dimos/robots) that lists it or whose dirs hold "
+        "its file; without a robots.json, the robot folder under dimos/robot/ it lives in (null: none)",
+        examples=["go2"],
+    )
+    importable: bool = Field(description="It imports in the checkout's python")
+    optional_dependency: bool = Field(
+        description="It doesn't import because an optional dependency (an extra) is missing, by dimos's own rule"
+    )
+    import_error: str | None = Field(
+        description="Why it doesn't import, `<Exception>: <message>`",
+        examples=["ModuleNotFoundError: No module named 'unitree_sdk2py'"],
+    )
+    import_traceback: str | None = Field(
+        description="The import's traceback (its last 4000 characters)"
+    )
+    missing_module: str | None = Field(
+        description="The top-level module an import couldn't find", examples=["unitree_sdk2py"]
+    )
+    suggested_extras: list[str] = Field(
+        description="dimos extras whose packages look like they'd provide missing_module (a name match: a hint)",
+        examples=[["unitree-dds"]],
+    )
+    modules: list[DiscoveredModuleRef] = Field(
+        description="Its modules, in blueprint order (empty when it doesn't import)"
+    )
+
+
+class DiscoveredBlueprints(ApiModel):
+    stale: bool = Field(
+        description="From before the checkout or packages changed (a scan is running)"
+    )
+    blueprints: list[DiscoveredBlueprint] = Field(description="Every blueprint scanned so far")
+
+
+class ModuleSummary(ApiModel):
+    name: str = Field(
+        description="Its name in dimos's module registry (else its class name)",
+        examples=["go2-connection"],
+    )
+    class_: str = Field(alias="class", description="Its Python class, `module.QualName`")
+    doc: str = Field(description="Its own docstring's first paragraph (empty: none)")
+    inputs: list[Port] = Field(description="Streams it reads (type: `module.Class`)")
+    outputs: list[Port] = Field(description="Streams it publishes (type: `module.Class`)")
+    skills: list[str] = Field(description="Its skills' names")
+    blueprint_count: int = Field(
+        description="How many importable blueprints use it (RerunBridgeModule: most)", examples=[89]
+    )
+    robots: list[str] = Field(description="Robots whose blueprints use it")
+    error: str | None = Field(
+        default=None, description="Only when its streams couldn't be read: why"
+    )
+    config_error: str | None = Field(
+        default=None, description="Only when its config couldn't be read: why"
+    )
+
+
+class ModuleList(ApiModel):
+    stale: bool = Field(
+        description="From before the checkout or packages changed (a scan is running)"
+    )
+    modules: list[ModuleSummary] = Field(
+        description="Every module class: the registry's and any a blueprint uses, by name"
+    )
+
+
+class ConfigField(ApiModel):
+    """One field of a module's config class (pydantic model or dataclass)."""
+
+    name: str = Field(description="The field", examples=["robot_ip"])
+    type: str | None = Field(description="Its annotation", examples=["str | None"])
+    default: JsonValue = Field(
+        description="Its default as JSON (null when required); when not json_compatible, its text"
+    )
+    description: str | None = Field(description="The field's description, if it has one")
+    required: bool = Field(description="It has no default")
+    base: bool = Field(description="Inherited from dimos's ModuleConfig (every module has it)")
+    enum: list[JsonValue] | None = Field(
+        description="An Enum's values or a Literal's options (also inside Optional); null otherwise",
+        examples=[["webrtc", "ros"]],
+    )
+    json_compatible: bool = Field(
+        description="Its type has a JSON Schema and its default survives a JSON round trip unchanged; a UI leaves "
+        "out the fields that don't"
+    )
+    reason: str | None = Field(
+        description="Why it isn't json_compatible", examples=["its type has no JSON form"]
+    )
+
+
+class ModuleConfigAnswer(ApiModel):
+    module: str = Field(
+        description="The module's registry name (else class name)", examples=["go2-connection"]
+    )
+    class_: str = Field(alias="class", description="Its Python class")
+    fields: list[ConfigField] = Field(
+        description="Its config's fields, but ModuleConfig's internal ones (g, rpc_transport, ...)"
+    )
+    error: str | None = Field(description="Why its config couldn't be read (then fields is empty)")
+
+
+class MessageType(ApiModel):
+    type: str = Field(
+        description="The message type, `module.Class`",
+        examples=["dimos.msgs.geometry_msgs.Twist.Twist"],
+    )
+    publishers: list[str] = Field(description="Modules with an output of this type")
+    subscribers: list[str] = Field(description="Modules with an input of this type")
+
+
+class MessageTypes(ApiModel):
+    types: list[MessageType] = Field(description="Every message type a module's stream has, sorted")
+
+
+class RankedModule(ApiModel):
+    name: str = Field(
+        description="The module (registry name, else class name)", examples=["go2-connection"]
+    )
+    class_: str = Field(alias="class", description="Its Python class")
+    score: float = Field(
+        description="How specific it is to this robot (see `formula`); higher first"
+    )
+    in_robot_blueprints: int = Field(description="This robot's importable blueprints that use it")
+    robot_blueprints: int = Field(description="This robot's importable blueprints")
+    robots_using: int = Field(description="Robots with a blueprint that uses it")
+    blueprint_count: int = Field(description="Importable blueprints (any robot) that use it")
+
+
+class RobotModules(ApiModel):
+    robot: str = Field(description="The robot", examples=["go2"])
+    blueprints: int = Field(description="Its blueprints (importable or not)")
+    blueprints_importable: int = Field(description="Of those, how many import (only these count)")
+    robots_total: int = Field(description="Robots with an importable blueprint")
+    formula: str = Field(description="How `score` is computed")
+    modules: list[RankedModule] = Field(description="Its blueprints' modules, most specific first")
+
+
+# docs
+
+
+class DocPage(ApiModel):
+    title: str = Field(description="The page's first heading")
+    source_path: str = Field(
+        description="The file, relative to the checkout", examples=["docs/usage/cli.md"]
+    )
+    url: str | None = Field(
+        description="Where the docs site publishes it (null: no site_url in mkdocs.yml)"
+    )
+
+
+class CustomRobotDoc(ApiModel):
+    title: str = Field(
+        description="The guide's first heading", examples=["How to Integrate a New Manipulator Arm"]
+    )
+    markdown: str = Field(
+        description="The guide, links and images made absolute (docs site, else GitHub)"
+    )
+    html: str | None = Field(
+        description="The same rendered to HTML with markdown-it (CommonMark + tables, raw HTML off); null when "
+        "markdown-it isn't installed"
+    )
+    source_path: str = Field(description="The file, relative to the checkout")
+    url: str | None = Field(description="Where the docs site publishes it")
+    others: list[DocPage] = Field(description="Other pages that matched, best first")
+
+
+class DocLinks(ApiModel):
+    """Links into dimos's published docs, found in the checkout's docs/ and mkdocs.yml; null where there's no page."""
+
+    site: str | None = Field(
+        description="The docs site (mkdocs.yml site_url)",
+        examples=["https://docs.dimensional.org/"],
+    )
+    repo: str | None = Field(description="The repo (mkdocs.yml repo_url)")
+    configure_robot: str | None = Field(
+        description="Configuring dimos for a robot (GlobalConfig, flags, env)",
+        examples=["https://docs.dimensional.org/usage/configuration/"],
+    )
+    custom_robot: str | None = Field(
+        description="Adding a robot of your own (GET /dimos/docs/custom-robot)"
+    )
+    blueprints: str | None = Field(description="Blueprints")
+    modules: str | None = Field(description="Modules")
+    installation: str | None = Field(description="Installing dimos")
+    quickstart: str | None = Field(description="Quickstart")
+    cli: str | None = Field(description="The dimos CLI")
+
+
+# extras and jobs
+
+
+class Extra(ApiModel):
+    name: str = Field(description="The extra, as in `dimos[<name>]`", examples=["sim"])
+    installed: bool = Field(
+        description="Every requirement that applies here is installed at an allowed version (and every included "
+        "extra is installed)"
+    )
+    applicable: bool = Field(
+        description="Some requirement applies on this machine (false: e.g. cuda on a Mac; nothing to install)"
+    )
+    requires: list[str] = Field(description="Its requirements, as pyproject.toml has them")
+    includes: list[str] = Field(description="Other extras it pulls in (`dimos[base,mapping]`)")
+    missing: list[str] = Field(
+        description="Packages (its own and its includes') not installed or at a wrong version"
+    )
+    download_bytes: int | None = Field(
+        description="A hint: bytes to download for what's missing and what that depends on, from uv.lock's wheel "
+        "sizes for this OS and CPU (an upper bound; null without a uv.lock)"
+    )
+
+
+class ExtrasList(ApiModel):
+    mode: Literal["checkout", "library"] = Field(
+        description="checkout: a source checkout installed with `uv sync`; library: dimos installed as a package"
+    )
+    python: str = Field(description="The python the extras are checked in (the checkout's .venv)")
+    extras: list[Extra] = Field(description="Every extra, in pyproject.toml order")
+
+
+class ExtrasInstall(ApiModel):
+    extras: list[str] = Field(description="Extras to add", min_length=1, examples=[["sim"]])
+
+
+class JobStarted(ApiModel):
+    job: str = Field(
+        description="The job's id: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log"
+    )
+    command: list[str] = Field(description="What it runs")
+
+
+class JobSummary(ApiModel):
+    job: str = Field(description="The job's id", examples=["extras-1-1791000000"])
+    title: str = Field(description="What it does, for a person", examples=["Install extras: sim"])
+    kind: str = Field(description="What sort of job", examples=["extras"])
+    done: bool = Field(description="It finished")
+    ok: bool | None = Field(description="It succeeded (null while running)")
+    started_at: str = Field(description="When it started (UTC, ISO 8601)")
+    finished_at: str | None = Field(description="When it finished")
+
+
+class JobList(ApiModel):
+    jobs: list[JobSummary] = Field(
+        description="Running jobs and those finished in the last 30 minutes"
+    )
+
+
+class JobLog(JobSummary):
+    command: list[str] = Field(description="What it runs")
+    lines: list[str] = Field(
+        description="Its output lines from `after` on (stdout and stderr together)"
+    )
+    next: int = Field(description="The `n` the next line will have (pass it as `after`)")
+    error: str | None = Field(
+        description="Why it failed, one line",
+        examples=["Install extras: sim failed (exit 2): error: ..."],
+    )
+    failure: list[str] = Field(
+        description="The lines that say why it failed (uv's `error:` and cross-marked lines, else the last lines); empty when "
+        "it didn't"
+    )
+
+
 # events: on zenoh at <ns>/dimos/events/<type>, and (deprecated) the SSE stream /dimos/events
 
 
@@ -679,6 +1038,28 @@ class CloudLoginEvent(ApiModel):
     login: Login = Field(description="The login now")
 
 
+class DiscoveryEvent(ApiModel):
+    model_config = _zenoh(
+        "discovery",
+        "The discovery scan started, moved (at most twice a second) or finished: GET /dimos/discovery/blueprints "
+        "and friends for the data",
+    )
+    type: Literal["discovery"]
+    status: DiscoveryStatus = Field(description="The scan now (GET /dimos/discovery)")
+
+
+class JobEvent(ApiModel):
+    model_config = _zenoh(
+        "job",
+        "A job started: its lines are on `<ns>/dimos/jobs/<job>` ({type: line, n, line}, then {type: done, ok, "
+        "error, failure, lines})",
+    )
+    type: Literal["job"]
+    job: str = Field(description="The job's id")
+    title: str = Field(description="What it does")
+    kind: str = Field(description="What sort of job", examples=["extras"])
+
+
 EVENT_MODELS: tuple[type[ApiModel], ...] = (
     LaunchEvent,
     LogEvent,
@@ -686,9 +1067,18 @@ EVENT_MODELS: tuple[type[ApiModel], ...] = (
     UploadsEvent,
     UploadRemovedEvent,
     CloudLoginEvent,
+    DiscoveryEvent,
+    JobEvent,
 )
 
 DimosEvent = Annotated[
-    LaunchEvent | LogEvent | UploadEvent | UploadsEvent | UploadRemovedEvent | CloudLoginEvent,
+    LaunchEvent
+    | LogEvent
+    | UploadEvent
+    | UploadsEvent
+    | UploadRemovedEvent
+    | CloudLoginEvent
+    | DiscoveryEvent
+    | JobEvent,
     Field(discriminator="type"),
 ]

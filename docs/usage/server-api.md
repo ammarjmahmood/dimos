@@ -42,10 +42,36 @@ Operations carry Desktop's extensions: `x-family: dimos`; `x-agent: true` for wh
 | `cloud`         | the Dimensional cloud login (device flow) and account                                |
 | `uploads`       | the upload queue, and which recordings are already in the cloud                      |
 | `events`        | the event payloads, and the deprecated SSE stream                                    |
+| `discovery`     | the discovery cache: blueprints, modules, their config, message types, robot ranking |
+| `docs`          | the guide to adding your own robot, and links into the docs site                     |
+| `extras`        | dimos's optional extras, which are installed, and installing more                    |
+| `jobs`          | long jobs (an extras install): their output, live on zenoh and as a snapshot         |
 
 ## Events
 
 The server publishes its events on zenoh at `<ns>/dimos/events/<type>` (`<ns>` is Desktop's namespace): `launch`,
-`log`, `upload`, `uploads`, `upload-removed` and `cloud-login`. Each payload is a component schema in the document
+`log`, `upload`, `uploads`, `upload-removed`, `cloud-login`, `discovery` and `job`. Each payload is a component schema in the document
 (`LaunchEvent`, ... ; `DimosEvent` is any of them) with its zenoh key in `x-zenoh-key`. `GET /dimos/events` streams
 the same events as server-sent events, and is deprecated.
+
+A job's output lines are on `<ns>/dimos/jobs/<job>` (`{type: "line", n, line}`, then `{type: "done", ok, error,
+failure, lines}`), the same shape as Desktop's own jobs; `GET /dimos/jobs/{job}/log?after=<n>` is the snapshot.
+
+## Discovery
+
+When the server starts it imports every blueprint in dimos's registry ([`dimos/robot/all_blueprints.py`](/dimos/robot/all_blueprints.py))
+and every registry module once, in child processes ([`dimos/server/discover.py`](/dimos/server/discover.py)): a blueprint that
+hangs or crashes its process costs only itself. The answer (whether each blueprint imports and why not, its modules
+and their streams and topics, every module's config fields, the message types) is saved under
+`<state>/dimos/server/discovery/`, keyed by the checkout's commit, its dirty files and the installed packages, so a
+restart answers at once. The key is checked every 30 s and after an extras install; when it changes the old answer is
+served (`stale: true`) until the new one is in. See [`dimos/server/discovery.py`](/dimos/server/discovery.py#L25).
+
+`GET /dimos/robots/{robot}/modules` ranks the modules of a robot's blueprints by how specific they are to it:
+
+```
+score = (robot's blueprints using the module / robot's blueprints) * ln(robots / robots using the module)
+```
+
+so the robot's own connection module comes first and a module every robot uses scores 0. Robots are
+[`dimos/robot/robots.json`](/dimos/robot/robots.json)'s, and only blueprints that import count.

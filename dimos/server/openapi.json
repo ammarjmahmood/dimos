@@ -201,6 +201,30 @@
       "BlueprintName": {
         "additionalProperties": true,
         "properties": {
+          "import_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From the discovery cache: why it doesn't import",
+            "title": "Import Error"
+          },
+          "importable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From the discovery cache: it imports (null: not scanned yet; GET /dimos/discovery)",
+            "title": "Importable"
+          },
           "kind": {
             "description": "builtin: in dimos itself; external: from an installed package's entry points",
             "enum": [
@@ -209,6 +233,18 @@
             ],
             "title": "Kind",
             "type": "string"
+          },
+          "missing_module": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From the discovery cache: the module its import couldn't find",
+            "title": "Missing Module"
           },
           "name": {
             "description": "The name `dimos run` takes",
@@ -563,11 +599,187 @@
         "title": "ConfigArg",
         "type": "object"
       },
+      "ConfigField": {
+        "additionalProperties": true,
+        "description": "One field of a module's config class (pydantic model or dataclass).",
+        "properties": {
+          "base": {
+            "description": "Inherited from dimos's ModuleConfig (every module has it)",
+            "title": "Base",
+            "type": "boolean"
+          },
+          "default": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Its default as JSON (null when required); when not json_compatible, its text"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The field's description, if it has one",
+            "title": "Description"
+          },
+          "enum": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An Enum's values or a Literal's options (also inside Optional); null otherwise",
+            "examples": [
+              [
+                "webrtc",
+                "ros"
+              ]
+            ],
+            "title": "Enum"
+          },
+          "json_compatible": {
+            "description": "Its type has a JSON Schema and its default survives a JSON round trip unchanged; a UI leaves out the fields that don't",
+            "title": "Json Compatible",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The field",
+            "examples": [
+              "robot_ip"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it isn't json_compatible",
+            "examples": [
+              "its type has no JSON form"
+            ],
+            "title": "Reason"
+          },
+          "required": {
+            "description": "It has no default",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its annotation",
+            "examples": [
+              "str | None"
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "default",
+          "description",
+          "required",
+          "base",
+          "enum",
+          "json_compatible",
+          "reason"
+        ],
+        "title": "ConfigField",
+        "type": "object"
+      },
+      "CustomRobotDoc": {
+        "additionalProperties": true,
+        "properties": {
+          "html": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The same rendered to HTML with markdown-it (CommonMark + tables, raw HTML off); null when markdown-it isn't installed",
+            "title": "Html"
+          },
+          "markdown": {
+            "description": "The guide, links and images made absolute (docs site, else GitHub)",
+            "title": "Markdown",
+            "type": "string"
+          },
+          "others": {
+            "description": "Other pages that matched, best first",
+            "items": {
+              "$ref": "#/components/schemas/DocPage"
+            },
+            "title": "Others",
+            "type": "array"
+          },
+          "source_path": {
+            "description": "The file, relative to the checkout",
+            "title": "Source Path",
+            "type": "string"
+          },
+          "title": {
+            "description": "The guide's first heading",
+            "examples": [
+              "How to Integrate a New Manipulator Arm"
+            ],
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the docs site publishes it",
+            "title": "Url"
+          }
+        },
+        "required": [
+          "title",
+          "markdown",
+          "html",
+          "source_path",
+          "url",
+          "others"
+        ],
+        "title": "CustomRobotDoc",
+        "type": "object"
+      },
       "DimosEvent": {
         "description": "Any of the server's events; `type` says which, and is the last chunk of its zenoh key",
         "discriminator": {
           "mapping": {
             "cloud-login": "#/components/schemas/CloudLoginEvent",
+            "discovery": "#/components/schemas/DiscoveryEvent",
+            "job": "#/components/schemas/JobEvent",
             "launch": "#/components/schemas/LaunchEvent",
             "log": "#/components/schemas/LogEvent",
             "upload": "#/components/schemas/UploadEvent",
@@ -594,9 +806,640 @@
           },
           {
             "$ref": "#/components/schemas/CloudLoginEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DiscoveryEvent"
+          },
+          {
+            "$ref": "#/components/schemas/JobEvent"
           }
         ],
         "title": "DimosEvent"
+      },
+      "DiscoveredBlueprint": {
+        "additionalProperties": true,
+        "properties": {
+          "builtin": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "In dimos's own registry (false: an installed package's)",
+            "title": "Builtin"
+          },
+          "import_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it doesn't import, `<Exception>: <message>`",
+            "examples": [
+              "ModuleNotFoundError: No module named 'unitree_sdk2py'"
+            ],
+            "title": "Import Error"
+          },
+          "import_traceback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The import's traceback (its last 4000 characters)",
+            "title": "Import Traceback"
+          },
+          "importable": {
+            "description": "It imports in the checkout's python",
+            "title": "Importable",
+            "type": "boolean"
+          },
+          "missing_module": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The top-level module an import couldn't find",
+            "examples": [
+              "unitree_sdk2py"
+            ],
+            "title": "Missing Module"
+          },
+          "modules": {
+            "description": "Its modules, in blueprint order (empty when it doesn't import)",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredModuleRef"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "name": {
+            "description": "The blueprint",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "optional_dependency": {
+            "description": "It doesn't import because an optional dependency (an extra) is missing, by dimos's own rule",
+            "title": "Optional Dependency",
+            "type": "boolean"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a built-in one is defined, `module:attribute` (null: external, or the scan failed)",
+            "title": "Ref"
+          },
+          "robot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The robot it's for: the robots.json robot (GET /dimos/robots) that lists it or whose dirs hold its file; without a robots.json, the robot folder under dimos/robot/ it lives in (null: none)",
+            "examples": [
+              "go2"
+            ],
+            "title": "Robot"
+          },
+          "suggested_extras": {
+            "description": "dimos extras whose packages look like they'd provide missing_module (a name match: a hint)",
+            "examples": [
+              [
+                "unitree-dds"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggested Extras",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "ref",
+          "builtin",
+          "robot",
+          "importable",
+          "optional_dependency",
+          "import_error",
+          "import_traceback",
+          "missing_module",
+          "suggested_extras",
+          "modules"
+        ],
+        "title": "DiscoveredBlueprint",
+        "type": "object"
+      },
+      "DiscoveredBlueprints": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprints": {
+            "description": "Every blueprint scanned so far",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredBlueprint"
+            },
+            "title": "Blueprints",
+            "type": "array"
+          },
+          "stale": {
+            "description": "From before the checkout or packages changed (a scan is running)",
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stale",
+          "blueprints"
+        ],
+        "title": "DiscoveredBlueprints",
+        "type": "object"
+      },
+      "DiscoveredModuleRef": {
+        "additionalProperties": true,
+        "properties": {
+          "class": {
+            "description": "Its Python class, `module.QualName`",
+            "title": "Class",
+            "type": "string"
+          },
+          "module": {
+            "description": "Its name in dimos's module registry (else its class name): what /dimos/modules/{module} takes",
+            "examples": [
+              "go2-connection"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "name": {
+            "description": "The module's name in the blueprint",
+            "examples": [
+              "go2connection"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "streams": {
+            "description": "Its streams",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredStream"
+            },
+            "title": "Streams",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "class",
+          "module",
+          "streams"
+        ],
+        "title": "DiscoveredModuleRef",
+        "type": "object"
+      },
+      "DiscoveredStream": {
+        "additionalProperties": true,
+        "properties": {
+          "direction": {
+            "description": "in: the module reads it; out: it publishes it; inout: both",
+            "enum": [
+              "in",
+              "out",
+              "inout"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "name": {
+            "description": "The stream's name on its module",
+            "examples": [
+              "color_image"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The topic it's on when the blueprint runs: a transport the blueprint pins, else `/<name>` (after remapping) when only one type uses that name; null: a random topic at run time",
+            "examples": [
+              "/color_image"
+            ],
+            "title": "Topic"
+          },
+          "type": {
+            "description": "Its message type, `module.Class`",
+            "examples": [
+              "dimos.msgs.sensor_msgs.Image.Image"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "direction",
+          "topic"
+        ],
+        "title": "DiscoveredStream",
+        "type": "object"
+      },
+      "DiscoveryEvent": {
+        "additionalProperties": true,
+        "description": "The discovery scan started, moved (at most twice a second) or finished: GET /dimos/discovery/blueprints and friends for the data",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DiscoveryStatus",
+            "description": "The scan now (GET /dimos/discovery)"
+          },
+          "type": {
+            "const": "discovery",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "status"
+        ],
+        "title": "DiscoveryEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/discovery"
+      },
+      "DiscoveryRefresh": {
+        "additionalProperties": true,
+        "properties": {
+          "full": {
+            "default": false,
+            "description": "Forget the answer and import everything again (else only what's missing or changed)",
+            "title": "Full",
+            "type": "boolean"
+          }
+        },
+        "title": "DiscoveryRefresh",
+        "type": "object"
+      },
+      "DiscoveryStatus": {
+        "additionalProperties": true,
+        "description": "Where the discovery scan is.",
+        "properties": {
+          "blueprints_done": {
+            "description": "Blueprints with an answer so far",
+            "title": "Blueprints Done",
+            "type": "integer"
+          },
+          "blueprints_total": {
+            "description": "Blueprints in dimos's registry (and installed packages)",
+            "title": "Blueprints Total",
+            "type": "integer"
+          },
+          "cached_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the answer being served was saved, while it comes from the disk cache",
+            "title": "Cached From"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the scan is importing now (a blueprint, or module:<name>)",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Current"
+          },
+          "errors": {
+            "description": "Problems with the scan itself (a crash, a hang), newest last, at most 50; a blueprint that just doesn't import is not one",
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the answer was completed (UTC, ISO 8601)",
+            "title": "Finished At"
+          },
+          "importable": {
+            "description": "Of those, how many import",
+            "title": "Importable",
+            "type": "integer"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cache key the answer is for (checkout commit + dirty files + installed packages, hashed)",
+            "examples": [
+              "d44db6593b78cd25"
+            ],
+            "title": "Key"
+          },
+          "modules_done": {
+            "description": "Registry modules with an answer so far",
+            "title": "Modules Done",
+            "type": "integer"
+          },
+          "modules_total": {
+            "description": "Modules in dimos's module registry",
+            "title": "Modules Total",
+            "type": "integer"
+          },
+          "not_importable": {
+            "description": "Of those, how many don't (see each one's import_error)",
+            "title": "Not Importable",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the last scan started: startup, changed (checkout or packages), requested, extras installed",
+            "examples": [
+              "startup"
+            ],
+            "title": "Reason"
+          },
+          "stale": {
+            "description": "The checkout or its packages changed since the answer was made; a new one is being made",
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the last scan started (UTC, ISO 8601)",
+            "title": "Started At"
+          },
+          "state": {
+            "description": "idle: not started; scanning: a scan runs; done: the answer is complete; failed: the scan itself failed (see errors)",
+            "enum": [
+              "idle",
+              "scanning",
+              "done",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reason",
+          "key",
+          "stale",
+          "started_at",
+          "finished_at",
+          "blueprints_total",
+          "blueprints_done",
+          "importable",
+          "not_importable",
+          "modules_total",
+          "modules_done",
+          "current",
+          "cached_from",
+          "errors"
+        ],
+        "title": "DiscoveryStatus",
+        "type": "object"
+      },
+      "DocLinks": {
+        "additionalProperties": true,
+        "description": "Links into dimos's published docs, found in the checkout's docs/ and mkdocs.yml; null where there's no page.",
+        "properties": {
+          "blueprints": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Blueprints",
+            "title": "Blueprints"
+          },
+          "cli": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The dimos CLI",
+            "title": "Cli"
+          },
+          "configure_robot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Configuring dimos for a robot (GlobalConfig, flags, env)",
+            "examples": [
+              "https://docs.dimensional.org/usage/configuration/"
+            ],
+            "title": "Configure Robot"
+          },
+          "custom_robot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Adding a robot of your own (GET /dimos/docs/custom-robot)",
+            "title": "Custom Robot"
+          },
+          "installation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Installing dimos",
+            "title": "Installation"
+          },
+          "modules": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Modules",
+            "title": "Modules"
+          },
+          "quickstart": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Quickstart",
+            "title": "Quickstart"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The repo (mkdocs.yml repo_url)",
+            "title": "Repo"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The docs site (mkdocs.yml site_url)",
+            "examples": [
+              "https://docs.dimensional.org/"
+            ],
+            "title": "Site"
+          }
+        },
+        "required": [
+          "site",
+          "repo",
+          "configure_robot",
+          "custom_robot",
+          "blueprints",
+          "modules",
+          "installation",
+          "quickstart",
+          "cli"
+        ],
+        "title": "DocLinks",
+        "type": "object"
+      },
+      "DocPage": {
+        "additionalProperties": true,
+        "properties": {
+          "source_path": {
+            "description": "The file, relative to the checkout",
+            "examples": [
+              "docs/usage/cli.md"
+            ],
+            "title": "Source Path",
+            "type": "string"
+          },
+          "title": {
+            "description": "The page's first heading",
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the docs site publishes it (null: no site_url in mkdocs.yml)",
+            "title": "Url"
+          }
+        },
+        "required": [
+          "title",
+          "source_path",
+          "url"
+        ],
+        "title": "DocPage",
+        "type": "object"
       },
       "ErrorResponse": {
         "additionalProperties": true,
@@ -615,6 +1458,134 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "Extra": {
+        "additionalProperties": true,
+        "properties": {
+          "applicable": {
+            "description": "Some requirement applies on this machine (false: e.g. cuda on a Mac; nothing to install)",
+            "title": "Applicable",
+            "type": "boolean"
+          },
+          "download_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A hint: bytes to download for what's missing and what that depends on, from uv.lock's wheel sizes for this OS and CPU (an upper bound; null without a uv.lock)",
+            "title": "Download Bytes"
+          },
+          "includes": {
+            "description": "Other extras it pulls in (`dimos[base,mapping]`)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Includes",
+            "type": "array"
+          },
+          "installed": {
+            "description": "Every requirement that applies here is installed at an allowed version (and every included extra is installed)",
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "missing": {
+            "description": "Packages (its own and its includes') not installed or at a wrong version",
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "name": {
+            "description": "The extra, as in `dimos[<name>]`",
+            "examples": [
+              "sim"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "requires": {
+            "description": "Its requirements, as pyproject.toml has them",
+            "items": {
+              "type": "string"
+            },
+            "title": "Requires",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "installed",
+          "applicable",
+          "requires",
+          "includes",
+          "missing",
+          "download_bytes"
+        ],
+        "title": "Extra",
+        "type": "object"
+      },
+      "ExtrasInstall": {
+        "additionalProperties": true,
+        "properties": {
+          "extras": {
+            "description": "Extras to add",
+            "examples": [
+              [
+                "sim"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Extras",
+            "type": "array"
+          }
+        },
+        "required": [
+          "extras"
+        ],
+        "title": "ExtrasInstall",
+        "type": "object"
+      },
+      "ExtrasList": {
+        "additionalProperties": true,
+        "properties": {
+          "extras": {
+            "description": "Every extra, in pyproject.toml order",
+            "items": {
+              "$ref": "#/components/schemas/Extra"
+            },
+            "title": "Extras",
+            "type": "array"
+          },
+          "mode": {
+            "description": "checkout: a source checkout installed with `uv sync`; library: dimos installed as a package",
+            "enum": [
+              "checkout",
+              "library"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "python": {
+            "description": "The python the extras are checked in (the checkout's .venv)",
+            "title": "Python",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "python",
+          "extras"
+        ],
+        "title": "ExtrasList",
         "type": "object"
       },
       "GlobalConfig": {
@@ -747,6 +1718,283 @@
           "inRange"
         ],
         "title": "Info",
+        "type": "object"
+      },
+      "JobEvent": {
+        "additionalProperties": true,
+        "description": "A job started: its lines are on `<ns>/dimos/jobs/<job>` ({type: line, n, line}, then {type: done, ok, error, failure, lines})",
+        "properties": {
+          "job": {
+            "description": "The job's id",
+            "title": "Job",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What sort of job",
+            "examples": [
+              "extras"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "description": "What it does",
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "const": "job",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "job",
+          "title",
+          "kind"
+        ],
+        "title": "JobEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/job"
+      },
+      "JobList": {
+        "additionalProperties": true,
+        "properties": {
+          "jobs": {
+            "description": "Running jobs and those finished in the last 30 minutes",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "JobList",
+        "type": "object"
+      },
+      "JobLog": {
+        "additionalProperties": true,
+        "properties": {
+          "command": {
+            "description": "What it runs",
+            "items": {
+              "type": "string"
+            },
+            "title": "Command",
+            "type": "array"
+          },
+          "done": {
+            "description": "It finished",
+            "title": "Done",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed, one line",
+            "examples": [
+              "Install extras: sim failed (exit 2): error: ..."
+            ],
+            "title": "Error"
+          },
+          "failure": {
+            "description": "The lines that say why it failed (uv's `error:` and cross-marked lines, else the last lines); empty when it didn't",
+            "items": {
+              "type": "string"
+            },
+            "title": "Failure",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it finished",
+            "title": "Finished At"
+          },
+          "job": {
+            "description": "The job's id",
+            "examples": [
+              "extras-1-1791000000"
+            ],
+            "title": "Job",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What sort of job",
+            "examples": [
+              "extras"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lines": {
+            "description": "Its output lines from `after` on (stdout and stderr together)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "next": {
+            "description": "The `n` the next line will have (pass it as `after`)",
+            "title": "Next",
+            "type": "integer"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "It succeeded (null while running)",
+            "title": "Ok"
+          },
+          "started_at": {
+            "description": "When it started (UTC, ISO 8601)",
+            "title": "Started At",
+            "type": "string"
+          },
+          "title": {
+            "description": "What it does, for a person",
+            "examples": [
+              "Install extras: sim"
+            ],
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "title",
+          "kind",
+          "done",
+          "ok",
+          "started_at",
+          "finished_at",
+          "command",
+          "lines",
+          "next",
+          "error",
+          "failure"
+        ],
+        "title": "JobLog",
+        "type": "object"
+      },
+      "JobStarted": {
+        "additionalProperties": true,
+        "properties": {
+          "command": {
+            "description": "What it runs",
+            "items": {
+              "type": "string"
+            },
+            "title": "Command",
+            "type": "array"
+          },
+          "job": {
+            "description": "The job's id: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log",
+            "title": "Job",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "command"
+        ],
+        "title": "JobStarted",
+        "type": "object"
+      },
+      "JobSummary": {
+        "additionalProperties": true,
+        "properties": {
+          "done": {
+            "description": "It finished",
+            "title": "Done",
+            "type": "boolean"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it finished",
+            "title": "Finished At"
+          },
+          "job": {
+            "description": "The job's id",
+            "examples": [
+              "extras-1-1791000000"
+            ],
+            "title": "Job",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What sort of job",
+            "examples": [
+              "extras"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "It succeeded (null while running)",
+            "title": "Ok"
+          },
+          "started_at": {
+            "description": "When it started (UTC, ISO 8601)",
+            "title": "Started At",
+            "type": "string"
+          },
+          "title": {
+            "description": "What it does, for a person",
+            "examples": [
+              "Install extras: sim"
+            ],
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "title",
+          "kind",
+          "done",
+          "ok",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "JobSummary",
         "type": "object"
       },
       "JsonValue": {},
@@ -1301,6 +2549,60 @@
         "title": "Login",
         "type": "object"
       },
+      "MessageType": {
+        "additionalProperties": true,
+        "properties": {
+          "publishers": {
+            "description": "Modules with an output of this type",
+            "items": {
+              "type": "string"
+            },
+            "title": "Publishers",
+            "type": "array"
+          },
+          "subscribers": {
+            "description": "Modules with an input of this type",
+            "items": {
+              "type": "string"
+            },
+            "title": "Subscribers",
+            "type": "array"
+          },
+          "type": {
+            "description": "The message type, `module.Class`",
+            "examples": [
+              "dimos.msgs.geometry_msgs.Twist.Twist"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "publishers",
+          "subscribers"
+        ],
+        "title": "MessageType",
+        "type": "object"
+      },
+      "MessageTypes": {
+        "additionalProperties": true,
+        "properties": {
+          "types": {
+            "description": "Every message type a module's stream has, sorted",
+            "items": {
+              "$ref": "#/components/schemas/MessageType"
+            },
+            "title": "Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "types"
+        ],
+        "title": "MessageTypes",
+        "type": "object"
+      },
       "ModuleConfig": {
         "additionalProperties": true,
         "properties": {
@@ -1347,6 +2649,175 @@
           "args"
         ],
         "title": "ModuleConfig",
+        "type": "object"
+      },
+      "ModuleConfigAnswer": {
+        "additionalProperties": true,
+        "properties": {
+          "class": {
+            "description": "Its Python class",
+            "title": "Class",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why its config couldn't be read (then fields is empty)",
+            "title": "Error"
+          },
+          "fields": {
+            "description": "Its config's fields, but ModuleConfig's internal ones (g, rpc_transport, ...)",
+            "items": {
+              "$ref": "#/components/schemas/ConfigField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "module": {
+            "description": "The module's registry name (else class name)",
+            "examples": [
+              "go2-connection"
+            ],
+            "title": "Module",
+            "type": "string"
+          }
+        },
+        "required": [
+          "module",
+          "class",
+          "fields",
+          "error"
+        ],
+        "title": "ModuleConfigAnswer",
+        "type": "object"
+      },
+      "ModuleList": {
+        "additionalProperties": true,
+        "properties": {
+          "modules": {
+            "description": "Every module class: the registry's and any a blueprint uses, by name",
+            "items": {
+              "$ref": "#/components/schemas/ModuleSummary"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "stale": {
+            "description": "From before the checkout or packages changed (a scan is running)",
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stale",
+          "modules"
+        ],
+        "title": "ModuleList",
+        "type": "object"
+      },
+      "ModuleSummary": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprint_count": {
+            "description": "How many importable blueprints use it (RerunBridgeModule: most)",
+            "examples": [
+              89
+            ],
+            "title": "Blueprint Count",
+            "type": "integer"
+          },
+          "class": {
+            "description": "Its Python class, `module.QualName`",
+            "title": "Class",
+            "type": "string"
+          },
+          "config_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when its config couldn't be read: why",
+            "title": "Config Error"
+          },
+          "doc": {
+            "description": "Its own docstring's first paragraph (empty: none)",
+            "title": "Doc",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when its streams couldn't be read: why",
+            "title": "Error"
+          },
+          "inputs": {
+            "description": "Streams it reads (type: `module.Class`)",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "name": {
+            "description": "Its name in dimos's module registry (else its class name)",
+            "examples": [
+              "go2-connection"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "outputs": {
+            "description": "Streams it publishes (type: `module.Class`)",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "robots": {
+            "description": "Robots whose blueprints use it",
+            "items": {
+              "type": "string"
+            },
+            "title": "Robots",
+            "type": "array"
+          },
+          "skills": {
+            "description": "Its skills' names",
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "class",
+          "doc",
+          "inputs",
+          "outputs",
+          "skills",
+          "blueprint_count",
+          "robots"
+        ],
+        "title": "ModuleSummary",
         "type": "object"
       },
       "Ok": {
@@ -1447,6 +2918,60 @@
           "type"
         ],
         "title": "Port",
+        "type": "object"
+      },
+      "RankedModule": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprint_count": {
+            "description": "Importable blueprints (any robot) that use it",
+            "title": "Blueprint Count",
+            "type": "integer"
+          },
+          "class": {
+            "description": "Its Python class",
+            "title": "Class",
+            "type": "string"
+          },
+          "in_robot_blueprints": {
+            "description": "This robot's importable blueprints that use it",
+            "title": "In Robot Blueprints",
+            "type": "integer"
+          },
+          "name": {
+            "description": "The module (registry name, else class name)",
+            "examples": [
+              "go2-connection"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "robot_blueprints": {
+            "description": "This robot's importable blueprints",
+            "title": "Robot Blueprints",
+            "type": "integer"
+          },
+          "robots_using": {
+            "description": "Robots with a blueprint that uses it",
+            "title": "Robots Using",
+            "type": "integer"
+          },
+          "score": {
+            "description": "How specific it is to this robot (see `formula`); higher first",
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "class",
+          "score",
+          "in_robot_blueprints",
+          "robot_blueprints",
+          "robots_using",
+          "blueprint_count"
+        ],
+        "title": "RankedModule",
         "type": "object"
       },
       "RecommendedApp": {
@@ -1926,6 +3451,57 @@
           "args"
         ],
         "title": "RobotMode",
+        "type": "object"
+      },
+      "RobotModules": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprints": {
+            "description": "Its blueprints (importable or not)",
+            "title": "Blueprints",
+            "type": "integer"
+          },
+          "blueprints_importable": {
+            "description": "Of those, how many import (only these count)",
+            "title": "Blueprints Importable",
+            "type": "integer"
+          },
+          "formula": {
+            "description": "How `score` is computed",
+            "title": "Formula",
+            "type": "string"
+          },
+          "modules": {
+            "description": "Its blueprints' modules, most specific first",
+            "items": {
+              "$ref": "#/components/schemas/RankedModule"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "robot": {
+            "description": "The robot",
+            "examples": [
+              "go2"
+            ],
+            "title": "Robot",
+            "type": "string"
+          },
+          "robots_total": {
+            "description": "Robots with an importable blueprint",
+            "title": "Robots Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "robot",
+          "blueprints",
+          "blueprints_importable",
+          "robots_total",
+          "formula",
+          "modules"
+        ],
+        "title": "RobotModules",
         "type": "object"
       },
       "RobotTag": {
@@ -2747,15 +4323,15 @@
     }
   },
   "info": {
-    "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
+    "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
     "/dimos/blueprints": {
       "get": {
-        "description": "What `dimos list` prints: built-in blueprints (without demo-*), then external ones from installed packages. Cached for 60 s; `fresh` refills the cache first. No other side effects.",
+        "description": "What `dimos list` prints: built-in blueprints (without demo-*), then external ones from installed packages. Cached for 60 s; `fresh` refills the cache first. No other side effects. `importable`, `import_error` and `missing_module` come from the discovery cache (null until the scan reaches the blueprint: GET /dimos/discovery).",
         "operationId": "get_dimos_blueprints",
         "parameters": [
           {
@@ -2780,7 +4356,7 @@
                 }
               }
             },
-            "description": "`{ blueprints: [{ name, kind: \"builtin\"|\"external\" }] }`"
+            "description": "`{ blueprints: [{ name, kind: \"builtin\"|\"external\", importable, import_error, missing_module }] }`"
           },
           "400": {
             "content": {
@@ -2803,7 +4379,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "Every blueprint dimos can run (name, builtin/external)",
+        "summary": "Every blueprint dimos can run (name, builtin/external) and whether it imports",
         "tags": [
           "blueprints"
         ],
@@ -3213,6 +4789,193 @@
         "x-family": "dimos"
       }
     },
+    "/dimos/discovery": {
+      "get": {
+        "description": "The scan starts when the server starts. A restart with the same checkout commit, dirty files and installed packages answers from the disk cache at once (no scan); a change is noticed within 30 s and rescanned (the old answer is served meanwhile, `stale: true`). `discovery` events follow it. No side effects.",
+        "operationId": "get_dimos_discovery",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryStatus"
+                }
+              }
+            },
+            "description": "`DiscoveryStatus`: `{ state, reason, key, stale, blueprints_total, blueprints_done, importable, not_importable, modules_total, modules_done, current, errors, ... }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Where the discovery scan (every blueprint and module imported once, cached) is: progress, errors",
+        "tags": [
+          "discovery"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/discovery/blueprints": {
+      "get": {
+        "description": "Answers from the cache (no import): every blueprint scanned so far, in registry order, with `suggested_extras` for one that's missing a package. No side effects.",
+        "operationId": "get_dimos_discovery_blueprints",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveredBlueprints"
+                }
+              }
+            },
+            "description": "`{ stale, blueprints: [{ name, ref, robot, importable, import_error, missing_module, suggested_extras, modules: [{ name, class, module, streams: [{ name, type, direction, topic }] }] }] }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Every blueprint from the discovery cache: whether it imports (and why not), its robot, its modules and their streams with topics",
+        "tags": [
+          "discovery"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/discovery/refresh": {
+      "post": {
+        "description": "Wakes the discovery loop: it recomputes the cache key and scans what's missing; with `full` it forgets the answer and imports everything again. Answers the status at once; `discovery` events follow the scan. The body is optional.",
+        "operationId": "post_dimos_discovery_refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DiscoveryRefresh"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryStatus"
+                }
+              }
+            },
+            "description": "`DiscoveryStatus`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Check the checkout and packages again now, and rescan what changed (or everything, `full`)",
+        "tags": [
+          "discovery"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/docs/custom-robot": {
+      "get": {
+        "description": "Found in the checkout's docs/ by file name and title (adding a custom/new robot, arm or platform); links point at the docs site (mkdocs.yml site_url), other repo files at GitHub. `html` is rendered here with markdown-it (raw HTML in the markdown is escaped), so a page can show it as is; `markdown` is there for a page that renders it itself. 404 when the checkout has no such page.",
+        "operationId": "get_dimos_docs_custom_robot",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomRobotDoc"
+                }
+              }
+            },
+            "description": "`{ title, markdown, html, source_path, url, others }`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "dimos's guide to adding a robot of your own: markdown and HTML, with absolute links",
+        "tags": [
+          "docs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/docs/links": {
+      "get": {
+        "description": "Each link is the docs-site URL of the checkout's page by that name (docs/**/configuration.md, ...); null when there's no such page. No side effects.",
+        "operationId": "get_dimos_docs_links",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocLinks"
+                }
+              }
+            },
+            "description": "`{ site, repo, configure_robot, custom_robot, blueprints, modules, installation, quickstart, cli }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Links into dimos's published docs: configuring a robot, adding one, blueprints, modules, install",
+        "tags": [
+          "docs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
     "/dimos/events": {
       "get": {
         "deprecated": true,
@@ -3245,6 +5008,104 @@
           "events"
         ],
         "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/extras": {
+      "get": {
+        "description": "Extras from the checkout's pyproject.toml (else the installed dimos's metadata); installed packages are asked of the checkout's python in a child process (cached 10 s). `download_bytes` is an upper-bound hint from uv.lock. No side effects.",
+        "operationId": "get_dimos_extras",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtrasList"
+                }
+              }
+            },
+            "description": "`{ mode, python, extras: [{ name, installed, applicable, requires, includes, missing, download_bytes }] }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "dimos's optional extras (`dimos[sim]`, ...): which are installed, what's missing, a download-size hint",
+        "tags": [
+          "extras"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/extras/install": {
+      "post": {
+        "description": "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> --torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. Answers the job at once: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log; when it ends the extras cache is dropped and discovery rescans. 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
+        "operationId": "post_dimos_extras_install",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtrasInstall"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStarted"
+                }
+              }
+            },
+            "description": "`{ job, command }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict with the current state (the message says what it is)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Install dimos extras, as a job (streamed output); discovery rescans when it ends",
+        "tags": [
+          "extras"
+        ],
+        "x-agent": true,
         "x-family": "dimos"
       }
     },
@@ -3393,6 +5254,280 @@
         "x-family": "dimos"
       }
     },
+    "/dimos/jobs": {
+      "get": {
+        "description": "No side effects.",
+        "operationId": "get_dimos_jobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            },
+            "description": "`{ jobs: [{ job, title, kind, done, ok, started_at, finished_at }] }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "The dimos server's jobs (extras installs): running, and finished in the last 30 minutes",
+        "tags": [
+          "jobs"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/jobs/{job}": {
+      "delete": {
+        "description": "Sends the job's process group SIGTERM; it ends with `ok: false`, `error: cancelled`. A finished job is answered as it is. 404 for an unknown job.",
+        "operationId": "delete_dimos_jobs_job",
+        "parameters": [
+          {
+            "description": "a job id",
+            "in": "path",
+            "name": "job",
+            "required": true,
+            "schema": {
+              "description": "a job id",
+              "examples": [
+                "extras-1-1791000000"
+              ],
+              "title": "Job",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobLog"
+                }
+              }
+            },
+            "description": "`JobLog`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "Cancel a running job",
+        "tags": [
+          "jobs"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/jobs/{job}/log": {
+      "get": {
+        "description": "Lines from `after` on (default 0) and `next`, the `n` the next line will have: subscribe to `<ns>/dimos/jobs/<job>` first, then fetch this, then apply live lines with `n` >= `next`. 404 for an unknown (or expired) job.",
+        "operationId": "get_dimos_jobs_job_log",
+        "parameters": [
+          {
+            "description": "a job id",
+            "in": "path",
+            "name": "job",
+            "required": true,
+            "schema": {
+              "description": "a job id",
+              "examples": [
+                "extras-1-1791000000"
+              ],
+              "title": "Job",
+              "type": "string"
+            }
+          },
+          {
+            "description": "the first line's `n` to answer",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "the first line's `n` to answer",
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobLog"
+                }
+              }
+            },
+            "description": "`{ job, title, kind, command, lines, next, done, ok, error, failure, started_at, finished_at }`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "A job's output so far, and how it ended (`error`, and `failure`: the lines that say why)",
+        "tags": [
+          "jobs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/message-types": {
+      "get": {
+        "description": "Answers from the discovery cache. No side effects.",
+        "operationId": "get_dimos_message_types",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageTypes"
+                }
+              }
+            },
+            "description": "`{ types: [{ type, publishers, subscribers }] }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Every message type on a module's stream, with the modules that publish and read it",
+        "tags": [
+          "discovery"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/modules": {
+      "get": {
+        "description": "Answers from the cache (no import): the registry's modules and every module a blueprint uses, with `blueprint_count` (importable blueprints using it) and `robots`. No side effects.",
+        "operationId": "get_dimos_modules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleList"
+                }
+              }
+            },
+            "description": "`{ stale, modules: [{ name, class, doc, inputs, outputs, skills, blueprint_count, robots }] }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Every module from the discovery cache: streams in and out, skills, and how many blueprints use it",
+        "tags": [
+          "discovery"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/modules/{module}/config": {
+      "get": {
+        "description": "Read from the module's real config class (pydantic model or dataclass) by the discovery scan; a registry module the scan hasn't reached yet is imported now, in a child process. A field that isn't `json_compatible` (a class, a callable, an array) can't be set from a form: leave it out. 404 for a module that isn't in the registry or any blueprint; 500 when it can't be imported.",
+        "operationId": "get_dimos_modules_module_config",
+        "parameters": [
+          {
+            "description": "a module's registry name, class name or `module.Class`",
+            "in": "path",
+            "name": "module",
+            "required": true,
+            "schema": {
+              "description": "a module's registry name, class name or `module.Class`",
+              "examples": [
+                "go2-connection"
+              ],
+              "title": "Module",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleConfigAnswer"
+                }
+              }
+            },
+            "description": "`{ module, class, fields: [{ name, type, default, description, required, base, enum, json_compatible, reason }], error }`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "A module's config fields and defaults: name, type, default, description, enum values, and whether it converts to and from JSON",
+        "tags": [
+          "discovery"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
     "/dimos/paths": {
       "get": {
         "description": "Absolute paths, read from the environment and Desktop's config.yaml. Desktop compares `dimosDir` with its configured checkout to tell whether this server is the right one, and `server` with its own binary to tell whether its built-in server is outdated (this server runs python, so it never is). No side effects.",
@@ -3456,6 +5591,56 @@
         "summary": "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential args, the app to install, starter picks, hidden ones",
         "tags": [
           "blueprints"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/robots/{robot}/modules": {
+      "get": {
+        "description": "score = (fraction of the robot's importable blueprints that use the module) x ln(robots / robots using the module): its own connection module comes first, a module every robot uses scores 0, and a widely shared one (RerunBridgeModule) well below the robot's own. A robot is a robots.json id (GET /dimos/robots); a blueprint belongs to the robot that lists it or whose dirs hold its file. From the discovery cache; 404 for a robot with no blueprint.",
+        "operationId": "get_dimos_robots_robot_modules",
+        "parameters": [
+          {
+            "description": "a robot id from GET /dimos/robots",
+            "in": "path",
+            "name": "robot",
+            "required": true,
+            "schema": {
+              "description": "a robot id from GET /dimos/robots",
+              "examples": [
+                "go2"
+              ],
+              "title": "Robot",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RobotModules"
+                }
+              }
+            },
+            "description": "`{ robot, blueprints, blueprints_importable, robots_total, formula, modules: [{ name, class, score, in_robot_blueprints, robot_blueprints, robots_using, blueprint_count }] }`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "The modules a robot's blueprints use, most specific to that robot first (TF-IDF style)",
+        "tags": [
+          "discovery"
         ],
         "x-agent": true,
         "x-family": "dimos"
@@ -4178,7 +6363,23 @@
       "name": "uploads"
     },
     {
-      "description": "The server's events, each a JSON object with a `type`: `launch`, `log`, `upload`, `uploads`, `upload-removed`, `cloud-login` (schemas: DimosEvent). They are published on zenoh at `<ns>/dimos/events/<type>` (Desktop's docs/events.md; `<ns>` is Desktop's namespace), which is where to listen. The SSE stream `GET /dimos/events` carries the same events and is deprecated (kept one release).",
+      "description": "The discovery cache: every blueprint in dimos's registry imported once (in child processes, a hang or crash costs one blueprint), whether it imports and why not, its modules and their streams and topics, every module's config, the message types between them, and modules ranked per robot. It starts with the server, is saved to disk keyed by the checkout's commit, dirty files and installed packages (a restart answers at once) and rescans when those change. `discovery` events follow a scan.",
+      "name": "discovery"
+    },
+    {
+      "description": "dimos's own docs, found in the checkout's docs/ and linked to the published site (mkdocs.yml site_url).",
+      "name": "docs"
+    },
+    {
+      "description": "dimos's optional-dependency extras (pyproject.toml), which are installed in the checkout's python, and installing more (a job; scripts/install.sh's command, never sudo).",
+      "name": "extras"
+    },
+    {
+      "description": "Long jobs (an extras install), shaped like Desktop's: each output line is published on zenoh at `<ns>/dimos/jobs/<job>` as `{type: \"line\", n, line}`, then `{type: \"done\", ok, error, failure, lines}`; a `job` event says one started; `GET /dimos/jobs/{job}/log` is the snapshot.",
+      "name": "jobs"
+    },
+    {
+      "description": "The server's events, each a JSON object with a `type`: `launch`, `log`, `upload`, `uploads`, `upload-removed`, `cloud-login`, `discovery`, `job` (schemas: DimosEvent). They are published on zenoh at `<ns>/dimos/events/<type>` (Desktop's docs/events.md; `<ns>` is Desktop's namespace), which is where to listen. The SSE stream `GET /dimos/events` carries the same events and is deprecated (kept one release).",
       "name": "events"
     }
   ]

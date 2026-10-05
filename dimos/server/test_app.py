@@ -72,7 +72,9 @@ def test_health_info_and_paths(
 
 def test_blueprint_list_is_read_in_process(client: TestClient) -> None:
     listed = client.get("/dimos/blueprints").json()["blueprints"]
-    assert {"name": "unitree-go2-basic", "kind": "builtin"} in listed
+    # not scanned yet: the discovery fields are null
+    unscanned = {"importable": None, "import_error": None, "missing_module": None}
+    assert {"name": "unitree-go2-basic", "kind": "builtin", **unscanned} in listed
     assert not any(b["name"].startswith("demo-") for b in listed)
     assert client.get("/dimos/blueprints?fresh=1").json()["blueprints"] == listed
 

@@ -37,7 +37,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Str
 from pydantic import BeforeValidator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dimos.server import blueprints, config, events, logs, models, runs
+from dimos.server import blueprints, config, discovery_routes, events, logs, models, runs
+from dimos.server.discovery import Discovery
+from dimos.server.jobs import Jobs
 from dimos.server.openapi import document, operation_id, route_doc
 from dimos.server.uploads import Uploads
 
@@ -89,6 +91,9 @@ class ServerState:
     background: list[asyncio.Task[None]] = field(default_factory=list)
     # set by serve(): makes the process exit
     exit: Any = None
+    # the discovery cache and background jobs (create_app makes them when not given)
+    discovery: Discovery | None = None
+    jobs: Jobs | None = None
 
 
 def default_state(dimos_dir: Path) -> ServerState:
@@ -102,12 +107,20 @@ def default_state(dimos_dir: Path) -> ServerState:
 
 
 def create_app(state: ServerState, background: bool = True) -> FastAPI:
+    discovered = state.discovery = state.discovery or Discovery(
+        state.dimos_dir, lambda event: state.bus.send(event)
+    )
+    state.jobs = state.jobs or Jobs(
+        lambda event: state.bus.send(event), lambda key, payload: state.bus.publish(key, payload)
+    )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if background:
             state.background += [
                 asyncio.create_task(events.watch_launch(state.bus)),
                 asyncio.create_task(state.uploads.work()),
+                asyncio.create_task(discovered.run()),
             ]
         yield
         state.uploads.shutdown()
@@ -245,12 +258,14 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         response_model=models.BlueprintList,
         **route_doc(
             "blueprints",
-            "Every blueprint dimos can run (name, builtin/external)",
+            "Every blueprint dimos can run (name, builtin/external) and whether it imports",
             "What `dimos list` prints: built-in blueprints (without demo-*), then external ones from installed "
-            "packages. Cached for 60 s; `fresh` refills the cache first. No other side effects.",
+            "packages. Cached for 60 s; `fresh` refills the cache first. No other side effects. `importable`, "
+            "`import_error` and `missing_module` come from the discovery cache (null until the scan reaches the "
+            "blueprint: GET /dimos/discovery).",
             errors=(400, 500),
             agent=True,
-            answer='`{ blueprints: [{ name, kind: "builtin"|"external" }] }`',
+            answer='`{ blueprints: [{ name, kind: "builtin"|"external", importable, import_error, missing_module }] }`',
         ),
     )
     async def blueprint_list(fresh: FreshQuery = False) -> dict[str, Any]:
@@ -261,7 +276,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             return {"blueprints": await asyncio.to_thread(blueprints.blueprint_list)}
 
         result: dict[str, Any] = await s.cache.get("list", LIST_TTL_S, compute)
-        return result
+        return {"blueprints": [discovered.import_status(entry) for entry in result["blueprints"]]}
 
     @app.get(
         "/dimos/blueprints/{name}",
@@ -770,6 +785,8 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             raise ApiError(404, error.args[0])
         except ValueError as error:
             raise ApiError(409, str(error))
+
+    discovery_routes.add(app, state)
 
     def openapi() -> dict[str, Any]:
         if app.openapi_schema is None:
