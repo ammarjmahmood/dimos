@@ -22,8 +22,9 @@ answer for `item_timeout` s) or crashes the child is marked not importable and a
 The answer is saved to `<server state>/discovery/<key>.json`. The key is a hash of the checkout's commit, its dirty
 files (path, size, mtime) and the installed packages (the venv's *.dist-info names), so a restart with nothing changed
 answers at once with no scan. The key is checked again every `check_interval` s and after an extras install. When it
-changes, the previous answer keeps being served (`stale: true`) while a new scan runs, and when only files outside
-dimos's Python code changed (docs, a README) the old answer is re-keyed without a scan. An interrupted scan resumes
+changes, the previous answer keeps being served (`stale: true`) while a new scan runs, except when nothing that can
+change an import changed (can_change_imports: no file inside an importable package, no Python file, no packaging
+metadata; e.g. only docs or a README), when the old answer is re-keyed without a scan. An interrupted scan resumes
 where it stopped (its partial file has the same key).
 """
 
@@ -32,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import collections
 from collections.abc import Callable
+import fnmatch
 import hashlib
 import json
 import math
@@ -41,6 +43,11 @@ import sys
 import sysconfig
 import time
 from typing import Any
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 from dimos.server import config
 from dimos.server.introspect import MARKER
@@ -53,8 +60,9 @@ KEEP_CACHE_FILES = 5
 EVENT_INTERVAL_S = 0.5
 SAVE_INTERVAL_S = 3.0
 MAX_ERRORS = 50
-# changes to these files can change what a blueprint imports
-CODE_SUFFIXES = (".py", ".pyi", ".so", ".pth", "pyproject.toml", "uv.lock")
+# a Python file anywhere can be imported (`python -m` puts the checkout on sys.path), and these say what's installed
+PYTHON_SUFFIXES = (".py", ".pyi", ".so", ".pth")
+PACKAGING_FILES = ("pyproject.toml", "uv.lock", "setup.py", "setup.cfg")
 
 FORMULA = (
     "score = (blueprints of this robot that use the module / blueprints of this robot) "
@@ -68,12 +76,12 @@ def now_iso() -> str:
 
 def python_for(dimos_dir: Path) -> str:
     """The checkout's own python (what its blueprints run with), else this server's."""
-    venv_python = dimos_dir / ".venv" / "bin" / "python"
+    venv_python = config.venv_dir(dimos_dir) / "bin" / "python"
     return str(venv_python) if venv_python.exists() else sys.executable
 
 
 def site_dirs(dimos_dir: Path) -> list[Path]:
-    found = sorted((dimos_dir / ".venv" / "lib").glob("python*/site-packages"))
+    found = sorted((config.venv_dir(dimos_dir) / "lib").glob("python*/site-packages"))
     return found or [Path(sysconfig.get_paths()["purelib"])]
 
 
@@ -140,7 +148,33 @@ def code_changed(dimos_dir: Path, old: dict[str, Any], new: dict[str, Any]) -> b
             for path in changed
             if old.get("dirty", {}).get(path) != new.get("dirty", {}).get(path)
         }
-    return any(path.endswith(CODE_SUFFIXES) for path in changed)
+    packages = package_patterns(dimos_dir)
+    return any(can_change_imports(path, packages) for path in changed)
+
+
+def package_patterns(dimos_dir: Path) -> list[str] | None:
+    """pyproject.toml's `[tool.setuptools.packages.find] include` (`dimos*`): the folders whose files are importable,
+    or None when it can't be read."""
+    try:
+        project = tomllib.loads((dimos_dir / "pyproject.toml").read_text())
+        found = project["tool"]["setuptools"]["packages"]["find"]["include"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
+        return None
+    return [str(pattern) for pattern in found]
+
+
+def can_change_imports(path: str, packages: list[str] | None) -> bool:
+    """A change to `path` can change what imports: any file inside an importable package (its code, or data it reads
+    while importing: yaml, json, URDF), a Python file anywhere, or the packaging metadata. Docs, READMEs, web
+    frontends, CI files can't. Without the package list, everything counts."""
+    if packages is None:
+        return True
+    top = path.split("/", 1)[0]
+    return (
+        any(fnmatch.fnmatch(top, pattern) for pattern in packages)
+        or path.endswith(PYTHON_SUFFIXES)
+        or path.rsplit("/", 1)[-1] in PACKAGING_FILES
+    )
 
 
 class Discovery:

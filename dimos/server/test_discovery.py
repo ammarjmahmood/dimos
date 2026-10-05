@@ -180,6 +180,7 @@ async def test_a_restart_answers_from_disk_without_a_child(
 async def test_a_change_to_code_rescans_and_serves_the_old_answer_meanwhile(
     tmp_path: Path, fake_discover: Any
 ) -> None:
+    (tmp_path / "pyproject.toml").write_text(PACKAGES_PYPROJECT)
     command, calls = fake_discover(["go2-a"])
     found = discovery(tmp_path, command, [], key=keyed("k1"))
     await found.check("startup")
@@ -204,13 +205,33 @@ async def test_a_change_to_code_rescans_and_serves_the_old_answer_meanwhile(
     assert seen[-1] == ("done", False, ["go2-a", "g1-new"])
 
 
-def test_code_changed_compares_dirty_files_and_packages(tmp_path: Path) -> None:
-    old = {"commit": "c", "dirty": {"a.py": "1"}, "packages": "p", "python": "py"}
+PACKAGES_PYPROJECT = '[tool.setuptools.packages.find]\ninclude = ["dimos*"]\n'
+
+
+def test_code_changed_asks_whether_an_import_can_change(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(PACKAGES_PYPROJECT)
+    old = {"commit": "c", "dirty": {"dimos/a.py": "1"}, "packages": "p", "python": "py"}
+
+    def changed(path: str) -> bool:
+        return code_changed(tmp_path, old, {**old, "dirty": {**old["dirty"], path: "2"}})
+
     assert not code_changed(tmp_path, old, {**old})
-    assert not code_changed(tmp_path, old, {**old, "dirty": {"a.py": "1", "notes.md": "2"}})
-    assert code_changed(tmp_path, old, {**old, "dirty": {"a.py": "2"}})
+    for path in ("README.md", "docs/usage/cli.md", "web/app.js", ".github/workflows/ci.yml"):
+        assert not changed(path), path
+    # inside the package any file can matter (a yaml a module reads while importing); Python anywhere; packaging
+    for path in (
+        "dimos/robot/go2/params.yaml",
+        "dimos/a.py",
+        "scripts/tool.py",
+        "uv.lock",
+        "pyproject.toml",
+    ):
+        assert changed(path), path
     assert code_changed(tmp_path, old, {**old, "dirty": {}})  # a.py reverted is a change too
     assert code_changed(tmp_path, old, {**old, "packages": "q"})
+    # no package list to go by: everything counts
+    (tmp_path / "pyproject.toml").unlink()
+    assert changed("README.md")
 
 
 def blueprint(

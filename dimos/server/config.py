@@ -122,12 +122,21 @@ def ignore_version_range() -> bool:
 
 
 def recordings_dir() -> Path:
+    """config.yaml's `recordings.dir`, else where dimos itself records (its RECORDINGS_DIR: the checkout's
+    recordings/, or <state>/dimos/recordings for a library install)."""
+    from dimos.constants import RECORDINGS_DIR
+
     configured = _section(load_desktop_config(), "recordings").get("dir")
-    return expand(configured) if configured else dimos_home() / "recordings"
+    return expand(configured) if configured else RECORDINGS_DIR
+
+
+def venv_dir(dimos_dir: Path) -> Path:
+    """The checkout's virtualenv (scripts/install.sh and `uv sync` make it there)."""
+    return dimos_dir / ".venv"
 
 
 def dimos_bin(dimos_dir: Path) -> Path:
-    return dimos_dir / ".venv" / "bin" / "dimos"
+    return venv_dir(dimos_dir) / "bin" / "dimos"
 
 
 @dataclass

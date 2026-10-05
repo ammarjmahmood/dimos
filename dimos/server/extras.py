@@ -23,7 +23,6 @@ may run on another one.
 from __future__ import annotations
 
 from pathlib import Path
-import re
 import shutil
 import sys
 from typing import Any
@@ -46,27 +45,33 @@ def is_checkout(dimos_dir: Path) -> bool:
     return found and (dimos_dir / "uv.lock").is_file()
 
 
-def declared(dimos_dir: Path, dimos_requires: list[str]) -> dict[str, list[str]]:
-    """Extra -> its requirement strings: pyproject.toml's optional-dependencies, else the installed metadata's."""
+def declared(dimos_dir: Path, probe: dict[str, Any]) -> dict[str, list[str]]:
+    """Extra -> its requirement strings: pyproject.toml's optional-dependencies, else the installed dimos's metadata
+    (`probe`, from `discover packages`): each Provides-Extra and the Requires-Dist whose marker holds for that extra and
+    not without it, on this machine (packaging evaluates the marker; one for another platform isn't listed)."""
     try:
         project = tomllib.loads((dimos_dir / "pyproject.toml").read_text())["project"]
         if project.get("name") == "dimos":
             return {k: list(v) for k, v in project.get("optional-dependencies", {}).items()}
     except (OSError, KeyError, tomllib.TOMLDecodeError):
         pass
-    extras: dict[str, list[str]] = {}
-    for text in dimos_requires:
-        found = re.search(r"""extra\s*==\s*["']([^"']+)["']""", text)
-        if found:
-            # the extra's own marker goes; the rest of it (a platform condition) stays
-            requirement = Requirement(text)
-            marker = str(requirement.marker or "")
-            rest = re.sub(
-                r"""(\band\s+)?extra\s*==\s*["'][^"']+["'](\s+and\b)?""", "", marker
-            ).strip()
-            requirement.marker = Marker(rest) if rest and rest not in ("()",) else None
-            extras.setdefault(found.group(1), []).append(str(requirement))
-    return extras
+    environment = probe.get("environment", {})
+    parsed = []
+    for text in probe.get("dimos_requires", []):
+        try:
+            parsed.append((text, Requirement(text)))
+        except InvalidRequirement:
+            continue
+    return {
+        extra: [
+            text
+            for text, requirement in parsed
+            if requirement.marker is not None
+            and applies(requirement, environment, extra)
+            and not applies(requirement, environment, "")
+        ]
+        for extra in probe.get("dimos_extras", [])
+    }
 
 
 def applies(requirement: Requirement, environment: dict[str, str], extra: str = "") -> bool:
@@ -86,7 +91,7 @@ def status(dimos_dir: Path, probe: dict[str, Any], lock_sizes: bool = True) -> l
     false` (and counts as installed: there's nothing to add)."""
     environment = probe.get("environment", {})
     packages = probe.get("packages", {})
-    extras = declared(dimos_dir, probe.get("dimos_requires", []))
+    extras = declared(dimos_dir, probe)
     parsed: dict[str, tuple[list[Requirement], list[str]]] = {}
     for name, texts in extras.items():
         requirements, includes = [], []

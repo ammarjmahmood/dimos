@@ -149,7 +149,7 @@ def start(dimos_dir: Path, blueprint: str, overrides: dict[str, Any]) -> dict[st
     args = [*config.global_config_flags(overrides), "run", blueprint]
     launch_log().parent.mkdir(parents=True, exist_ok=True)
     launch_log().write_text(f"$ dimos {' '.join(args)}\n")
-    venv = dimos_dir / ".venv"
+    venv = config.venv_dir(dimos_dir)
     env = {
         **os.environ,
         # the checkout's venv first, as an activated venv would: dimos spawns tools from it by name (mjpython)

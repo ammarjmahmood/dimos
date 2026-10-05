@@ -27,6 +27,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+import yaml
+
 # a page about adding your own robot: its file name or first heading matches one of these, best first
 CUSTOM_ROBOT = (
     r"(custom|new|own|your)[ _-]+(robot|platform|hardware)",
@@ -45,19 +47,33 @@ LINKS = {
 LINK = re.compile(r"(!?\[[^\]]*\]\()([^)\s]+)(\s+\"[^\"]*\")?\)")
 
 
+class _AnyTagLoader(yaml.SafeLoader):
+    """YAML's safe loader, reading tags it doesn't know (mkdocs.yml's `!!python/name:...`) as their plain value."""
+
+
+def _plain(loader: yaml.SafeLoader, suffix: str, node: yaml.Node) -> Any:
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    return loader.construct_mapping(node)  # type: ignore[arg-type]
+
+
+_AnyTagLoader.add_multi_constructor("", _plain)  # type: ignore[no-untyped-call]
+
+
 def site(dimos_dir: Path) -> tuple[str | None, str | None]:
-    """(docs site URL, repo URL) from mkdocs.yml (read as text: it has tags a YAML loader refuses)."""
+    """(docs site URL, repo URL): mkdocs.yml's site_url and repo_url."""
     try:
-        text = (dimos_dir / "mkdocs.yml").read_text()
-    except OSError:
+        settings = yaml.load((dimos_dir / "mkdocs.yml").read_text(), Loader=_AnyTagLoader)
+    except (OSError, yaml.YAMLError):
         return None, None
-
-    def value(key: str) -> str | None:
-        found = re.search(rf"^{key}:\s*['\"]?([^'\"\s#]+)", text, re.MULTILINE)
-        return found.group(1) if found else None
-
-    url = value("site_url")
-    return (url.rstrip("/") + "/" if url else None), value("repo_url")
+    settings = settings if isinstance(settings, dict) else {}
+    url, repo = settings.get("site_url"), settings.get("repo_url")
+    return (
+        str(url).rstrip("/") + "/" if url else None,
+        str(repo) if repo else None,
+    )
 
 
 def docs_dir(dimos_dir: Path) -> Path:
@@ -175,12 +191,11 @@ def custom_robot(dimos_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def links(dimos_dir: Path) -> dict[str, Any]:
-    base, repo = site(dimos_dir)
+def link_pages(dimos_dir: Path) -> dict[str, Path | None]:
+    """Each Desktop link's page file (None when the docs have no page by that name); a test checks every one exists."""
     all_pages = pages(dimos_dir)
-    answer: dict[str, Any] = {"site": base, "repo": repo}
-    for name, stems in LINKS.items():
-        match = next(
+    found: dict[str, Path | None] = {
+        name: next(
             (
                 p
                 for stem in stems
@@ -189,7 +204,16 @@ def links(dimos_dir: Path) -> dict[str, Any]:
             ),
             None,
         )
-        answer[name] = page_url(dimos_dir, match) if match else None
+        for name, stems in LINKS.items()
+    }
     guides = find_custom_robot(dimos_dir)
-    answer["custom_robot"] = page_url(dimos_dir, guides[0]) if guides else None
+    found["custom_robot"] = guides[0] if guides else None
+    return found
+
+
+def links(dimos_dir: Path) -> dict[str, Any]:
+    base, repo = site(dimos_dir)
+    answer: dict[str, Any] = {"site": base, "repo": repo}
+    for name, page in link_pages(dimos_dir).items():
+        answer[name] = page_url(dimos_dir, page) if page else None
     return answer

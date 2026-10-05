@@ -303,10 +303,16 @@ def test_docs(client: TestClient) -> None:
     assert links["custom_robot"] == guide["url"] and links["modules"] is None
 
 
-def test_real_docs_have_a_custom_robot_guide() -> None:
+def test_every_desktop_link_is_a_real_page() -> None:
+    """Renaming or moving a page Desktop links to fails here, not in Desktop."""
+    pages = docs.link_pages(DIMOS_PROJECT_ROOT)
+    assert set(pages) == {*docs.LINKS, "custom_robot"}
+    for name, page in pages.items():
+        assert page is not None and page.is_file(), f"no docs page for Desktop's {name} link"
+    links = docs.links(DIMOS_PROJECT_ROOT)
+    assert links["site"] and links["repo"] and all(links[name] for name in pages)
     guide = docs.custom_robot(DIMOS_PROJECT_ROOT)
-    assert guide is not None and guide["markdown"] and guide["url"]
-    assert docs.links(DIMOS_PROJECT_ROOT)["configure_robot"]
+    assert guide is not None and guide["markdown"] and guide["url"] == links["custom_robot"]
 
 
 async def fake_probe(*_: Any) -> dict[str, Any]:
@@ -398,15 +404,11 @@ def test_extras_install_is_a_job(
     failed = wait_done(
         client, client.post("/dimos/extras/install", json={"extras": ["sim"]}).json()["job"]
     )
+    # the exit code decides; the summary is the output's tail, not lines picked by their wording
+    assert not failed["ok"] and failed["error"] == "Install extras: sim failed (exit 2)"
     assert (
-        not failed["ok"]
-        and "exit 2" in failed["error"]
-        and "\u00d7 Failed to build" in failed["error"]
+        failed["failure"] == failed["lines"]  # fewer than 15
     )
-    assert failed["failure"] == [
-        "  \u00d7 Failed to build `mujoco==3.3.4`",
-        "error: no wheel for this platform",
-    ]
 
     slow = client.post("/dimos/extras/install", json={"extras": ["unitree-dds"]}).json()["job"]
     busy = client.post("/dimos/extras/install", json={"extras": ["sim"]})
@@ -418,9 +420,9 @@ def test_extras_install_is_a_job(
     assert client.get("/dimos/jobs/nope/log").status_code == 404
 
 
-def test_failure_lines_fall_back_to_the_last_lines() -> None:
+def test_failure_is_the_last_lines() -> None:
     assert failure_lines(["a", "", "b"]) == ["a", "b"]
-    assert failure_lines(["ok", "error: x", "help: y"]) == ["error: x", "help: y"]
+    assert failure_lines([str(n) for n in range(40)]) == [str(n) for n in range(25, 40)]
 
 
 def test_library_install_command(tmp_path: Path) -> None:
@@ -440,15 +442,26 @@ def test_library_install_command(tmp_path: Path) -> None:
 
 def test_library_extras_come_from_metadata(tmp_path: Path) -> None:
     requires = [
+        "numpy",
         "mujoco>=3; extra == 'sim'",
         "cupy; sys_platform == 'linux' and extra == 'cuda'",
-        "dimos[sim]; extra == 'all'",
+        'dimos[sim]; extra == "all"',
     ]
-    assert extras.declared(tmp_path, requires) == {
-        "sim": ["mujoco>=3"],
-        "cuda": ['cupy; sys_platform == "linux"'],
-        "all": ["dimos[sim]"],
+    probe = {
+        "environment": PROBE["environment"],
+        "dimos_requires": requires,
+        "dimos_extras": ["sim", "cuda", "all"],
     }
+    assert extras.declared(tmp_path, probe) == {
+        "sim": ["mujoco>=3; extra == 'sim'"],
+        "cuda": [],  # linux only: not on this (mac) machine
+        "all": ['dimos[sim]; extra == "all"'],
+    }
+    listed = {
+        e["name"]: e for e in extras.status(tmp_path, {**probe, "packages": {"mujoco": "3.3.4"}})
+    }
+    assert listed["sim"]["installed"] and listed["all"]["includes"] == ["sim"]
+    assert listed["cuda"]["applicable"] is False
 
 
 def test_a_job_line_goes_on_its_own_zenoh_key() -> None:

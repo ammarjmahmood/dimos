@@ -25,6 +25,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 import pytest
 
+from dimos.constants import RECORDINGS_DIR
 from dimos.server import blueprints, config, events, runs
 from dimos.server.app import ServerState, create_app
 from dimos.server.uploads import Uploads
@@ -63,7 +64,8 @@ def test_health_info_and_paths(
     assert client.get("/dimos/info").json()["inRange"] is False
     paths = client.get("/dimos/paths").json()
     assert paths["dimosDir"] == str(checkout)
-    assert paths["recordingsDir"] == str(config.dimos_home() / "recordings")
+    # no recordings.dir in config.yaml: where dimos itself records
+    assert paths["recordingsDir"] == str(RECORDINGS_DIR)
     assert set(paths) == {"dimosDir", "runsDir", "logsDirs", "recordingsDir", "server"}
     assert paths["server"]["exe"] == sys.executable and paths["server"]["exeModified"] > 0
     missing = client.get("/dimos/nope")

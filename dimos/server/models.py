@@ -71,7 +71,8 @@ class Paths(ApiModel):
         examples=[["/home/me/dimos/logs", "/home/me/.local/state/dimos/logs"]],
     )
     recordingsDir: str = Field(
-        description="Desktop's recordings folder (config.yaml `recordings.dir`)",
+        description="Desktop's recordings folder (config.yaml `recordings.dir`), else where dimos records "
+        "(its RECORDINGS_DIR)",
         examples=["/home/me/.dimos/recordings"],
     )
     server: ServerProgram = Field(description="What this server runs")
@@ -980,12 +981,12 @@ class JobLog(JobSummary):
     )
     next: int = Field(description="The `n` the next line will have (pass it as `after`)")
     error: str | None = Field(
-        description="Why it failed, one line",
-        examples=["Install extras: sim failed (exit 2): error: ..."],
+        description="That it failed, and its exit code (or `cancelled`, or why it couldn't start)",
+        examples=["Install extras: sim failed (exit 2)"],
     )
     failure: list[str] = Field(
-        description="The lines that say why it failed (uv's `error:` and cross-marked lines, else the last lines); empty when "
-        "it didn't"
+        description="Only after a failure: the output's last 15 non-empty lines, where the command says why (the "
+        "whole output is `lines`)"
     )
 
 

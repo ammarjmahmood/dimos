@@ -130,7 +130,7 @@ def add(app: FastAPI, state: ServerState) -> None:
         ),
     )
     async def discovered_blueprints() -> dict[str, Any]:
-        declared = extras.declared(s.dimos_dir, [])
+        declared = extras.declared(s.dimos_dir, {})
         records = [
             {**record, "suggested_extras": suggested_extras(declared, record.get("missing_module"))}
             for record in discovery.blueprint_list()
@@ -303,7 +303,7 @@ def add(app: FastAPI, state: ServerState) -> None:
         ),
     )
     async def install_extras(request: models.ExtrasInstall) -> dict[str, Any]:
-        declared = extras.declared(s.dimos_dir, (await probe()).get("dimos_requires", []))
+        declared = extras.declared(s.dimos_dir, await probe())
         unknown = [name for name in request.extras if name not in declared]
         if unknown:
             raise ApiError(
@@ -319,7 +319,11 @@ def add(app: FastAPI, state: ServerState) -> None:
         command = extras.install_command(
             s.dimos_dir, wanted, python_for(s.dimos_dir), config.info(s.dimos_dir).version, uv
         )
-        env = {"VIRTUAL_ENV": str(s.dimos_dir / ".venv")} if extras.is_checkout(s.dimos_dir) else {}
+        env = (
+            {"VIRTUAL_ENV": str(config.venv_dir(s.dimos_dir))}
+            if extras.is_checkout(s.dimos_dir)
+            else {}
+        )
 
         def then(_: Any) -> None:
             s.cache.forget("packages")
@@ -348,7 +352,7 @@ def add(app: FastAPI, state: ServerState) -> None:
         response_model=models.JobLog,
         **route_doc(
             "jobs",
-            "A job's output so far, and how it ended (`error`, and `failure`: the lines that say why)",
+            "A job's output so far, and how it ended (`error`, and `failure`: its last lines)",
             "Lines from `after` on (default 0) and `next`, the `n` the next line will have: subscribe to "
             "`<ns>/dimos/jobs/<job>` first, then fetch this, then apply live lines with `n` >= `next`. 404 for an "
             "unknown (or expired) job.",

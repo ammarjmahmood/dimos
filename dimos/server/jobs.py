@@ -16,9 +16,9 @@
 
 A job runs one command (never through a shell) and publishes each output line on zenoh at `<ns>/dimos/jobs/<job>` as
 `{type: "line", n, line}`, then `{type: "done", ok, error, failure, lines}`; a `job` event says one started. The
-snapshot is `GET /dimos/jobs/<job>/log?after=<n>`. `failure` is the few lines that say why it failed (uv's `error:` and
-cross-marked lines, else the last lines), so an agent can act on it without reading the whole log. Finished jobs are kept for
-30 minutes.
+snapshot is `GET /dimos/jobs/<job>/log?after=<n>`. Success is the exit code alone. On a failure, `error` says the exit
+code and `failure` is the output's last lines (uv prints its error last, and has no structured output for an install,
+so nothing is picked out by its wording); the full log stays in `lines`. Finished jobs are kept for 30 minutes.
 """
 
 from __future__ import annotations
@@ -38,10 +38,7 @@ from dimos.server.discovery import now_iso
 
 KEEP_S = 30 * 60
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-# uv marks the failing step with a cross (U+00D7) and its cause with an arrow (U+2570 U+2500 U+25B6)
-FAILURE_LINE = re.compile(
-    r"^\s*(error|\u00d7|\u2570\u2500\u25b6|caused by|help:|fatal)", re.IGNORECASE
-)
+FAILURE_TAIL = 15
 
 
 @dataclass
@@ -85,8 +82,8 @@ class Job:
 
 
 def failure_lines(lines: list[str]) -> list[str]:
-    flagged = [line for line in lines if FAILURE_LINE.match(line)]
-    return (flagged or [line for line in lines if line.strip()])[-15:]
+    """The output's last non-empty lines: where a failing command says why."""
+    return [line for line in lines if line.strip()][-FAILURE_TAIL:]
 
 
 class Jobs:
@@ -173,8 +170,7 @@ class Jobs:
                 job.error = "cancelled"
             elif code != 0:
                 job.failure = failure_lines(job.lines)
-                first = next((l.strip() for l in job.failure if FAILURE_LINE.match(l)), None)
-                job.error = f"{job.title} failed (exit {code})" + (f": {first}" if first else "")
+                job.error = f"{job.title} failed (exit {code})"
         except Exception as error:
             job.ok = False
             job.error = f"{job.title} couldn't start: {type(error).__name__}: {error}"

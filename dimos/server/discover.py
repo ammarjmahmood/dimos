@@ -21,7 +21,7 @@ MARKER + JSON (anything else on stdout is an import's noise):
     scan       stdin {"blueprints": [names], "modules": [registry names], "known": [classes]} ->
                {"kind": "start", "name"} before each blueprint, then {"kind": "blueprint", ...}, and a
                {"kind": "module", ...} for each module class not in `known`; registry modules last
-    packages   -> {"python", "environment", "packages": {name: version}, "dimos_requires": [...]}
+    packages   -> {"python", "environment", "packages": {name: version}, "dimos_requires", "dimos_extras"}
 """
 
 from __future__ import annotations
@@ -368,7 +368,7 @@ def names() -> dict[str, Any]:
 
 
 def packages() -> dict[str, Any]:
-    from importlib.metadata import PackageNotFoundError, distributions, requires
+    from importlib.metadata import PackageNotFoundError, distributions, metadata, requires
 
     from packaging.markers import default_environment
     from packaging.utils import canonicalize_name
@@ -380,13 +380,15 @@ def packages() -> dict[str, Any]:
             found[canonicalize_name(name)] = dist.version
     try:
         dimos_requires = requires("dimos") or []
+        dimos_extras = metadata("dimos").get_all("Provides-Extra") or []
     except PackageNotFoundError:
-        dimos_requires = []
+        dimos_requires, dimos_extras = [], []
     return {
         "python": sys.executable,
         "environment": dict(default_environment()),
         "packages": found,
         "dimos_requires": dimos_requires,
+        "dimos_extras": dimos_extras,
     }
 
 
