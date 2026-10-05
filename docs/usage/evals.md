@@ -433,6 +433,9 @@ suite's docstring describes its scene:
 dimos evals run dimos.evals.suites.habitat.hm3d.hm3d_scene_3 --agent dimos.evals.agents.pi --limit 1
 ```
 
+Agents look with `observe` and drive with `go_to(x, y)`. Exploring a whole home can
+take more than Pi's default 40 steps; raise it with `--set max_steps=100`.
+
 The datasets are not bundled. Download them from their sources (HSSD requires
 accepting its terms first), for example with habitat-sim's downloader, then set
 the variable for each dataset you use:
