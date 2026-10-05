@@ -266,3 +266,20 @@ def test_dimos_yaml_points_at_it() -> None:
 
     pointer = yaml.safe_load((DIMOS_PROJECT_ROOT / "dimos.yaml").read_text())["robots"]
     assert (DIMOS_PROJECT_ROOT / pointer).resolve() == robots.ROBOTS_FILE.resolve()
+
+
+def test_the_catalog_names_each_blueprints_robot_from_robots_json() -> None:
+    """The dimos server's catalog takes a blueprint's robot from robots.json (no folder list of its own), so every
+    blueprint a robot lists, or one in a robot's dirs, has that robot."""
+    from dimos.robot.all_blueprints import all_blueprints
+    from dimos.server.introspect import robot_of
+
+    doc = robots.load()
+    for robot_id, robot in doc["robots"].items():
+        for name in robot["blueprints"]:
+            assert robot_of(all_blueprints[name], name) == robot_id, name
+    assert robot_of(all_blueprints["drone-basic"]) == "drone"
+    assert robot_of(all_blueprints["spot-replay"]) == "spot"
+    assert robot_of(all_blueprints["mid360-realsense-record"]) == "sensors"
+    assert robot_of(all_blueprints["unitree-go2-basic"]) == "go2"
+    assert robot_of("dimos.agents.demo_agent:demo_agent") is None

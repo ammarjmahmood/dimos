@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import enum
+import functools
 import importlib
 import inspect
 import json
@@ -44,9 +45,6 @@ MAX_ERRORS = 50
 # field is either here or in SHOWN_BASE_FIELDS, so a new one is a decision, not an accident)
 INTERNAL_FIELDS = {"g", "rpc_transport", "rpc_timeouts", "default_rpc_timeout", "instance_name"}
 SHOWN_BASE_FIELDS = {"frame_id", "frame_id_prefix"}
-
-# group folders under dimos/robot/ that hold several robots (dimos.robot.unitree.go2 is the go2)
-ROBOT_GROUPS = {"unitree", "manipulators", "diy", "galaxea", "deeprobotics"}
 
 
 def type_name(kind: Any) -> str:
@@ -164,13 +162,24 @@ def config(name: str) -> dict[str, Any]:
     return {"name": name, "modules": modules}
 
 
-def robot_of(ref: str) -> str | None:
-    """dimos.robot.unitree.go2.blueprints.basic:x -> "go2"; None outside dimos.robot or for a top-level demo."""
-    parts = ref.split(":")[0].split(".")
-    if parts[:2] != ["dimos", "robot"] or len(parts) < 4:
-        return None
-    index = 3 if parts[2] in ROBOT_GROUPS else 2
-    return parts[index] if len(parts) > index + 1 and parts[index] != "common" else None
+def robot_of(ref: str, name: str | None = None) -> str | None:
+    """The robot a blueprint is for, from robots.json: the robot that lists it, else the one whose `dirs` hold its file
+    (dimos.robot.unitree.go2.blueprints.basic:x -> "go2"); None for one no robot claims (a demo)."""
+    from dimos.robot import robots
+
+    doc = _robots()
+    if name is not None:
+        for robot_id, robot in doc["robots"].items():
+            if name in robot["blueprints"]:
+                return str(robot_id)
+    return robots.owner_of(doc, robots.blueprint_file(ref))
+
+
+@functools.cache
+def _robots() -> dict[str, Any]:
+    from dimos.robot import robots
+
+    return robots.load()
 
 
 def first_line(obj: Any) -> str:
@@ -218,7 +227,7 @@ def catalog() -> dict[str, Any]:
     for name, ref in sorted(all_blueprints.items()):
         try:
             bp = get_blueprint_by_name(name)
-            robot = robot_of(ref)
+            robot = robot_of(ref, name)
             ids = []
             for atom in bp.active_blueprints:
                 key = f"{atom.module.__module__}.{atom.module.__qualname__}"

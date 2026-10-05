@@ -305,7 +305,7 @@ def scan(request: dict[str, Any]) -> None:
             "name": name,
             "ref": ref,
             "builtin": ref is not None,
-            "robot": robot_of(ref) if ref else None,
+            "robot": robot_of(ref, name) if ref else None,
         }
         try:
             bp = load_blueprint(name) if ref is not None else get_by_name(name)
