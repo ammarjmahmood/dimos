@@ -47,11 +47,8 @@ from dimos.evals.constants import (
     NO_DIMOS_GUIDANCE,
     PASSTHROUGH_ENV,
     PROVIDERS,
-    RAW_MANIPULATION_README,
     RAW_MAX_ANGULAR_RPS,
     RAW_MAX_CMD_S,
-    RAW_MAX_EE_ANGULAR_RPS,
-    RAW_MAX_EE_LINEAR_MPS,
     RAW_MAX_LINEAR_MPS,
     RAW_README,
 )
@@ -267,6 +264,8 @@ class PiAdapter(Agent):
         parts.append("Files:\n" + "\n".join(f"- {name}: {path}" for name, path in files.items()))
         if self.config.no_dimos:
             parts.append(NO_DIMOS_GUIDANCE)
+            if env.raw_endpoint:
+                parts.append(f"Robot endpoint (plain Zenoh, connect directly): {env.raw_endpoint}")
         elif self.config.builtin_guidance and "recording" in files:
             parts.append(
                 "The recording is a dimos memory store (sqlite). In Python:\n"
@@ -290,22 +289,18 @@ class PiAdapter(Agent):
         """ROBOT.md for a robot; the selected observations as plain files for a dataset."""
         files = dict(env.artifacts)
         files.pop("recording", None)  # a dimOS memory store; not readable without dimOS
-        if env.raw_endpoint:
+        if env.raw_endpoint and env.raw_guide:
             readme = run_dir / "ROBOT.md"
             readme.write_text(
-                (
-                    RAW_MANIPULATION_README if env.raw_interface == "manipulation" else RAW_README
-                ).format(
+                RAW_README.format(
                     endpoint=env.raw_endpoint,
                     max_cmd_s=RAW_MAX_CMD_S,
                     max_linear=RAW_MAX_LINEAR_MPS,
                     max_angular=RAW_MAX_ANGULAR_RPS,
-                    max_ee_linear=RAW_MAX_EE_LINEAR_MPS,
-                    max_ee_angular=RAW_MAX_EE_ANGULAR_RPS,
                 )
             )
             files["robot"] = readme
-        elif env.mcp_url:
+        elif env.mcp_url and not env.raw_endpoint:
             raise ValueError("no_dimos on a robot environment needs raw_bridge=True")
         if env.streams:
             files["observations"] = plain_recording(env.streams, run_dir / "input")

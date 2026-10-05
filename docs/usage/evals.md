@@ -123,6 +123,10 @@ robot/camera_info/json   {"width","height","K"}, republished periodically
 robot/cmd_vel/json       subscribed: {"vx","vy","wz","t"}; clamped to 1.0 m/s and 1.5 rad/s, held for t seconds (max 2), then stop
 ```
 
+These are the topics a Go2 produces. The same bridge serves arms too (joint state, depth,
+end-effector twist and gripper commands) whenever the robot's blueprint provides those
+streams; see [Raw robot interface](/docs/usage/raw_robot.md).
+
 That is the surface a vendor SDK exposes: sensors out, body velocity with a deadman in. Nothing
 above the connection (map, costmap, planner, `move_to`, memory) and nothing beneath it (simulator
 state, scene assets). The baseline agent gets a `ROBOT.md` describing the endpoint and builds
@@ -474,7 +478,7 @@ modules disabled: pick up the cylinder, then put the red ball on top of it.
 
 `dimos.evals.suites.mujoco_xarm_raw` evaluates a cylinder lift in the default
 scene using plain robot commands and observations. Run it with Pi and
-`--set no_dimos=true`; see [Raw manipulation](/docs/usage/raw_manipulation.md) for the
+`--set no_dimos=true`; see [Raw robot interface](/docs/usage/raw_robot.md) for the
 interface, robot context and launcher configuration.
 
 ## Running

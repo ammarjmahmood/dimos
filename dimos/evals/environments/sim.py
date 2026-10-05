@@ -22,7 +22,7 @@ import math
 from pathlib import Path
 import socket
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter
 from dimos.constants import RECORDINGS_DIR
@@ -47,7 +47,8 @@ class SimConfig(BaseConfig):
     disable: tuple[str, ...] = ()
     # Also expose the robot as plain Zenoh topics (raw-robot-bridge) for agents without dimOS.
     raw_bridge: bool = False
-    raw_interface: Literal["navigation", "manipulation"] = "navigation"
+    # False when the suite's own instruction describes the raw interface (no default ROBOT.md).
+    raw_guide: bool = True
     robot_context: Path | None = None
     attach: bool = False
     launch_timeout_s: float = 1200.0
@@ -70,18 +71,6 @@ class Sim(Environment):
     @property
     def provides_raw_robot(self) -> bool:
         return self.config.raw_bridge
-
-    @property
-    def _raw_module(self) -> str:
-        return (
-            "raw-manipulation-bridge"
-            if self.config.raw_interface == "manipulation"
-            else "raw-robot-bridge"
-        )
-
-    @property
-    def _bridge_modules(self) -> list[str]:
-        return [self._raw_module] if self.config.raw_bridge else []
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -116,7 +105,7 @@ class Sim(Environment):
             if not McpAdapter(mcp_url).wait_for_ready(timeout=2.0):
                 raise RuntimeError(f"attach needs a running dimos at {mcp_url}")
             return
-        bridge = self._bridge_modules
+        bridge = ["raw-robot-bridge"] if self.config.raw_bridge else []
         validate_blueprints(
             (*self.config.blueprint, *agent.config.modules, *bridge, *self.config.disable)
         )
@@ -137,11 +126,10 @@ class Sim(Environment):
             self.configure_launch(proc)
             proc.global_args.append("--record")
             disabled = [arg for name in self.config.disable for arg in ("--disable", name)]
-            bridge = self._bridge_modules
+            bridge = ["raw-robot-bridge"] if self.config.raw_bridge else []
             if self.config.raw_bridge:
                 self._raw_endpoint = f"tcp/127.0.0.1:{_free_port()}"  # one bridge per run
-                module_key = self._raw_module.replace("-", "").upper()
-                proc.extra_env[f"{module_key}__ENDPOINT"] = self._raw_endpoint
+                proc.extra_env["RAWROBOTBRIDGE__ENDPOINT"] = self._raw_endpoint
             proc.demo_args = ["run", *self.config.blueprint, *modules, *bridge, *disabled]
             self._resources.callback(proc.stop)
             proc.start()
@@ -176,7 +164,7 @@ class Sim(Environment):
             streams=(),
             artifacts=artifacts,
             raw_endpoint=self._raw_endpoint if self.config.raw_bridge else None,
-            raw_interface=self.config.raw_interface,
+            raw_guide=self.config.raw_guide,
             robot_context=self.config.robot_context,
         )
 

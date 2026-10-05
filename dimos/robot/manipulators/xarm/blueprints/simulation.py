@@ -81,7 +81,6 @@ xarm_sim = autoconnect(
         **{
             **_xarm7_sim_kwargs,
             "base_frame_id": "world",
-            "overview_camera_name": "env_camera",
             "tracked_sites": ["link_tcp"],
         }
     ),
