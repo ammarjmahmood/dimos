@@ -49,6 +49,8 @@ class HabitatEnvironmentConfig(SimConfig):
     executable: str | None = None
     # Static models placed in the scene.
     props: tuple[HabitatProp, ...] = ()
+    # Template names of scene objects to take out.
+    removed_objects: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def finite_spawn(self) -> HabitatEnvironmentConfig:
@@ -72,6 +74,7 @@ class HabitatEnvironment(Sim):
         "executable",
         "publish_semantic",
         "props",
+        "removed_objects",
     )
 
     config: HabitatEnvironmentConfig
