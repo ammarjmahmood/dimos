@@ -253,6 +253,7 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     reset_joint_positions: list[float] | None = None
     headless: bool = False
     tracked_bodies: list[str] = Field(default_factory=list)
+    tracked_sites: list[str] = Field(default_factory=list)  # e.g. an end-effector TCP site
     dof: int = 7
 
     # Camera config (matches former MujocoCameraConfig).
@@ -1072,29 +1073,36 @@ class MujocoSimModule(
         )
 
     def _body_transforms(self) -> list[Transform]:
-        """World poses of ``tracked_bodies``; a name missing from the model is skipped after one warning."""
+        """World poses of ``tracked_bodies`` and ``tracked_sites``; a name missing from the
+        model is skipped after one warning."""
         engine = self._engine
-        if engine is None or not self.config.tracked_bodies:
+        if engine is None or not (self.config.tracked_bodies or self.config.tracked_sites):
             return []
         ts = time.time()
         transforms: list[Transform] = []
-        for name in self.config.tracked_bodies:
-            pose = engine.get_body_pose(name)
-            if pose is None:
-                if name not in self._missing_bodies:
-                    self._missing_bodies.add(name)
-                    logger.warning("MujocoSimModule: tracked body not in model", body=name)
-                continue
-            position, (qx, qy, qz, qw) = pose
-            transforms.append(
-                Transform(
-                    translation=Vector3(float(position[0]), float(position[1]), float(position[2])),
-                    rotation=Quaternion(float(qx), float(qy), float(qz), float(qw)),
-                    frame_id="world",
-                    child_frame_id=name,
-                    ts=ts,
+        for kind, names in (
+            ("body", self.config.tracked_bodies),
+            ("site", self.config.tracked_sites),
+        ):
+            for name in names:
+                pose = engine.get_body_pose(name) if kind == "body" else engine.get_site_pose(name)
+                if pose is None:
+                    if name not in self._missing_bodies:
+                        self._missing_bodies.add(name)
+                        logger.warning(f"MujocoSimModule: tracked {kind} not in model", name=name)
+                    continue
+                position, (qx, qy, qz, qw) = pose
+                transforms.append(
+                    Transform(
+                        translation=Vector3(
+                            float(position[0]), float(position[1]), float(position[2])
+                        ),
+                        rotation=Quaternion(float(qx), float(qy), float(qz), float(qw)),
+                        frame_id="world",
+                        child_frame_id=name,
+                        ts=ts,
+                    )
                 )
-            )
         return transforms
 
     def _generate_pointcloud(self) -> None:

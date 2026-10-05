@@ -103,10 +103,12 @@ Subscribe before commanding. Topics:
                            overview optical pose in the world frame
   robot/arm/info/json      static info at 1 Hz: commands, twist_frame, max_linear_mps,
                            max_angular_rps, max_cmd_s, gripper units
-  robot/arm/state/json     {{"t", "joint_names", "positions", "velocities", "gripper_opening"}}
-                           measured arm joints (radians, rad/s) and gripper opening 0..1
+  robot/arm/state/json     {{"t", "joint_names", "positions", "velocities",
+                           "ee_pose":{{"frame":"world", "xyz", "quaternion_xyzw"}}, "gripper_opening"}}
+                           measured arm joints (radians, rad/s), the measured tool centre point
+                           (TCP) pose in world (null if unavailable) and gripper opening 0..1
 
-There is no end-effector pose topic: infer progress from joints and the cameras.
+Use ee_pose to check where the gripper actually is after each move.
 If robot context files are listed, read robot/README.md and robot/robot_info.json
 once for URDFs, joint/frame conventions and gripper geometry.
 Keep the latest sensor message per topic rather than printing every frame.
@@ -141,6 +143,12 @@ angular in rad/s about fixed world X/Y/Z axes, both expressed in the world frame
 previous one, and a zero twist (or t=0) stops the arm. Components are clamped to
 {max_ee_linear:g} m/s and {max_ee_angular:g} rad/s. Omitted linear/angular mean zero.
 Motion is local IK tracking, not obstacle-aware planning: move in small steps and check.
+Distance is velocity x time and only approximate: re-observe after every move.
+
+Wrist-image directions: at the start pose the wrist camera looks straight down, with
+image right = world -Y, image up = world +X and the view direction = world -Z. Rotating
+the gripper rotates this mapping; for any pose, the columns of camera_pose's rotation
+give the optical +X (image right), +Y (image down) and +Z (view) axes in world.
 
 gripper opening is normalized: 0.0 closed, 1.0 fully open. It is independent of the arm
 and persists until changed. A gripper blocked by an object holds its target; inspect

@@ -14,7 +14,11 @@
 
 """Default xArm cylinder lift through the raw robot interface.
 
-dimos evals run dimos.evals.suites.mujoco_xarm_raw --agent dimos.evals.agents.pi --set no_dimos=true
+dimos evals run dimos.evals.suites.mujoco_xarm_raw --agent dimos.evals.agents.pi \
+    --set no_dimos=true --set max_steps=120
+
+Pi's default 40-step budget is mostly spent on client setup and observation;
+closed-loop velocity control needs room to re-observe after each move.
 """
 
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment

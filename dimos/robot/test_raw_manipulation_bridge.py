@@ -79,7 +79,6 @@ def _published(module, key):
         b'{"kind":"twist","linear":[0,0],"t":1}',
         b'{"kind":"twist","linear":[0,0,1],"t":-1}',
         b'{"kind":"twist","linear":[0,0,1]}',
-        b'{"kind":"twist","linear":[0,0,1],"t":1,"id":"x"}',
         b'{"kind":"gripper","opening":1.5}',
         b'{"kind":"gripper","position":0.4}',
     ],
@@ -114,8 +113,8 @@ def test_hold_time_is_capped_and_latest_twist_wins(bridge, monkeypatch):
     assert _twists(bridge)[1:] == [(0, 0, 0, 0, 0, 0)]
 
 
-def test_gripper_opening_is_forwarded_normalized(bridge):
-    _command(bridge, kind="gripper", opening=0.25)
+def test_gripper_opening_is_forwarded_normalized_ignoring_extra_fields(bridge):
+    _command(bridge, kind="gripper", opening=0.25, t=1.0)
     assert bridge.gripper_command.publish.call_args.args[0].data == pytest.approx(0.25)
     bridge.ee_twist_command.publish.assert_not_called()
 
@@ -135,8 +134,34 @@ def test_state_reports_arm_joints_and_normalized_gripper(bridge):
         "joint_names": ["j1", "j2"],
         "positions": [0.1, 0.2],
         "velocities": [0.5, 0.0],
+        "ee_pose": None,
         "gripper_opening": pytest.approx(0.5),
     }
+
+
+def test_state_carries_latest_tcp_pose_from_tf_until_stale(bridge, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    tcp = Transform(
+        translation=Vector3(0.5, 0.0, 0.3),
+        rotation=Quaternion(1, 0, 0, 0),
+        frame_id="world",
+        child_frame_id=bridge.config.ee_frame,
+        ts=1.0,
+    )
+    bridge._on_tf(TFMessage(tcp))
+    state = JointState(name=["j1"], position=[0.0], velocity=[0.0], ts=2.0)
+    bridge._on_joint_state(state)
+    now[0] += bridge.config.stale_s + 1
+    bridge._on_joint_state(state)
+    fresh, stale = _published(bridge, "arm/state/json")
+    assert fresh["ee_pose"] == {
+        "frame": "world",
+        "xyz": [0.5, 0.0, 0.3],
+        "quaternion_xyzw": [1.0, 0.0, 0.0, 0.0],
+    }
+    assert stale["ee_pose"] is None
+    assert not _published(bridge, bridge.config.ee_frame)
 
 
 def test_info_is_published_and_only_camera_tfs_are_exported(bridge):

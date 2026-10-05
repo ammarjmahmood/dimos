@@ -4,7 +4,7 @@ Run the default-scene cylinder lift through plain robot topics:
 
 ```bash skip
 dimos evals run dimos.evals.suites.mujoco_xarm_raw \
-  --agent dimos.evals.agents.pi --set no_dimos=true
+  --agent dimos.evals.agents.pi --set no_dimos=true --set max_steps=120
 ```
 
 The goal is to lift the cylinder at least 5 cm above its initial position, graded
@@ -52,7 +52,12 @@ Subscribe before commanding. Publish JSON to `robot/arm/command/json`:
 
 There are no joint targets, stop command, IDs, acknowledgements or status replies.
 The agent observes the continuous state/camera streams to decide what to send next.
-Invalid inputs are logged and dropped. The default scene's robot base is at world
+Invalid inputs are logged and dropped, and unknown fields are ignored.
+
+The measured TCP pose in `arm/state/json` comes from TF: the simulated blueprint has
+MuJoCo publish its `link_tcp` site (`tracked_sites`), and the bridge forwards the
+latest pose, or `null` once it is stale. Hardware needs another TF source for that
+frame. The default scene's robot base is at world
 z=0.12 m and unrotated, so world and base axes coincide.
 
 ## Observations
@@ -64,7 +69,7 @@ z=0.12 m and unrotated, so world and base axes coincide.
 | `camera_info/json`, `camera_pose/json` | Wrist intrinsics and optical pose (frame named in the message) |
 | `overview/jpeg` | Fixed-camera RGB, normally 5 Hz |
 | `overview/camera_info/json`, `overview/camera_pose/json` | Overview's own intrinsics and optical pose |
-| `arm/info/json`, `arm/state/json` | Limits/units; measured joints and normalized gripper opening |
+| `arm/info/json`, `arm/state/json` | Limits/units; measured joints, TCP pose in world and normalized gripper opening |
 
 Depth is little-endian float32, row-major `(height, width)`, decoded with
 `np.frombuffer(payload, dtype="<f4").reshape(height, width)`. It is optical-axis Z

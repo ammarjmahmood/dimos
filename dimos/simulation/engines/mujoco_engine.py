@@ -880,6 +880,20 @@ class MujocoEngine(SimulationEngine):
             qw, qx, qy, qz = self._data.xquat[body_id].copy()
         return position, np.array([qx, qy, qz, qw], dtype=np.float64)
 
+    def get_site_pose(
+        self, site_name: str
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+        """World position and xyzw orientation of a named site; None if the model has none."""
+        site_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+        if site_id < 0:
+            return None
+        quat = np.empty(4, dtype=np.float64)
+        with self._lock:
+            position = self._data.site_xpos[site_id].copy()
+            mujoco.mju_mat2Quat(quat, self._data.site_xmat[site_id])  # type: ignore[attr-defined]
+        qw, qx, qy, qz = quat
+        return position, np.array([qx, qy, qz, qw], dtype=np.float64)
+
     def get_actuator_ctrl_range(self, joint_index: int) -> tuple[float, float] | None:
         mapping = self._joint_mappings[joint_index]
         if mapping.actuator_id is None:

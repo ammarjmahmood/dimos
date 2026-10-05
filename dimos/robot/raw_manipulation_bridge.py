@@ -59,7 +59,8 @@ Vec3 = tuple[float, float, float]
 
 
 class _Command(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    # Unknown fields are ignored: with no replies, a rejected command fails silently.
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False, strict=True)
 
 
 class TwistCommand(_Command):
@@ -101,6 +102,7 @@ class RawManipulationBridgeConfig(ModuleConfig):
     gripper_range: tuple[float, float] = (0.0, 0.85)  # native (closed, open)
     camera_optical_frame: str = "wrist_camera_color_optical_frame"
     overview_optical_frame: str = "env_camera_color_optical_frame"
+    ee_frame: str = "link_tcp"  # TF child carrying the measured end-effector pose
     max_cmd_s: float = RAW_MAX_CMD_S
     max_linear_mps: float = RAW_MAX_EE_LINEAR_MPS
     max_angular_rps: float = RAW_MAX_EE_ANGULAR_RPS
@@ -135,6 +137,8 @@ class RawManipulationBridge(Module):
         self._moving = False
         self._last_state = float("-inf")
         self._last_info = float("-inf")
+        self._ee_pose: dict[str, Any] | None = None
+        self._ee_seen = float("-inf")
 
     @rpc
     def start(self) -> None:
@@ -221,6 +225,8 @@ class RawManipulationBridge(Module):
         arm = [n for n in names if n != self.config.gripper_joint]
         closed, opened = self.config.gripper_range
         gripper = positions.get(self.config.gripper_joint)
+        with self._lock:
+            ee_pose = self._ee_pose if now - self._ee_seen <= self.config.stale_s else None
         self._put(
             "arm/state/json",
             {
@@ -228,6 +234,7 @@ class RawManipulationBridge(Module):
                 "joint_names": arm,
                 "positions": [positions[n] for n in arm],
                 "velocities": [velocities.get(n, 0.0) for n in arm],
+                "ee_pose": ee_pose,
                 "gripper_opening": None
                 if gripper is None
                 else float(np.clip((gripper - closed) / (opened - closed), 0, 1)),
@@ -245,12 +252,18 @@ class RawManipulationBridge(Module):
             self.config.overview_optical_frame: "overview/camera_pose/json",
         }
         for transform in message.transforms:
-            topic = topics.get(transform.child_frame_id)
-            if topic is None:
+            child = transform.child_frame_id
+            topic = topics.get(child)
+            if topic is None and child != self.config.ee_frame:
                 continue
             matrix = np.eye(4)
             matrix[:3, 3] = transform.translation.to_numpy()
             matrix[:3, :3] = Rotation.from_quat(transform.rotation.to_numpy()).as_matrix()
+            if topic is None:
+                with self._lock:
+                    self._ee_pose = {"frame": transform.frame_id, **pose_json(matrix)}
+                    self._ee_seen = time.monotonic()
+                continue
             self._put(
                 topic,
                 {"t": transform.ts, "frame": transform.frame_id, **pose_json(matrix)},

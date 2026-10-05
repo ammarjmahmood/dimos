@@ -78,7 +78,12 @@ xarm_perception_sim = autoconnect(
 # Robot-only stack: low-level control and sensors, reusable with any transport.
 xarm_sim = autoconnect(
     MujocoSimModule.blueprint(
-        **{**_xarm7_sim_kwargs, "base_frame_id": "world", "overview_camera_name": "env_camera"}
+        **{
+            **_xarm7_sim_kwargs,
+            "base_frame_id": "world",
+            "overview_camera_name": "env_camera",
+            "tracked_sites": ["link_tcp"],
+        }
     ),
     coordinator(
         hardware=[_xarm7_sim_hw],
