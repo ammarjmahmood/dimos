@@ -20,9 +20,15 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
+import sys
 from typing import Any
 
 from dimos.constants import STATE_DIR
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 # what Desktop's dimos.yaml `requires.dimos` says, when Desktop passes it (else every version is in range)
 RANGE_ENV = "DESKTOP_DIMOS_RANGE"
@@ -146,11 +152,6 @@ class Info:
 
 def checkout_version(dimos_dir: Path) -> tuple[bool, str | None]:
     """(a dimos checkout is there, its pyproject version)."""
-    try:
-        import tomllib
-    except ImportError:  # python 3.10
-        import tomli as tomllib  # type: ignore[no-redef]
-
     try:
         project = tomllib.loads((dimos_dir / "pyproject.toml").read_text()).get("project", {})
     except (OSError, tomllib.TOMLDecodeError):
