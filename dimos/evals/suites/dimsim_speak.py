@@ -86,7 +86,8 @@ def _position_at(store: Store, when: float) -> Vector3 | None:
             latest = sample
     if latest is None:
         return None
-    return latest.data.position
+    point = latest.data.position
+    return Vector3(point.x, point.y, point.z)
 
 
 def spoke_nearby(outcome: Outcome) -> float:
