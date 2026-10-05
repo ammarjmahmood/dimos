@@ -62,14 +62,32 @@ def test_health_info_and_paths(
     assert client.get("/dimos/info").json()["inRange"] is True
     monkeypatch.setenv(config.RANGE_ENV, ">=0.1")
     assert client.get("/dimos/info").json()["inRange"] is False
+    monkeypatch.delenv("DIMOS_RECORDINGS_DIR", raising=False)
     paths = client.get("/dimos/paths").json()
     assert paths["dimosDir"] == str(checkout)
-    # no recordings.dir in config.yaml: where dimos itself records
+    # no recordings.dir in config.yaml and no Desktop: where dimos itself records
     assert paths["recordingsDir"] == str(RECORDINGS_DIR)
     assert set(paths) == {"dimosDir", "runsDir", "logsDirs", "recordingsDir", "server"}
-    assert paths["server"]["exe"] == sys.executable and paths["server"]["exeModified"] > 0
+    server = paths["server"]
+    assert server["exe"] == sys.executable and server["exeModified"] > 0
+    assert server["kind"] == "dimos" and 0 < server["startedAt"] <= time.time()
+    # no zenoh publisher: SSE only, so Desktop relays
+    assert server["zenohNamespace"] is None
+    # started by Desktop: the folder it gives its apps
+    monkeypatch.setenv("DIMOS_RECORDINGS_DIR", str(checkout / "desktop_recordings"))
+    assert client.get("/dimos/paths").json()["recordingsDir"] == str(
+        checkout / "desktop_recordings"
+    )
     missing = client.get("/dimos/nope")
     assert (missing.status_code, missing.json()) == (404, {"error": "no such route: /dimos/nope"})
+
+
+def test_paths_says_where_its_events_go_on_zenoh(client: TestClient, state: ServerState) -> None:
+    # serve() sets it once its publisher is open: Desktop then stops relaying the SSE stream
+    state.zenoh_namespace = "dimos-desktop/host-7077"
+    assert (
+        client.get("/dimos/paths").json()["server"]["zenohNamespace"] == "dimos-desktop/host-7077"
+    )
 
 
 def test_blueprint_list_is_read_in_process(client: TestClient) -> None:

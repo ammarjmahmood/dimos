@@ -3917,11 +3917,50 @@
             ],
             "description": "Its modification time when the server started (Unix s): Desktop restarts its built-in server when its own binary has been replaced since",
             "title": "Exemodified"
+          },
+          "kind": {
+            "description": "Whose server answers: `dimos` (this one, dimos's own) or `builtin` (Desktop's)",
+            "enum": [
+              "dimos",
+              "builtin"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When this server started (Unix s): Desktop restarts it once a file of the checkout's dimos/server/ or dimos.yaml is newer",
+            "title": "Startedat"
+          },
+          "zenohNamespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The namespace this server publishes its events under (`<ns>/dimos/events/<type>`), null when it publishes on SSE only: Desktop relays the SSE stream onto zenoh only then",
+            "examples": [
+              "dimos-desktop/jeffs-mac-7077"
+            ],
+            "title": "Zenohnamespace"
           }
         },
         "required": [
           "exe",
-          "exeModified"
+          "exeModified",
+          "kind",
+          "startedAt",
+          "zenohNamespace"
         ],
         "title": "ServerProgram",
         "type": "object"
@@ -4569,7 +4608,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5853,7 +5892,7 @@
                 }
               }
             },
-            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified } }`"
+            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified, kind, startedAt, zenohNamespace } }`"
           },
           "500": {
             "content": {

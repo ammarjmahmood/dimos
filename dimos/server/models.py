@@ -92,6 +92,18 @@ class ServerProgram(ApiModel):
         description="Its modification time when the server started (Unix s): Desktop restarts its built-in server "
         "when its own binary has been replaced since"
     )
+    kind: Literal["dimos", "builtin"] = Field(
+        description="Whose server answers: `dimos` (this one, dimos's own) or `builtin` (Desktop's)"
+    )
+    startedAt: int | None = Field(
+        description="When this server started (Unix s): Desktop restarts it once a file of the checkout's "
+        "dimos/server/ or dimos.yaml is newer",
+    )
+    zenohNamespace: str | None = Field(
+        description="The namespace this server publishes its events under (`<ns>/dimos/events/<type>`), "
+        "null when it publishes on SSE only: Desktop relays the SSE stream onto zenoh only then",
+        examples=["dimos-desktop/jeffs-mac-7077"],
+    )
 
 
 class Stopping(ApiModel):

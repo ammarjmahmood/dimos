@@ -95,6 +95,7 @@ def serve(
             )
             state.bus.sinks.append(publisher)
             state.bus.publishers.append(publisher.under)
+            state.zenoh_namespace = namespace
             print(f"dimos server events -> zenoh {namespace}/dimos/events/<type>", flush=True)
         except Exception as error:
             print(f"dimos server: no zenoh session, events are on SSE only ({error})", flush=True)

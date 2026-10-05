@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Path as PathParam, Query, Request
@@ -66,6 +67,7 @@ def _started_from() -> tuple[str | None, int | None]:
 
 
 STARTED_FROM = _started_from()
+STARTED_AT = int(time.time())
 
 
 class EventStreamResponse(StreamingResponse):
@@ -104,6 +106,8 @@ class ServerState:
     # the discovery cache and background jobs (create_app makes them when not given)
     discovery: Discovery | None = None
     jobs: Jobs | None = None
+    # the zenoh namespace the bus publishes under (serve() sets it once its publisher is open), None = SSE only
+    zenoh_namespace: str | None = None
 
 
 def default_state(dimos_dir: Path) -> ServerState:
@@ -232,7 +236,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "its configured checkout to tell whether this server is the right one, and `server` with its own binary "
             "to tell whether its built-in server is outdated (this server runs python, so it never is). No side "
             "effects.",
-            answer="`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified } }`",
+            answer="`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified, kind, startedAt, zenohNamespace } }`",
         ),
     )
     async def paths() -> dict[str, Any]:
@@ -243,7 +247,13 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "runsDir": str(REGISTRY_DIR),
             "logsDirs": [str(d) for d in logs.logs_dirs(s.dimos_dir)],
             "recordingsDir": str(config.recordings_dir()),
-            "server": {"exe": STARTED_FROM[0], "exeModified": STARTED_FROM[1]},
+            "server": {
+                "exe": STARTED_FROM[0],
+                "exeModified": STARTED_FROM[1],
+                "kind": "dimos",
+                "startedAt": STARTED_AT,
+                "zenohNamespace": s.zenoh_namespace,
+            },
         }
 
     @app.post(

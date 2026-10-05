@@ -361,7 +361,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified } }` (the binary the server runs; Desktop restarts its own server when that binary has been replaced)"
+            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir, server: { exe, exeModified, kind, startedAt, zenohNamespace } }` (whose server answers, `dimos` or `builtin`, and what it runs; Desktop restarts its built-in server when that binary has been replaced and dimos's own when the checkout's dimos/server/ or dimos.yaml is newer than startedAt, and relays the server's events onto zenoh only when zenohNamespace isn't its own namespace)"
           }
         },
         "summary": "Where dimos keeps its things: the checkout, run registry, log folders, recordings folder",

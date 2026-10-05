@@ -147,11 +147,14 @@ def ignore_version_range() -> bool:
 
 
 def recordings_dir() -> Path:
-    """config.yaml's `recordings.dir`, else where dimos itself records (its RECORDINGS_DIR: the checkout's
-    recordings/, or <state>/dimos/recordings for a library install)."""
+    """config.yaml's `recordings.dir`, else the folder Desktop gives its apps ($DIMOS_RECORDINGS_DIR, set when Desktop
+    starts this server), else where dimos itself records (its RECORDINGS_DIR: the checkout's recordings/, or
+    <state>/dimos/recordings for a library install)."""
     from dimos.constants import RECORDINGS_DIR
 
-    configured = _section(load_desktop_config(), "recordings").get("dir")
+    configured = _section(load_desktop_config(), "recordings").get("dir") or os.environ.get(
+        "DIMOS_RECORDINGS_DIR"
+    )
     return expand(configured) if configured else RECORDINGS_DIR
 
 
