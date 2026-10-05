@@ -21,6 +21,7 @@ re-derived from the registry and the pid on every call, so a restarted server pi
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,7 @@ import threading
 import time
 from typing import Any
 
+from dimos.core.run_registry import is_pid_alive
 from dimos.server import config, diagnose
 
 
@@ -49,28 +51,14 @@ def launch_log() -> Path:
     return config.logs_dir() / "launch.log"
 
 
-def is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def registry_runs() -> list[dict[str, Any]]:
-    """Live runs from dimos's run registry, newest first (runs started from a terminal too)."""
+    """Live runs from dimos's run registry, newest first (runs started from a terminal too), with RegistryRun's fields
+    of each RunEntry."""
     from dimos.core.run_registry import list_runs
+    from dimos.server.models import RegistryRun
 
     runs = [
-        {
-            "run_id": entry.run_id,
-            "pid": entry.pid,
-            "blueprint": entry.blueprint,
-            "started_at": entry.started_at,
-            "log_dir": entry.log_dir,
-        }
+        {key: value for key, value in asdict(entry).items() if key in RegistryRun.model_fields}
         for entry in list_runs(alive_only=True)
     ]
     return sorted(runs, key=lambda run: str(run["run_id"]), reverse=True)
@@ -105,7 +93,7 @@ def current_launch() -> dict[str, Any] | None:
     output = _tail(launch_log(), 200_000)
     if entry:
         phase = "running"
-    elif is_alive(pid):
+    elif is_pid_alive(pid):
         phase = "starting"
     elif record.get("ever_ran"):
         phase = "stopped"
@@ -219,7 +207,7 @@ async def stop(run_id: str | None) -> str:
             except ProcessLookupError:
                 pass
         for _ in range(wait * 4):
-            if not is_alive(pid):
+            if not is_pid_alive(pid):
                 return f"stopped {name} (pid {pid})"
             await asyncio.sleep(0.25)
     raise RunError(f"{name} (pid {pid}) won't stop")

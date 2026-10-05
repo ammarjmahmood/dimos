@@ -64,8 +64,11 @@ def server_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("DIMOS_HOME", str(tmp_path / "home"))
     monkeypatch.delenv(config.RANGE_ENV, raising=False)
     monkeypatch.setattr(config, "server_dir", lambda: tmp_path / "state" / "server")
-    monkeypatch.setattr(logs, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(logs, "LOG_DIR", tmp_path / "state" / "logs")
+    from dimos.core import run_registry
     from dimos.server import runs
+
+    monkeypatch.setattr(run_registry, "REGISTRY_DIR", tmp_path / "state" / "runs")
 
     monkeypatch.setattr(runs, "registry_runs", lambda: [])
     return tmp_path

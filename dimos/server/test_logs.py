@@ -14,7 +14,10 @@
 
 
 from pathlib import Path
+import subprocess
+import sys
 
+from dimos.core.run_registry import RunEntry
 from dimos.server import logs
 
 
@@ -63,3 +66,27 @@ def test_reads_the_newest_run_or_one_by_id(tmp_path: Path, server_home: Path) ->
     }
     limited = logs.read(tmp_path, None, None, 10, logs.Filter(query="NOTHING"))
     assert limited["records"] == []
+
+
+def test_reads_what_dimos_logs(tmp_path: Path, server_home: Path) -> None:
+    """A record written by dimos's own logger, the way `dimos run` sets it up (a run's log folder), reads back."""
+    log_dir = logs.LOG_DIR / "20260103-000000-real"
+    script = (
+        "from dimos.utils.logging_config import set_run_log_dir, setup_logger\n"
+        f"log = setup_logger()\nset_run_log_dir({str(log_dir)!r})\n"
+        "log.warning('stuck', x=1)\nlog.info('fine')\n"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True)
+    page = logs.read(tmp_path / "elsewhere", "latest", None, 10, logs.Filter(min_level="warning"))
+    assert page["runId"] == "20260103-000000-real"
+    [record] = page["records"]
+    assert (record["level"], record["event"], record["extra"]["x"]) == ("warning", "stuck", 1)
+    assert record["timestamp"] and record["logger"] in page["loggers"]
+
+
+def test_a_registered_run_is_read_from_its_log_dir(tmp_path: Path, server_home: Path) -> None:
+    log_dir = tmp_path / "somewhere" / "r9"
+    log_dir.mkdir(parents=True)
+    (log_dir / "main.jsonl").write_text('{"event":"here","level":"info"}\n')
+    RunEntry("r9", 1, "x", "t", str(log_dir)).save()
+    assert logs.read(tmp_path, "r9", None, 10, logs.Filter())["records"][0]["event"] == "here"

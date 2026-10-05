@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dimos.constants import STATE_DIR
+from dimos.constants import LOG_DIR
 
 MAX_READ = 4 * 1024 * 1024
 LEVEL_RANK = {"debug": 10, "warning": 30, "warn": 30, "error": 40, "critical": 50}
@@ -32,8 +32,9 @@ def level_rank(level: str) -> int:
 
 
 def logs_dirs(dimos_dir: Path) -> list[Path]:
-    """A checkout's own logs/, then the library install's."""
-    return [dimos_dir / "logs", STATE_DIR / "logs"]
+    """Where runs log (`<dir>/<run_id>/main.jsonl`): dimos's LOG_DIR, and the served checkout's own when the server
+    runs from another install."""
+    return list(dict.fromkeys([LOG_DIR, dimos_dir / LOG_DIR.name]))
 
 
 def _text(value: Any) -> str:
@@ -103,9 +104,18 @@ def read(
     dimos_dir: Path, run_id: str | None, after: int | None, limit: int, filter: Filter
 ) -> dict[str, Any]:
     """A run's records (`latest` or none: the newest run)."""
+    from dimos.core.run_registry import list_runs
+
     runs = log_runs(dimos_dir)
     if run_id and run_id != "latest":
-        target = next((run for run in runs if run[0] == run_id), None)
+        # the registry knows a run's log folder; older runs are only found in the log folders
+        entry = next((e for e in list_runs(alive_only=False) if e.run_id == run_id), None)
+        registered = Path(entry.log_dir) / "main.jsonl" if entry else None
+        target = (
+            (run_id, registered)
+            if registered and registered.exists()
+            else next((run for run in runs if run[0] == run_id), None)
+        )
     else:
         target = runs[0] if runs else None
     if target is None:

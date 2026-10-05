@@ -208,11 +208,11 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         ),
     )
     async def paths() -> dict[str, Any]:
-        from dimos.constants import STATE_DIR
+        from dimos.core.run_registry import REGISTRY_DIR
 
         return {
             "dimosDir": str(s.dimos_dir),
-            "runsDir": str(STATE_DIR / "runs"),
+            "runsDir": str(REGISTRY_DIR),
             "logsDirs": [str(d) for d in logs.logs_dirs(s.dimos_dir)],
             "recordingsDir": str(config.recordings_dir()),
             "server": {"exe": STARTED_FROM[0], "exeModified": STARTED_FROM[1]},
