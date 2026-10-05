@@ -178,16 +178,16 @@ SUITE: Suite = [
         tags=frozenset({"spatial-relation", "boolean"}),
     ),
     EvalCase(
-        id=f"{SCENE_KEY}_bedroom_path_order",
+        id=f"{SCENE_KEY}_bedroom_farthest_object",
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION
         + "\n\n"
-        + "Order these objects from nearest to farthest by collision-free travel distance from the bedroom doorway facing the hallway, for a robot of radius 0.25 m. A) Grand piano; B) Dining table; C) Treadmill. Return all letters once in order, optionally separated by commas.",
+        + "Which object is farthest by collision-free travel distance from the bedroom doorway facing the hallway, for a robot of radius 0.25 m? A) Grand piano; B) Dining table; C) Treadmill. Return only the letter.",
         # Source Habitat (2.494610,.150866,-1.863723), static navmesh .25/.60 m.
         # .15 m goal grid within 1.5 m of anchors: table 6.812, treadmill 7.173,
-        # piano 16.730 m. Table/treadmill separation is approach-sensitive.
-        grade=_parsed(ranking, lambda value: rank_order("BCA", value)),
-        tags=frozenset({"distance", "ranking"}),
+        # piano 16.730 m. Table/treadmill nearly tie, so only the farthest is asked.
+        grade=_parsed(_LETTER, lambda value: exact("A", value)),
+        tags=frozenset({"distance", "single-choice"}),
     ),
 ]

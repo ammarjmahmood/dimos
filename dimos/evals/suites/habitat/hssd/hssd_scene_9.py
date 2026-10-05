@@ -166,17 +166,17 @@ SUITE: Suite = [
         tags=frozenset({"object-count", "count"}),
     ),
     EvalCase(
-        id=f"{SCENE_KEY}_office_path_order",
+        id=f"{SCENE_KEY}_office_nearest_room",
         environment=_environment(),
         timeout_s=1200,
         inputs=INSTRUCTION
         + "\n\n"
-        + "Rank these rooms by shortest walking distance to enter them from the office doorway facing the hallway, nearest first, for a robot of radius 0.25 m. A) Larger kitchen; B) Dining room; C) Laundry room. Return all letters once in order, optionally separated by commas.",
+        + "Which room has the shortest walking distance to enter from the office doorway facing the hallway, for a robot of radius 0.25 m? A) Larger kitchen; B) Dining room; C) Laundry room. Return only the letter.",
         # Source Habitat (10.973,.177897,-.232), static navmesh .25/.60 m.
         # Nearest sampled points inside region polygons: laundry 6.233,
-        # dining 21.470, larger kitchen 21.595 m. The last two nearly tie;
-        # this is a room-entry convention, not a center-distance ranking.
-        grade=_parsed(ranking, lambda value: rank_order("CBA", value)),
-        tags=frozenset({"distance", "ranking"}),
+        # dining 21.470, larger kitchen 21.595 m. Dining and kitchen nearly tie,
+        # so only the nearest is asked.
+        grade=_parsed(_LETTER, lambda value: exact("C", value)),
+        tags=frozenset({"distance", "single-choice"}),
     ),
 ]
