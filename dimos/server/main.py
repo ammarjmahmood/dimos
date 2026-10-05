@@ -52,11 +52,21 @@ def healthy(socket_path: Path, timeout: float = 2.0) -> bool:
         return False
 
 
-def serve(socket_path: Path, dimos_dir: Path, port: int | None = None) -> None:
+def serve(
+    socket_path: Path,
+    dimos_dir: Path,
+    port: int | None = None,
+    zenoh_namespace: str | None = None,
+    zenoh_connect: str | None = None,
+    zenoh: bool = True,
+) -> None:
     """Runs the server in this process until SIGTERM / Ctrl-C (or POST /dimos/server/stop)."""
     import uvicorn
 
+    from dimos.server import zenoh_events
     from dimos.server.app import create_app, default_state
+
+    namespace = zenoh_events.resolve_namespace(zenoh_namespace) if zenoh else None
 
     if healthy(socket_path):
         raise SystemExit(f"a dimos server is already answering on {socket_path}")
@@ -78,6 +88,15 @@ def serve(socket_path: Path, dimos_dir: Path, port: int | None = None) -> None:
 
     state = default_state(dimos_dir)
     state.exit = exit_now
+    if namespace is not None:
+        try:
+            publisher = zenoh_events.open_publisher(
+                namespace, zenoh_events.resolve_connect(zenoh_connect)
+            )
+            state.bus.sinks.append(publisher)
+            print(f"dimos server events -> zenoh {namespace}/dimos/events/<type>", flush=True)
+        except Exception as error:
+            print(f"dimos server: no zenoh session, events are on SSE only ({error})", flush=True)
     # an open event stream never ends on its own: give up on it after 2 s
     server = uvicorn.Server(
         uvicorn.Config(create_app(state), log_level="warning", timeout_graceful_shutdown=2)
@@ -92,7 +111,14 @@ def serve(socket_path: Path, dimos_dir: Path, port: int | None = None) -> None:
         socket_path.unlink(missing_ok=True)
 
 
-def detach(socket_path: Path, dimos_dir: Path, port: int | None = None) -> None:
+def detach(
+    socket_path: Path,
+    dimos_dir: Path,
+    port: int | None = None,
+    zenoh_namespace: str | None = None,
+    zenoh_connect: str | None = None,
+    zenoh: bool = True,
+) -> None:
     """Starts the server as its own process (its own session, so it outlives whoever started it) and returns once it
     answers. One already answering = nothing to do."""
     if healthy(socket_path):
@@ -110,6 +136,12 @@ def detach(socket_path: Path, dimos_dir: Path, port: int | None = None) -> None:
     ]
     if port is not None:
         command += ["--port", str(port)]
+    if zenoh_namespace is not None:
+        command += ["--zenoh-namespace", zenoh_namespace]
+    if zenoh_connect is not None:
+        command += ["--zenoh-connect", zenoh_connect]
+    if not zenoh:
+        command.append("--no-zenoh")
     with log_file().open("a") as log:
         child = subprocess.Popen(
             command,
@@ -139,10 +171,23 @@ def server(
     detach_: bool = typer.Option(
         False, "--detach", help="start in the background and return once it answers"
     ),
+    zenoh_namespace: str = typer.Option(
+        None,
+        help="Desktop's zenoh namespace; events go on <ns>/dimos/events/<type> "
+        "(default: $DIMOS_ZENOH_NAMESPACE, DIMOS_APP.zenohNamespace, else Desktop's config.yaml)",
+    ),
+    zenoh_connect: str = typer.Option(
+        None,
+        help="zenoh endpoints to dial, comma-separated "
+        "(default: $ZENOH_CONNECT, DIMOS_APP.zenohConnect, else dimos's zenoh_connect)",
+    ),
+    zenoh: bool = typer.Option(True, help="publish events on zenoh (off: SSE only)"),
 ) -> None:
     """Serve the /dimos HTTP API (blueprints, runs, logs, events, cloud uploads) that dimOS Desktop uses."""
     socket_path = socket or default_socket()
-    (detach if detach_ else serve)(socket_path, dimos_dir, port)
+    (detach if detach_ else serve)(
+        socket_path, dimos_dir, port, zenoh_namespace, zenoh_connect, zenoh
+    )
 
 
 def main() -> None:

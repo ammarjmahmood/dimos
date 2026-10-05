@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""/dimos/events: one JSON object per SSE `data:` line. Its types:
+"""The server's events, each a JSON object with a `type`, on zenoh at `<ns>/dimos/events/<type>` (zenoh_events.py)
+and, deprecated for one release, on the SSE stream /dimos/events (one per `data:` line). Its types:
 
 {"type": "launch", "launch": <launch or null>}       the launch's phase changed (and first, on connect)
 {"type": "log", "runId", "record"}                   a warning+ record in the launched run's main.jsonl
@@ -31,17 +32,27 @@ from pathlib import Path
 from typing import Any
 
 from dimos.server import logs, runs
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 KEEP_ALIVE_S = 15.0
 
 
 class Bus:
-    """Fan-out to every open event stream; a stream that can't keep up loses events, never blocks the server."""
+    """Fan-out to every sink (the zenoh publisher) and open event stream; a stream that can't keep up loses events,
+    never blocks the server."""
 
     def __init__(self) -> None:
         self.queues: set[asyncio.Queue[dict[str, Any]]] = set()
+        self.sinks: list[Callable[[dict[str, Any]], None]] = []
 
     def send(self, event: dict[str, Any]) -> None:
+        for sink in self.sinks:
+            try:
+                sink(event)
+            except Exception:
+                logger.exception("an event sink failed", event_type=event.get("type"))
         for queue in list(self.queues):
             try:
                 queue.put_nowait(event)

@@ -259,12 +259,15 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         filter = logs.Filter(query=q or None, min_level=level or None)
         return await asyncio.to_thread(logs.read, s.dimos_dir, run_id, after, limit or 1000, filter)
 
-    @app.get("/dimos/events")
+    @app.get("/dimos/events", deprecated=True)
     async def event_stream() -> StreamingResponse:
-        """Live events (SSE): launch phases, warning+ log records, uploads, the cloud login"""
+        """Live events (SSE): launch phases, warning+ log records, uploads, the cloud login. Deprecated and internal,
+        kept for one release: the same events are on zenoh at `<ns>/dimos/events/<type>`"""
         stream = s.bus.stream(lambda: {"type": "launch", "launch": runs.current_launch()})
         return StreamingResponse(
-            stream, media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
+            stream,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Deprecation": "true"},
         )
 
     @app.post("/dimos/server/stop")
