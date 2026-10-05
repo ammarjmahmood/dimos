@@ -104,7 +104,19 @@ def test_hold_to_talk_ships_a_decodable_recording(
     mic.hover()
     fake_mic_page.mouse.down()
     expect(mic).to_have_attribute("data-state", "recording", timeout=15_000)
-    fake_mic_page.wait_for_timeout(1_500)
+    # Hold until the bytes already received decode to over a second of audio (at least 1.5 s): "recording" is when
+    # the page started its MediaRecorder, and on a loaded runner the engine's capture can begin well after that (a
+    # 1.5 s hold once gave Firefox 0.45 s of audio), so the hold waits for the audio itself, not the clock.
+    held = time.monotonic()
+    deadline = held + 30.0
+    while time.monotonic() < deadline:
+        fake_mic_page.wait_for_timeout(250)
+        if time.monotonic() - held < 1.5:
+            continue
+        received = b"".join(chunk.data for chunk in list(chunks))
+        so_far = decode_audio_bytes(received) if len(received) > 1_000 else None
+        if so_far is not None and so_far.data.shape[0] > 16_000:
+            break
     fake_mic_page.mouse.up()
     expect(mic).to_have_attribute("data-state", "idle", timeout=30_000)
 
