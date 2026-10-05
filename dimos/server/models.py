@@ -220,6 +220,129 @@ class Catalog(ApiModel):
     )
 
 
+# robots (dimos/robot/robots.json, resolved)
+
+
+class RobotTag(ApiModel):
+    label: str = Field(description="What to show", examples=["Drive"])
+    description: str = Field(description="What it means, in a sentence")
+
+
+class RobotGroup(ApiModel):
+    name: str = Field(description="What to show for the robots in it", examples=["Arms"])
+
+
+class RecommendedApp(ApiModel):
+    """The app to install for a robot; Desktop's App Store installs it from `url`."""
+
+    id: str = Field(description="Its install name (its repo's name)", examples=["dim-go2-dash"])
+    title: str = Field(description="Its name", examples=["Go2 Ctrl"])
+    url: str = Field(
+        description="Its git repository", examples=["https://github.com/jeff-hykin/dim-go2-dash"]
+    )
+    ref: str | None = Field(
+        default=None, description="The branch or tag to install", examples=["main"]
+    )
+
+
+class RobotArg(ApiModel):
+    """An essential arg: a GlobalConfig field (`--<key> value` before `run`) or a module's config field
+    (`--<key> value` after the blueprint name)."""
+
+    id: str = Field(description="Its id in robots.json's `args`", examples=["robot_ip", "spot_ip"])
+    key: str = Field(
+        description="The field, as dimos's options name it",
+        examples=["robot_ip", "spothighlevel.ip"],
+    )
+    scope: Literal["global", "module"] = Field(description="GlobalConfig, or a module's config")
+    global_: str | None = Field(
+        default=None, alias="global", description="The GlobalConfig field (scope global)"
+    )
+    module: str | None = Field(
+        default=None,
+        description="The module's name in the blueprint (scope module)",
+        examples=["spothighlevel"],
+    )
+    field: str | None = Field(
+        default=None, description="The module's config field (scope module)", examples=["ip"]
+    )
+    label: str = Field(description="What to call it", examples=["Robot IP"])
+    kind: Literal["text", "number", "bool", "recording"] = Field(
+        description="text, number, bool, or recording (pick a dimos recording)"
+    )
+    placeholder: str | None = Field(
+        default=None, description="An example value", examples=["192.168.12.1"]
+    )
+    default: JsonValue = Field(default=None, description="The value it starts with")
+    required: bool = Field(description="The blueprint won't run without it")
+    streams: list[list[str]] | None = Field(
+        default=None,
+        description="recording: the streams it must have, each a list of acceptable names",
+        examples=[[["go2_lidar", "lidar"], ["color_image"]]],
+    )
+
+
+class RobotMode(ApiModel):
+    set: dict[str, JsonValue] = Field(
+        description="GlobalConfig values this mode sets", examples=[{"simulation": "mujoco"}]
+    )
+    args: list[RobotArg] = Field(description="What a person fills in, in order")
+
+
+class RobotBlueprint(ApiModel):
+    title: str = Field(description="A short name", examples=["Go2 basic"])
+    description: str = Field(description="What it does and what it needs, plainly")
+    tags: list[str] = Field(
+        description="Keys of `tags`, including replay and sim when it has those modes",
+        examples=[["drive", "map", "replay", "sim"]],
+    )
+    modes: dict[str, RobotMode] = Field(
+        description="The modes it runs in (robot, replay, sim), in order"
+    )
+    starter: int | None = Field(
+        description='Its rank among the "start here" picks (1 first), or null'
+    )
+    hidden: bool = Field(
+        description="A test, benchmark, mock or building block: list it only on request"
+    )
+    recommended_app: RecommendedApp | None = Field(description="The app to install for it, or null")
+    robot: str = Field(description="Its robot's id", examples=["go2"])
+    registered: bool = Field(description="dimos's blueprint registry has it")
+
+
+class Robot(ApiModel):
+    name: str = Field(description="Its name", examples=["Unitree Go2"])
+    description: str = Field(description="What it is, in a sentence")
+    group: str | None = Field(
+        description="A key of `groups` it is shown under, or null", examples=["arms"]
+    )
+    dirs: list[str] = Field(
+        description="Its code directories in the checkout", examples=[["dimos/robot/unitree/go2"]]
+    )
+    recommended_app: RecommendedApp | None = Field(description="The app to install for it, or null")
+    blueprints: dict[str, RobotBlueprint] = Field(description="Its blueprints by name, in order")
+
+
+class Robots(ApiModel):
+    """dimos/robot/robots.json with its defaults applied."""
+
+    about: str | None = Field(default=None, description="What the file is")
+    tags: dict[str, RobotTag] = Field(description="The tag vocabulary, in display order")
+    modes: dict[str, RobotTag] = Field(
+        description="The modes (robot, replay, sim), in display order"
+    )
+    groups: dict[str, RobotGroup] = Field(description="Robots shown together under one name")
+    robots: dict[str, Robot] = Field(description="Every robot by id, in display order")
+    excluded: dict[str, str] = Field(
+        description="Directories under dimos/robot that aren't robots, and why",
+        examples=[{"dimos/robot/assets": "robot model assets"}],
+    )
+    unlisted: list[str] = Field(
+        description="Registered blueprints no robot lists (outside the robots' directories)",
+        examples=[["demo-new-thing"]],
+    )
+
+
 # global config
 
 

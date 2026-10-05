@@ -363,3 +363,36 @@ def test_server_stop(client: TestClient, state: ServerState) -> None:
             break
         time.sleep(0.05)
     assert stopped
+
+
+def test_robots(client: TestClient, checkout: Path) -> None:
+    # the fake checkout has no robots.json: the server falls back to its own
+    answer = client.get("/dimos/robots").json()
+    basic = answer["robots"]["go2"]["blueprints"]["unitree-go2-basic"]
+    assert basic["robot"] == "go2" and basic["registered"] is True
+    assert list(basic["modes"]) == ["robot", "replay", "sim"]
+    robot_ip = basic["modes"]["robot"]["args"][0]
+    assert (robot_ip["key"], robot_ip["scope"], robot_ip["global"]) == (
+        "robot_ip",
+        "global",
+        "robot_ip",
+    )
+    assert "replay" in basic["tags"] and "sim" in basic["tags"]
+    assert basic["recommended_app"]["id"] == "dim-go2-dash"
+    spot_ip = answer["robots"]["spot"]["blueprints"]["spot"]["modes"]["robot"]["args"][0]
+    assert (spot_ip["key"], spot_ip["scope"], spot_ip["module"]) == (
+        "spothighlevel.ip",
+        "module",
+        "spothighlevel",
+    )
+    assert "global" not in spot_ip
+    assert answer["unlisted"] == []
+    # the checkout's own file wins
+    own = checkout / "dimos" / "robot" / "robots.json"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    doc = json.loads((Path(__file__).parents[1] / "robot" / "robots.json").read_text())
+    doc["robots"] = {"go2": {**doc["robots"]["go2"], "name": "My Go2"}}
+    own.write_text(json.dumps(doc))
+    answer = client.get("/dimos/robots").json()
+    assert list(answer["robots"]) == ["go2"] and answer["robots"]["go2"]["name"] == "My Go2"
+    assert "spot" in answer["unlisted"]

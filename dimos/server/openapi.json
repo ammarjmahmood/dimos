@@ -1449,6 +1449,58 @@
         "title": "Port",
         "type": "object"
       },
+      "RecommendedApp": {
+        "additionalProperties": true,
+        "description": "The app to install for a robot; Desktop's App Store installs it from `url`.",
+        "properties": {
+          "id": {
+            "description": "Its install name (its repo's name)",
+            "examples": [
+              "dim-go2-dash"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The branch or tag to install",
+            "examples": [
+              "main"
+            ],
+            "title": "Ref"
+          },
+          "title": {
+            "description": "Its name",
+            "examples": [
+              "Go2 Ctrl"
+            ],
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "description": "Its git repository",
+            "examples": [
+              "https://github.com/jeff-hykin/dim-go2-dash"
+            ],
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "url"
+        ],
+        "title": "RecommendedApp",
+        "type": "object"
+      },
       "RegistryRun": {
         "additionalProperties": true,
         "description": "A live run in dimos's run registry (also runs started from a terminal).",
@@ -1496,6 +1548,494 @@
           "log_dir"
         ],
         "title": "RegistryRun",
+        "type": "object"
+      },
+      "Robot": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprints": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RobotBlueprint"
+            },
+            "description": "Its blueprints by name, in order",
+            "title": "Blueprints",
+            "type": "object"
+          },
+          "description": {
+            "description": "What it is, in a sentence",
+            "title": "Description",
+            "type": "string"
+          },
+          "dirs": {
+            "description": "Its code directories in the checkout",
+            "examples": [
+              [
+                "dimos/robot/unitree/go2"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dirs",
+            "type": "array"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A key of `groups` it is shown under, or null",
+            "examples": [
+              "arms"
+            ],
+            "title": "Group"
+          },
+          "name": {
+            "description": "Its name",
+            "examples": [
+              "Unitree Go2"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "recommended_app": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecommendedApp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The app to install for it, or null"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "group",
+          "dirs",
+          "recommended_app",
+          "blueprints"
+        ],
+        "title": "Robot",
+        "type": "object"
+      },
+      "RobotArg": {
+        "additionalProperties": true,
+        "description": "An essential arg: a GlobalConfig field (`--<key> value` before `run`) or a module's config field\n(`--<key> value` after the blueprint name).",
+        "properties": {
+          "default": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "The value it starts with"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The module's config field (scope module)",
+            "examples": [
+              "ip"
+            ],
+            "title": "Field"
+          },
+          "global": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GlobalConfig field (scope global)",
+            "title": "Global"
+          },
+          "id": {
+            "description": "Its id in robots.json's `args`",
+            "examples": [
+              "robot_ip",
+              "spot_ip"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "description": "The field, as dimos's options name it",
+            "examples": [
+              "robot_ip",
+              "spothighlevel.ip"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "description": "text, number, bool, or recording (pick a dimos recording)",
+            "enum": [
+              "text",
+              "number",
+              "bool",
+              "recording"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "description": "What to call it",
+            "examples": [
+              "Robot IP"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "module": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The module's name in the blueprint (scope module)",
+            "examples": [
+              "spothighlevel"
+            ],
+            "title": "Module"
+          },
+          "placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An example value",
+            "examples": [
+              "192.168.12.1"
+            ],
+            "title": "Placeholder"
+          },
+          "required": {
+            "description": "The blueprint won't run without it",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "GlobalConfig, or a module's config",
+            "enum": [
+              "global",
+              "module"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "streams": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "recording: the streams it must have, each a list of acceptable names",
+            "examples": [
+              [
+                [
+                  "go2_lidar",
+                  "lidar"
+                ],
+                [
+                  "color_image"
+                ]
+              ]
+            ],
+            "title": "Streams"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "scope",
+          "label",
+          "kind",
+          "required"
+        ],
+        "title": "RobotArg",
+        "type": "object"
+      },
+      "RobotBlueprint": {
+        "additionalProperties": true,
+        "properties": {
+          "description": {
+            "description": "What it does and what it needs, plainly",
+            "title": "Description",
+            "type": "string"
+          },
+          "hidden": {
+            "description": "A test, benchmark, mock or building block: list it only on request",
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "modes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RobotMode"
+            },
+            "description": "The modes it runs in (robot, replay, sim), in order",
+            "title": "Modes",
+            "type": "object"
+          },
+          "recommended_app": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecommendedApp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The app to install for it, or null"
+          },
+          "registered": {
+            "description": "dimos's blueprint registry has it",
+            "title": "Registered",
+            "type": "boolean"
+          },
+          "robot": {
+            "description": "Its robot's id",
+            "examples": [
+              "go2"
+            ],
+            "title": "Robot",
+            "type": "string"
+          },
+          "starter": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its rank among the \"start here\" picks (1 first), or null",
+            "title": "Starter"
+          },
+          "tags": {
+            "description": "Keys of `tags`, including replay and sim when it has those modes",
+            "examples": [
+              [
+                "drive",
+                "map",
+                "replay",
+                "sim"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "title": {
+            "description": "A short name",
+            "examples": [
+              "Go2 basic"
+            ],
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "tags",
+          "modes",
+          "starter",
+          "hidden",
+          "recommended_app",
+          "robot",
+          "registered"
+        ],
+        "title": "RobotBlueprint",
+        "type": "object"
+      },
+      "RobotGroup": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "description": "What to show for the robots in it",
+            "examples": [
+              "Arms"
+            ],
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RobotGroup",
+        "type": "object"
+      },
+      "RobotMode": {
+        "additionalProperties": true,
+        "properties": {
+          "args": {
+            "description": "What a person fills in, in order",
+            "items": {
+              "$ref": "#/components/schemas/RobotArg"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "set": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "GlobalConfig values this mode sets",
+            "examples": [
+              {
+                "simulation": "mujoco"
+              }
+            ],
+            "title": "Set",
+            "type": "object"
+          }
+        },
+        "required": [
+          "set",
+          "args"
+        ],
+        "title": "RobotMode",
+        "type": "object"
+      },
+      "RobotTag": {
+        "additionalProperties": true,
+        "properties": {
+          "description": {
+            "description": "What it means, in a sentence",
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "description": "What to show",
+            "examples": [
+              "Drive"
+            ],
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "description"
+        ],
+        "title": "RobotTag",
+        "type": "object"
+      },
+      "Robots": {
+        "additionalProperties": true,
+        "description": "dimos/robot/robots.json with its defaults applied.",
+        "properties": {
+          "about": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the file is",
+            "title": "About"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Directories under dimos/robot that aren't robots, and why",
+            "examples": [
+              {
+                "dimos/robot/assets": "robot model assets"
+              }
+            ],
+            "title": "Excluded",
+            "type": "object"
+          },
+          "groups": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RobotGroup"
+            },
+            "description": "Robots shown together under one name",
+            "title": "Groups",
+            "type": "object"
+          },
+          "modes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RobotTag"
+            },
+            "description": "The modes (robot, replay, sim), in display order",
+            "title": "Modes",
+            "type": "object"
+          },
+          "robots": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Robot"
+            },
+            "description": "Every robot by id, in display order",
+            "title": "Robots",
+            "type": "object"
+          },
+          "tags": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RobotTag"
+            },
+            "description": "The tag vocabulary, in display order",
+            "title": "Tags",
+            "type": "object"
+          },
+          "unlisted": {
+            "description": "Registered blueprints no robot lists (outside the robots' directories)",
+            "examples": [
+              [
+                "demo-new-thing"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Unlisted",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tags",
+          "modes",
+          "groups",
+          "robots",
+          "excluded",
+          "unlisted"
+        ],
+        "title": "Robots",
         "type": "object"
       },
       "RunList": {
@@ -2209,7 +2749,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2884,6 +3424,40 @@
           "server"
         ],
         "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/robots": {
+      "get": {
+        "description": "The checkout's dimos/robot/robots.json (dimos.yaml's `robots:`, also readable per tag without a server) with its defaults applied: each blueprint's modes (robot, replay, sim) with the GlobalConfig values each sets and its args (`key`, `scope`: global args are `--key value` before `run`, module args after the blueprint name), its tags including replay and sim from its modes, its robot and recommended app; `registered` and `unlisted` compare it with the blueprint registry. CI keeps the file in step with the code (dimos/robot/robots.py). Read from disk on every call; no side effects.",
+        "operationId": "get_dimos_robots",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Robots"
+                }
+              }
+            },
+            "description": "`{ about, tags, modes, groups, robots: { [id]: { name, description, group, dirs, recommended_app, blueprints: { [name]: { title, description, tags, modes, starter, hidden, recommended_app, robot, registered } } } }, excluded, unlisted }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential args, the app to install, starter picks, hidden ones",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": true,
         "x-family": "dimos"
       }
     },
