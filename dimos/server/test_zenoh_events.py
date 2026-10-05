@@ -24,6 +24,7 @@ from dimos.core.global_config import global_config
 from dimos.protocol.service.zenohservice import ZenohSessionPool
 from dimos.server import zenoh_events
 from dimos.server.events import Bus
+from dimos.server.uploads import Queue
 
 
 @pytest.fixture
@@ -92,13 +93,31 @@ def test_every_bus_event_reaches_its_key() -> None:
     bus.sinks.append(
         zenoh_events.Publisher("ns/a", lambda key, payload: sent.append((key, json.loads(payload))))
     )
+    record = {
+        "timestamp": "t",
+        "level": "error",
+        "logger": "nav",
+        "event": "e",
+        "extra": {},
+        "raw": "{}",
+    }
+    login = {
+        "state": "idle",
+        "url": None,
+        "urlComplete": None,
+        "code": None,
+        "expiresAt": None,
+        "email": None,
+        "error": None,
+    }
+    upload, _ = Queue().enqueue(Path("/r/a.mcap"), 4, None, None)
     events = [
         {"type": "launch", "launch": None},
-        {"type": "log", "runId": "r", "record": {"level": "error"}},
-        {"type": "upload", "upload": {"id": "u1"}},
-        {"type": "uploads", "waitingForLogin": False, "cleared": 1},
+        {"type": "log", "runId": "r", "record": record},
+        {"type": "upload", "upload": upload},
+        {"type": "uploads", "waitingForLogin": False, "cleared": True},
         {"type": "upload-removed", "id": "u1"},
-        {"type": "cloud-login", "login": {"state": "idle"}},
+        {"type": "cloud-login", "login": login},
     ]
     for event in events:
         bus.send(event)

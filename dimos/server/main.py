@@ -182,8 +182,18 @@ def server(
         "(default: $ZENOH_CONNECT, DIMOS_APP.zenohConnect, else dimos's zenoh_connect)",
     ),
     zenoh: bool = typer.Option(True, help="publish events on zenoh (off: SSE only)"),
+    write_openapi: bool = typer.Option(
+        False,
+        "--write-openapi",
+        help="write the API's OpenAPI document to dimos/server/openapi.json (dimos.yaml's api.openapi) and exit",
+    ),
 ) -> None:
     """Serve the /dimos HTTP API (blueprints, runs, logs, events, cloud uploads) that dimOS Desktop uses."""
+    if write_openapi:
+        from dimos.server import openapi
+
+        print(f"wrote {openapi.write()}")
+        return
     socket_path = socket or default_socket()
     (detach if detach_ else serve)(
         socket_path, dimos_dir, port, zenoh_namespace, zenoh_connect, zenoh

@@ -20,6 +20,11 @@ install: |
   fi
   bash "$script" --mode dev --branch "$REF" --project-dir "$DIMOS_DIR" --skip-tests ${NON_INTERACTIVE:+--non-interactive}
   "$DIMOS_DIR/.venv/bin/python" -c "import dimos" && echo "dimos is installed in $DIMOS_DIR"
+# The /dimos HTTP API the dimos server serves: its semver (a breaking change is a major bump) and its OpenAPI document,
+# which Desktop can read per tag without running anything. Regenerate it with `python -m dimos.server --write-openapi`.
+api:
+  version: "1.0.0"
+  openapi: dimos/server/openapi.json
 # The dimos server (blueprints, runs, logs, events, global config, cloud uploads at /dimos/): dimos/server/, in
 # Python. Before it, Desktop's Rust served the same API: "$DESKTOP_BIN" dimos-server --detach --dimos-dir ... --socket ...
 # env: DESKTOP_BIN, DIMOS_DIR, DIMOS_SERVER_SOCKET

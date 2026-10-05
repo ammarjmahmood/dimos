@@ -34,7 +34,11 @@ from dimos.server import config
 
 
 class RunError(Exception):
-    """A launch or stop that can't happen (a 400 / 500 with a readable message)."""
+    """A launch or stop that can't happen (a 500 with a readable message)."""
+
+
+class StillRunningError(RunError):
+    """A launch while the last one is still starting or running (a 400)."""
 
 
 def launch_file() -> Path:
@@ -133,7 +137,9 @@ def start(dimos_dir: Path, blueprint: str, global_flags: list[str]) -> dict[str,
     post-fork build segfaults inside CoreFoundation)."""
     previous = current_launch()
     if previous and previous["phase"] in ("starting", "running"):
-        raise RunError(f"{previous['blueprint']} is still {previous['phase']}; stop it first")
+        raise StillRunningError(
+            f"{previous['blueprint']} is still {previous['phase']}; stop it first"
+        )
     program = config.dimos_bin(dimos_dir)
     if not program.exists():
         raise RunError(f"no dimos at {dimos_dir} (no {program})")

@@ -1,0 +1,3387 @@
+{
+  "components": {
+    "schemas": {
+      "Account": {
+        "additionalProperties": true,
+        "properties": {
+          "cloudUrl": {
+            "description": "The Dimensional cloud asked",
+            "examples": [
+              "https://api.dimensional.org"
+            ],
+            "title": "Cloudurl",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who it belongs to",
+            "examples": [
+              "me@example.com"
+            ],
+            "title": "Email"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it couldn't be checked, or that the key was revoked",
+            "examples": [
+              "The saved login was revoked or is invalid: log in again."
+            ],
+            "title": "Error"
+          },
+          "loggedIn": {
+            "description": "A cloud key is stored (or in the environment) and wasn't refused",
+            "title": "Loggedin",
+            "type": "boolean"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it may do, per the cloud",
+            "title": "Scopes"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "env",
+                  "stored"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "env: DIMOS_API_KEY; stored: `dimos login`'s saved key; null: none",
+            "title": "Source"
+          }
+        },
+        "required": [
+          "loggedIn",
+          "email",
+          "scopes",
+          "source",
+          "cloudUrl",
+          "error"
+        ],
+        "title": "Account",
+        "type": "object"
+      },
+      "Blueprint": {
+        "additionalProperties": true,
+        "properties": {
+          "modules": {
+            "description": "Its modules, in blueprint order",
+            "items": {
+              "$ref": "#/components/schemas/BlueprintModule"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "name": {
+            "description": "The blueprint",
+            "examples": [
+              "unitree-go2-basic"
+            ],
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "modules"
+        ],
+        "title": "Blueprint",
+        "type": "object"
+      },
+      "BlueprintConfig": {
+        "additionalProperties": true,
+        "properties": {
+          "modules": {
+            "description": "Each module's configurable args",
+            "items": {
+              "$ref": "#/components/schemas/ModuleConfig"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "name": {
+            "description": "The blueprint",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "modules"
+        ],
+        "title": "BlueprintConfig",
+        "type": "object"
+      },
+      "BlueprintList": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprints": {
+            "description": "Built-in blueprints (sorted, without demo-*), then external ones",
+            "items": {
+              "$ref": "#/components/schemas/BlueprintName"
+            },
+            "title": "Blueprints",
+            "type": "array"
+          }
+        },
+        "required": [
+          "blueprints"
+        ],
+        "title": "BlueprintList",
+        "type": "object"
+      },
+      "BlueprintModule": {
+        "additionalProperties": true,
+        "properties": {
+          "class": {
+            "description": "Its Python class",
+            "examples": [
+              "dimos.hardware.camera.CameraModule"
+            ],
+            "title": "Class",
+            "type": "string"
+          },
+          "name": {
+            "description": "The module's name in the blueprint",
+            "examples": [
+              "camera"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "streams": {
+            "description": "Its streams",
+            "items": {
+              "$ref": "#/components/schemas/Stream"
+            },
+            "title": "Streams",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "class",
+          "streams"
+        ],
+        "title": "BlueprintModule",
+        "type": "object"
+      },
+      "BlueprintName": {
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "description": "builtin: in dimos itself; external: from an installed package's entry points",
+            "enum": [
+              "builtin",
+              "external"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name `dimos run` takes",
+            "examples": [
+              "unitree-go2-basic"
+            ],
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "BlueprintName",
+        "type": "object"
+      },
+      "Catalog": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprints": {
+            "description": "Every built-in blueprint",
+            "items": {
+              "$ref": "#/components/schemas/CatalogBlueprint"
+            },
+            "title": "Blueprints",
+            "type": "array"
+          },
+          "errors": {
+            "description": "What couldn't be imported (at most 50)",
+            "examples": [
+              [
+                "blueprint g1-sim: ImportError: no mujoco"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "modules": {
+            "description": "Every module",
+            "items": {
+              "$ref": "#/components/schemas/CatalogModule"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "skills": {
+            "description": "Every skill, on every module",
+            "items": {
+              "$ref": "#/components/schemas/CatalogSkill"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "blueprints",
+          "modules",
+          "skills",
+          "errors"
+        ],
+        "title": "Catalog",
+        "type": "object"
+      },
+      "CatalogBlueprint": {
+        "additionalProperties": true,
+        "properties": {
+          "modules": {
+            "description": "Its modules' catalog names",
+            "items": {
+              "type": "string"
+            },
+            "title": "Modules",
+            "type": "array"
+          },
+          "name": {
+            "description": "The blueprint",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "description": "Where it's defined, `module:attribute`",
+            "examples": [
+              "dimos.robot.unitree.go2.blueprints.basic:unitree_go2"
+            ],
+            "title": "Ref",
+            "type": "string"
+          },
+          "robot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The robot folder it's under (null: none)",
+            "examples": [
+              "go2"
+            ],
+            "title": "Robot"
+          }
+        },
+        "required": [
+          "name",
+          "ref",
+          "robot",
+          "modules"
+        ],
+        "title": "CatalogBlueprint",
+        "type": "object"
+      },
+      "CatalogModule": {
+        "additionalProperties": true,
+        "properties": {
+          "class": {
+            "description": "Its Python class, `module.QualName`",
+            "title": "Class",
+            "type": "string"
+          },
+          "doc": {
+            "description": "Its docstring's first paragraph (at most 300 characters)",
+            "title": "Doc",
+            "type": "string"
+          },
+          "inputs": {
+            "description": "Streams it reads",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "name": {
+            "description": "The module's catalog name",
+            "examples": [
+              "CameraModule"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "outputs": {
+            "description": "Streams it publishes",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            },
+            "title": "Outputs",
+            "type": "array"
+          },
+          "robots": {
+            "description": "Robots whose blueprints use it",
+            "items": {
+              "type": "string"
+            },
+            "title": "Robots",
+            "type": "array"
+          },
+          "skills": {
+            "description": "Its skills' names",
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "class",
+          "doc",
+          "robots",
+          "inputs",
+          "outputs",
+          "skills"
+        ],
+        "title": "CatalogModule",
+        "type": "object"
+      },
+      "CatalogSkill": {
+        "additionalProperties": true,
+        "properties": {
+          "doc": {
+            "description": "Its docstring's first paragraph",
+            "title": "Doc",
+            "type": "string"
+          },
+          "module": {
+            "description": "The module it's on",
+            "title": "Module",
+            "type": "string"
+          },
+          "name": {
+            "description": "The skill",
+            "examples": [
+              "move"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "description": "Its parameters",
+            "items": {
+              "$ref": "#/components/schemas/SkillParam"
+            },
+            "title": "Params",
+            "type": "array"
+          },
+          "robots": {
+            "description": "Robots whose blueprints have that module",
+            "items": {
+              "type": "string"
+            },
+            "title": "Robots",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "doc",
+          "params",
+          "module",
+          "robots"
+        ],
+        "title": "CatalogSkill",
+        "type": "object"
+      },
+      "CloudLoginEvent": {
+        "additionalProperties": true,
+        "description": "The device login's state changed",
+        "properties": {
+          "login": {
+            "$ref": "#/components/schemas/Login",
+            "description": "The login now"
+          },
+          "type": {
+            "const": "cloud-login",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "login"
+        ],
+        "title": "CloudLoginEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/cloud-login"
+      },
+      "ConfigArg": {
+        "additionalProperties": true,
+        "description": "One field of a module's pydantic `config` model.",
+        "properties": {
+          "base": {
+            "description": "Inherited from dimos's ModuleConfig (every module has it)",
+            "title": "Base",
+            "type": "boolean"
+          },
+          "choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only for an Enum or Literal: the values it takes",
+            "examples": [
+              [
+                "webrtc",
+                "ros"
+              ]
+            ],
+            "title": "Choices"
+          },
+          "default": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Its default (null when required)",
+            "examples": [
+              null
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The field's description, if it has one",
+            "title": "Description"
+          },
+          "name": {
+            "description": "The field",
+            "examples": [
+              "robot_ip"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "description": "It has no default",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its annotation",
+            "examples": [
+              "str | None"
+            ],
+            "title": "Type"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Only when the blueprint sets it: the value it sets"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "default",
+          "description",
+          "required",
+          "base"
+        ],
+        "title": "ConfigArg",
+        "type": "object"
+      },
+      "DimosEvent": {
+        "description": "Any of the server's events; `type` says which, and is the last chunk of its zenoh key",
+        "discriminator": {
+          "mapping": {
+            "cloud-login": "#/components/schemas/CloudLoginEvent",
+            "launch": "#/components/schemas/LaunchEvent",
+            "log": "#/components/schemas/LogEvent",
+            "upload": "#/components/schemas/UploadEvent",
+            "upload-removed": "#/components/schemas/UploadRemovedEvent",
+            "uploads": "#/components/schemas/UploadsEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LaunchEvent"
+          },
+          {
+            "$ref": "#/components/schemas/LogEvent"
+          },
+          {
+            "$ref": "#/components/schemas/UploadEvent"
+          },
+          {
+            "$ref": "#/components/schemas/UploadsEvent"
+          },
+          {
+            "$ref": "#/components/schemas/UploadRemovedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CloudLoginEvent"
+          }
+        ],
+        "title": "DimosEvent"
+      },
+      "ErrorResponse": {
+        "additionalProperties": true,
+        "description": "Every error answer (4xx and 5xx).",
+        "properties": {
+          "error": {
+            "description": "What went wrong, in words a person can act on",
+            "examples": [
+              "no upload u7"
+            ],
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "GlobalConfig": {
+        "additionalProperties": true,
+        "properties": {
+          "defaults": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Each field's default (fields whose default is computed are left out)",
+            "examples": [
+              {
+                "n_workers": 2,
+                "simulation": false
+              }
+            ],
+            "title": "Defaults",
+            "type": "object"
+          },
+          "overrides": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Desktop's overrides (config.yaml `dimos.global_config`): `--key value` on every launch",
+            "examples": [
+              {
+                "robot_ip": "192.168.12.1"
+              }
+            ],
+            "title": "Overrides",
+            "type": "object"
+          },
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "dimos's GlobalConfig as a JSON Schema (draft 2020-12)",
+            "title": "Schema",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema",
+          "defaults",
+          "overrides"
+        ],
+        "title": "GlobalConfig",
+        "type": "object"
+      },
+      "GlobalConfigUpdate": {
+        "additionalProperties": true,
+        "properties": {
+          "overrides": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "The new overrides, {key: value}, replacing the old ones; a null value removes that key. Keys are letters, digits and `_`",
+            "examples": [
+              {
+                "robot_ip": "192.168.12.1"
+              }
+            ],
+            "title": "Overrides",
+            "type": "object"
+          }
+        },
+        "required": [
+          "overrides"
+        ],
+        "title": "GlobalConfigUpdate",
+        "type": "object"
+      },
+      "Info": {
+        "additionalProperties": true,
+        "description": "The dimos checkout this server launches runs from.",
+        "properties": {
+          "dir": {
+            "description": "The checkout's folder",
+            "examples": [
+              "/home/me/dimos"
+            ],
+            "title": "Dir",
+            "type": "string"
+          },
+          "found": {
+            "description": "A dimos checkout (pyproject.toml naming dimos) is there",
+            "title": "Found",
+            "type": "boolean"
+          },
+          "inRange": {
+            "description": "`version` is inside `range` (a launch is refused when not)",
+            "title": "Inrange",
+            "type": "boolean"
+          },
+          "installed": {
+            "description": "Its `.venv/bin/dimos` exists, so it can run blueprints",
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "range": {
+            "description": "The dimos versions Desktop supports ($DESKTOP_DIMOS_RANGE); empty = any",
+            "examples": [
+              ">=0.0.14b1 <0.1"
+            ],
+            "title": "Range",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its pyproject version (null: none found)",
+            "examples": [
+              "0.0.14"
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "dir",
+          "found",
+          "installed",
+          "version",
+          "range",
+          "inRange"
+        ],
+        "title": "Info",
+        "type": "object"
+      },
+      "JsonValue": {},
+      "Launch": {
+        "additionalProperties": true,
+        "description": "The last launch this server started; its phase is worked out from disk on every call.",
+        "properties": {
+          "blueprint": {
+            "description": "What was launched",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Blueprint",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When failed: the output's first `Error: ` line, else its last line",
+            "examples": [
+              "Error: no blueprint named unitree-go3"
+            ],
+            "title": "Error"
+          },
+          "logDir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its log folder, once running",
+            "title": "Logdir"
+          },
+          "output": {
+            "description": "The end of its output (at most 200 kB), starting with the command line",
+            "title": "Output",
+            "type": "string"
+          },
+          "phase": {
+            "description": "starting: alive, not registered yet; running: in dimos's run registry (every module built); stopped: ran and is gone; failed: exited before running",
+            "enum": [
+              "starting",
+              "running",
+              "stopped",
+              "failed"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "pid": {
+            "description": "The `dimos run` process (its own process group)",
+            "examples": [
+              41233
+            ],
+            "title": "Pid",
+            "type": "integer"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its registry run id, once running",
+            "title": "Runid"
+          },
+          "startedAt": {
+            "description": "When it was launched (ISO 8601, UTC)",
+            "examples": [
+              "2026-01-01T12:00:00Z"
+            ],
+            "title": "Startedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "blueprint",
+          "phase",
+          "startedAt",
+          "pid",
+          "output",
+          "runId",
+          "logDir",
+          "error"
+        ],
+        "title": "Launch",
+        "type": "object"
+      },
+      "LaunchEvent": {
+        "additionalProperties": true,
+        "description": "The launch's (blueprint, phase, runId) changed; also first on every SSE connect",
+        "properties": {
+          "launch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Launch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The launch now (null: none)"
+          },
+          "type": {
+            "const": "launch",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "launch"
+        ],
+        "title": "LaunchEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/launch"
+      },
+      "LaunchRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "blueprint": {
+            "description": "blueprint name",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Blueprint",
+            "type": "string"
+          },
+          "overrides": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "GlobalConfig overrides for this launch, e.g. {\"simulation\": \"mujoco\"}; they win over Desktop's saved ones",
+            "examples": [
+              {
+                "simulation": "mujoco"
+              },
+              {
+                "robot_ip": "192.168.12.1"
+              }
+            ],
+            "title": "Overrides",
+            "type": "object"
+          },
+          "replay": {
+            "default": false,
+            "description": "Run on a recording: adds `--replay`",
+            "title": "Replay",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "title": "LaunchRequest",
+        "type": "object"
+      },
+      "LogEvent": {
+        "additionalProperties": true,
+        "description": "A new warning-or-worse record in the current launch's main.jsonl",
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/LogRecord",
+            "description": "The record"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The launch's run id",
+            "title": "Runid"
+          },
+          "type": {
+            "const": "log",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "record"
+        ],
+        "title": "LogEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/log"
+      },
+      "LogPage": {
+        "additionalProperties": true,
+        "properties": {
+          "loggers": {
+            "description": "Every logger name seen, sorted (for a filter menu)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Loggers",
+            "type": "array"
+          },
+          "offset": {
+            "description": "Byte offset to pass back as `after` for only newer records",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "records": {
+            "description": "Matching records, oldest first",
+            "items": {
+              "$ref": "#/components/schemas/LogRecord"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run read (`latest` resolved)",
+            "examples": [
+              "20260101-120000-unitree-go2"
+            ],
+            "title": "Runid"
+          }
+        },
+        "required": [
+          "runId",
+          "records",
+          "offset",
+          "loggers"
+        ],
+        "title": "LogPage",
+        "type": "object"
+      },
+      "LogRecord": {
+        "additionalProperties": true,
+        "description": "One line of a run's main.jsonl (structlog JSON); a line that isn't JSON is a `raw` record.",
+        "properties": {
+          "event": {
+            "description": "The message",
+            "examples": [
+              "no path to goal"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "extra": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Every other field of the record",
+            "title": "Extra",
+            "type": "object"
+          },
+          "level": {
+            "description": "debug, info, warning, error or critical (lowercased); raw for a non-JSON line",
+            "examples": [
+              "warning"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "logger": {
+            "description": "The logger's name",
+            "examples": [
+              "dimos.navigation"
+            ],
+            "title": "Logger",
+            "type": "string"
+          },
+          "raw": {
+            "description": "The line as written",
+            "title": "Raw",
+            "type": "string"
+          },
+          "timestamp": {
+            "description": "As logged",
+            "examples": [
+              "2026-01-01T12:00:01.123Z"
+            ],
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "level",
+          "logger",
+          "event",
+          "extra",
+          "raw"
+        ],
+        "title": "LogRecord",
+        "type": "object"
+      },
+      "Login": {
+        "additionalProperties": true,
+        "description": "The device login: a URL and a code the user approves in any browser signed in to Dimensional cloud.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The code to show",
+            "examples": [
+              "ABCD-EFGH"
+            ],
+            "title": "Code"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who approved it",
+            "title": "Email"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed",
+            "title": "Error"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the code expires (Unix ms)",
+            "title": "Expiresat"
+          },
+          "state": {
+            "description": "idle: none; starting: asking for a code; pending: waiting for approval; then approved, denied, expired or failed",
+            "enum": [
+              "idle",
+              "starting",
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to approve it",
+            "examples": [
+              "https://console.dimensional.org/device"
+            ],
+            "title": "Url"
+          },
+          "urlComplete": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The same URL with the code filled in",
+            "title": "Urlcomplete"
+          }
+        },
+        "required": [
+          "state",
+          "url",
+          "urlComplete",
+          "code",
+          "expiresAt",
+          "email",
+          "error"
+        ],
+        "title": "Login",
+        "type": "object"
+      },
+      "ModuleConfig": {
+        "additionalProperties": true,
+        "properties": {
+          "args": {
+            "description": "Its configurable args (empty when `error`)",
+            "items": {
+              "$ref": "#/components/schemas/ConfigArg"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "class": {
+            "description": "Its Python class",
+            "title": "Class",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when its config couldn't be read: why",
+            "examples": [
+              "TypeError: CameraModule.config (dict) isn't a pydantic model"
+            ],
+            "title": "Error"
+          },
+          "module": {
+            "description": "The module's name in the blueprint",
+            "examples": [
+              "camera"
+            ],
+            "title": "Module",
+            "type": "string"
+          }
+        },
+        "required": [
+          "module",
+          "class",
+          "args"
+        ],
+        "title": "ModuleConfig",
+        "type": "object"
+      },
+      "Ok": {
+        "additionalProperties": true,
+        "properties": {
+          "ok": {
+            "const": true,
+            "description": "Always true",
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "Ok",
+        "type": "object"
+      },
+      "Paths": {
+        "additionalProperties": true,
+        "description": "Where dimos keeps its things.",
+        "properties": {
+          "dimosDir": {
+            "description": "The checkout",
+            "examples": [
+              "/home/me/dimos"
+            ],
+            "title": "Dimosdir",
+            "type": "string"
+          },
+          "logsDirs": {
+            "description": "Where runs' logs are, searched in order: the checkout's logs/, then the library install's",
+            "examples": [
+              [
+                "/home/me/dimos/logs",
+                "/home/me/.local/state/dimos/logs"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Logsdirs",
+            "type": "array"
+          },
+          "recordingsDir": {
+            "description": "Desktop's recordings folder (config.yaml `recordings.dir`)",
+            "examples": [
+              "/home/me/.dimos/recordings"
+            ],
+            "title": "Recordingsdir",
+            "type": "string"
+          },
+          "runsDir": {
+            "description": "dimos's run registry (one <run_id>.json per live run)",
+            "examples": [
+              "/home/me/.local/state/dimos/runs"
+            ],
+            "title": "Runsdir",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dimosDir",
+          "runsDir",
+          "logsDirs",
+          "recordingsDir"
+        ],
+        "title": "Paths",
+        "type": "object"
+      },
+      "Port": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "description": "The stream's name",
+            "examples": [
+              "odom"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "description": "Its message type's name",
+            "examples": [
+              "Odometry"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "Port",
+        "type": "object"
+      },
+      "RegistryRun": {
+        "additionalProperties": true,
+        "description": "A live run in dimos's run registry (also runs started from a terminal).",
+        "properties": {
+          "blueprint": {
+            "description": "What it runs",
+            "examples": [
+              "unitree-go2"
+            ],
+            "title": "Blueprint",
+            "type": "string"
+          },
+          "log_dir": {
+            "description": "Its log folder (main.jsonl is there)",
+            "title": "Log Dir",
+            "type": "string"
+          },
+          "pid": {
+            "description": "Its process id",
+            "examples": [
+              41233
+            ],
+            "title": "Pid",
+            "type": "integer"
+          },
+          "run_id": {
+            "description": "The run's id",
+            "examples": [
+              "20260101-120000-unitree-go2"
+            ],
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "description": "When it started (ISO 8601)",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "pid",
+          "blueprint",
+          "started_at",
+          "log_dir"
+        ],
+        "title": "RegistryRun",
+        "type": "object"
+      },
+      "RunList": {
+        "additionalProperties": true,
+        "properties": {
+          "launch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Launch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The launch this server started (null: none yet)"
+          },
+          "runs": {
+            "description": "Live runs, newest first",
+            "items": {
+              "$ref": "#/components/schemas/RegistryRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "launch"
+        ],
+        "title": "RunList",
+        "type": "object"
+      },
+      "SkillParam": {
+        "additionalProperties": true,
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "repr() of its default (null: none)",
+            "examples": [
+              "1.0"
+            ],
+            "title": "Default"
+          },
+          "name": {
+            "description": "The parameter",
+            "examples": [
+              "distance"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its annotation, if any",
+            "examples": [
+              "float"
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "default"
+        ],
+        "title": "SkillParam",
+        "type": "object"
+      },
+      "StopRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "run id (any live run in the registry); none: the launch this server started",
+            "examples": [
+              "20260101-120000-unitree-go2"
+            ],
+            "title": "Runid"
+          }
+        },
+        "title": "StopRequest",
+        "type": "object"
+      },
+      "StopResult": {
+        "additionalProperties": true,
+        "properties": {
+          "output": {
+            "description": "What was stopped",
+            "examples": [
+              "stopped unitree-go2 (pid 41233)"
+            ],
+            "title": "Output",
+            "type": "string"
+          }
+        },
+        "required": [
+          "output"
+        ],
+        "title": "StopResult",
+        "type": "object"
+      },
+      "Stopping": {
+        "additionalProperties": true,
+        "properties": {
+          "stopping": {
+            "const": true,
+            "description": "Always true: the server exits in 0.2 s",
+            "title": "Stopping",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stopping"
+        ],
+        "title": "Stopping",
+        "type": "object"
+      },
+      "Stream": {
+        "additionalProperties": true,
+        "properties": {
+          "direction": {
+            "description": "in: the module reads it; out: it publishes it; inout: both",
+            "enum": [
+              "in",
+              "out",
+              "inout"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "name": {
+            "description": "The stream's name on its module",
+            "examples": [
+              "color_image"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "description": "Its message type",
+            "examples": [
+              "dimos.msgs.sensor_msgs.Image"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "direction"
+        ],
+        "title": "Stream",
+        "type": "object"
+      },
+      "Upload": {
+        "additionalProperties": true,
+        "description": "One upload in the queue.",
+        "properties": {
+          "bytesDone": {
+            "description": "Bytes done in this phase",
+            "title": "Bytesdone",
+            "type": "integer"
+          },
+          "bytesTotal": {
+            "description": "Bytes in this phase (0: indeterminate)",
+            "title": "Bytestotal",
+            "type": "integer"
+          },
+          "createdAt": {
+            "description": "When it was queued (Unix ms)",
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed, or that it waits for a login",
+            "title": "Error"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "not_logged_in, network, quota, file_missing or failed",
+            "examples": [
+              "not_logged_in"
+            ],
+            "title": "Errorcode"
+          },
+          "etaSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Time left in this phase (null for the first second)",
+            "title": "Etaseconds"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it finished (Unix ms)",
+            "title": "Finishedat"
+          },
+          "id": {
+            "description": "The upload's id",
+            "examples": [
+              "u3"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "recording, video, pointcloud, log or blob (null: from the file)",
+            "title": "Kind"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its page in the Dimensional console, once done",
+            "title": "Link"
+          },
+          "log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The log with the details of a failure",
+            "title": "Log"
+          },
+          "name": {
+            "description": "Its file name",
+            "examples": [
+              "walk.mcap"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Something to tell the user, e.g. about the quota",
+            "title": "Notice"
+          },
+          "path": {
+            "description": "The recording",
+            "examples": [
+              "/home/me/.dimos/recordings/walk.mcap"
+            ],
+            "title": "Path",
+            "type": "string"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "While uploading: preparing, compress, hash, upload, then finishing",
+            "examples": [
+              "upload"
+            ],
+            "title": "Phase"
+          },
+          "rateBps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Smoothed speed in bytes a second",
+            "title": "Ratebps"
+          },
+          "robotId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The robot id it's tagged with",
+            "examples": [
+              "go2-lab"
+            ],
+            "title": "Robotid"
+          },
+          "size": {
+            "description": "Its size in bytes when queued",
+            "title": "Size",
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "The cloud had it already",
+            "title": "Skipped",
+            "type": "boolean"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When its upload started (Unix ms)",
+            "title": "Startedat"
+          },
+          "state": {
+            "description": "queued (first in, first out), uploading (one at a time), then done, failed or cancelled",
+            "enum": [
+              "queued",
+              "uploading",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "uploadId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cloud's id for it, once done",
+            "title": "Uploadid"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "name",
+          "size",
+          "robotId",
+          "kind",
+          "state",
+          "phase",
+          "bytesDone",
+          "bytesTotal",
+          "rateBps",
+          "etaSeconds",
+          "uploadId",
+          "skipped",
+          "notice",
+          "error",
+          "errorCode",
+          "log",
+          "createdAt",
+          "startedAt",
+          "finishedAt",
+          "link"
+        ],
+        "title": "Upload",
+        "type": "object"
+      },
+      "UploadEvent": {
+        "additionalProperties": true,
+        "description": "An upload changed (progress: a few times a second at most)",
+        "properties": {
+          "type": {
+            "const": "upload",
+            "title": "Type",
+            "type": "string"
+          },
+          "upload": {
+            "$ref": "#/components/schemas/Upload",
+            "description": "The upload now"
+          }
+        },
+        "required": [
+          "type",
+          "upload"
+        ],
+        "title": "UploadEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/upload"
+      },
+      "UploadList": {
+        "additionalProperties": true,
+        "properties": {
+          "uploads": {
+            "description": "The queue, in order",
+            "items": {
+              "$ref": "#/components/schemas/Upload"
+            },
+            "title": "Uploads",
+            "type": "array"
+          },
+          "waitingForLogin": {
+            "description": "An upload found no cloud login: the queue waits for one",
+            "title": "Waitingforlogin",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "uploads",
+          "waitingForLogin"
+        ],
+        "title": "UploadList",
+        "type": "object"
+      },
+      "UploadRemovedEvent": {
+        "additionalProperties": true,
+        "description": "A finished upload was removed from the list",
+        "properties": {
+          "id": {
+            "description": "Its id",
+            "examples": [
+              "u3"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "upload-removed",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "UploadRemovedEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/upload-removed"
+      },
+      "UploadRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "recording (default for .mcap/.db), video, pointcloud, log, blob",
+            "examples": [
+              "recording"
+            ],
+            "title": "Kind"
+          },
+          "path": {
+            "description": "the recording's absolute path (a /recordings entry's path): an .mcap or a .db",
+            "examples": [
+              "/home/me/.dimos/recordings/walk.mcap"
+            ],
+            "title": "Path",
+            "type": "string"
+          },
+          "robotId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "robot id to tag it with",
+            "examples": [
+              "go2-lab"
+            ],
+            "title": "Robotid"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "UploadRequest",
+        "type": "object"
+      },
+      "Uploaded": {
+        "additionalProperties": true,
+        "description": "A recording that is in the cloud (remembered even after the upload list is cleared).",
+        "properties": {
+          "changed": {
+            "description": "The file's size or modification time differs from the uploaded one",
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its page in the Dimensional console",
+            "title": "Link"
+          },
+          "mtimeMs": {
+            "description": "Its modification time when uploaded (Unix ms)",
+            "title": "Mtimems",
+            "type": "integer"
+          },
+          "path": {
+            "description": "The recording",
+            "examples": [
+              "/home/me/.dimos/recordings/walk.mcap"
+            ],
+            "title": "Path",
+            "type": "string"
+          },
+          "size": {
+            "description": "Its size when uploaded",
+            "title": "Size",
+            "type": "integer"
+          },
+          "uploadId": {
+            "description": "The cloud's id for it",
+            "title": "Uploadid",
+            "type": "string"
+          },
+          "uploadedAt": {
+            "description": "When the upload finished (Unix ms)",
+            "title": "Uploadedat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "uploadId",
+          "size",
+          "mtimeMs",
+          "uploadedAt",
+          "link",
+          "changed"
+        ],
+        "title": "Uploaded",
+        "type": "object"
+      },
+      "UploadedByPath": {
+        "additionalProperties": true,
+        "properties": {
+          "byPath": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Uploaded"
+            },
+            "description": "Every uploaded recording, by path",
+            "title": "Bypath",
+            "type": "object"
+          }
+        },
+        "required": [
+          "byPath"
+        ],
+        "title": "UploadedByPath",
+        "type": "object"
+      },
+      "UploadsEvent": {
+        "additionalProperties": true,
+        "description": "The queue as a whole changed: GET /dimos/uploads for it",
+        "properties": {
+          "cleared": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only after DELETE /dimos/uploads: true",
+            "title": "Cleared"
+          },
+          "type": {
+            "const": "uploads",
+            "title": "Type",
+            "type": "string"
+          },
+          "waitingForLogin": {
+            "description": "The queue waits for a cloud login",
+            "title": "Waitingforlogin",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "waitingForLogin"
+        ],
+        "title": "UploadsEvent",
+        "type": "object",
+        "x-zenoh-key": "<ns>/dimos/events/uploads"
+      }
+    }
+  },
+  "info": {
+    "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
+    "title": "dimos server",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/dimos/blueprints": {
+      "get": {
+        "description": "What `dimos list` prints: built-in blueprints (without demo-*), then external ones from installed packages. Cached for 60 s; `fresh` refills the cache first. No other side effects.",
+        "operationId": "get_dimos_blueprints",
+        "parameters": [
+          {
+            "description": "check again now instead of answering from the cache",
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "check again now instead of answering from the cache",
+              "title": "Fresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintList"
+                }
+              }
+            },
+            "description": "`{ blueprints: [{ name, kind: \"builtin\"|\"external\" }] }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Every blueprint dimos can run (name, builtin/external)",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/blueprints/{name}": {
+      "get": {
+        "description": "Imports the blueprint in a child process (180 s timeout; cached 10 min) and lists its modules with their streams' names, message types and directions. 400 for a name that can't be one, 500 when the blueprint can't be found or imported.",
+        "operationId": "get_dimos_blueprints_name",
+        "parameters": [
+          {
+            "description": "blueprint name, e.g. unitree-go2-basic",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "blueprint name, e.g. unitree-go2-basic",
+              "examples": [
+                "unitree-go2-basic"
+              ],
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Blueprint"
+                }
+              }
+            },
+            "description": "`{ name, modules: [{ name, class, streams: [{ name, type, direction }] }] }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "A blueprint's modules and each module's streams (topics, types, in/out)",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/blueprints/{name}/config": {
+      "get": {
+        "description": "Imports the blueprint in a child process (180 s timeout; cached 10 min) and reads each module's pydantic `config` model: every field a person can set, its type, default, description, whether it's required or inherited from ModuleConfig, its choices (Enum/Literal) and the blueprint's value. A module whose config can't be read has `error` instead of failing the whole answer.",
+        "operationId": "get_dimos_blueprints_name_config",
+        "parameters": [
+          {
+            "description": "blueprint name, e.g. unitree-go2-basic",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "blueprint name, e.g. unitree-go2-basic",
+              "examples": [
+                "unitree-go2-basic"
+              ],
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintConfig"
+                }
+              }
+            },
+            "description": "`{ name, modules: [{ module, class, args: [{ name, type, default, description, required, base, choices?, value? }], error? }] }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "A blueprint's configurable args per module: name, type, default, description, and the value the blueprint sets (a module that can't be read carries its own error)",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/catalog": {
+      "get": {
+        "description": "Imports every built-in blueprint and module in a child process (180 s timeout; cached 10 min) and lists blueprints with their robot and modules, modules with their streams and skills, and every skill with its parameters. What fails to import is listed in `errors`; the rest still answers.",
+        "operationId": "get_dimos_catalog",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            },
+            "description": "`{ blueprints: [{ name, ref, robot, modules }], modules: [{ name, class, doc, robots, inputs, outputs, skills }], skills: [{ name, doc, params, module, robots }], errors }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Every blueprint, module and skill (imports them all, in a child process: slow the first time)",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/cloud/account": {
+      "get": {
+        "description": "Asks Dimensional cloud who the stored key (or DIMOS_API_KEY) belongs to, in a child process (90 s timeout). Cached for 20 s; `fresh` asks again. A logged-in answer restarts an upload queue that was waiting for a login.",
+        "operationId": "get_dimos_cloud_account",
+        "parameters": [
+          {
+            "description": "check again now instead of answering from the cache",
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "check again now instead of answering from the cache",
+              "title": "Fresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "`{ loggedIn, email, scopes, source, cloudUrl, error }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Whether this machine is logged in to Dimensional cloud, and as whom",
+        "tags": [
+          "cloud"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/cloud/login": {
+      "delete": {
+        "description": "Kills the login's child process; a starting or pending login goes back to idle. Answers the login state.",
+        "operationId": "delete_dimos_cloud_login",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Login"
+                }
+              }
+            },
+            "description": "`Login`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Cancel the pending cloud login",
+        "tags": [
+          "cloud"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      },
+      "get": {
+        "description": "The device login's state; a pending one past its expiry turns expired. No other side effects.",
+        "operationId": "get_dimos_cloud_login",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Login"
+                }
+              }
+            },
+            "description": "`Login`: `{ state, url, urlComplete, code, expiresAt, email, error }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "The cloud login in progress: state (idle, starting, pending, approved, denied, expired, failed), url, code",
+        "tags": [
+          "cloud"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      },
+      "post": {
+        "description": "Starts dimos's device login in a child process (or returns the one already waiting) and answers once the code is known (pending), within 30 s. Show the URL and code; `cloud-login` events (or GET /dimos/cloud/login) follow it. Once approved, dimos stores the key and a waiting upload queue goes on.",
+        "operationId": "post_dimos_cloud_login",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Login"
+                }
+              }
+            },
+            "description": "`Login`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Start logging this machine in to Dimensional cloud: returns a URL and a code the user approves in any signed-in browser",
+        "tags": [
+          "cloud"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/cloud/login/page": {
+      "get": {
+        "description": "A page an app embeds (the console itself refuses to be framed): it starts the login, shows the URL and code, and posts the outcome to its parent window. No side effects until it's opened.",
+        "operationId": "get_dimos_cloud_login_page",
+        "parameters": [
+          {
+            "description": "light or dark (default: the system's)",
+            "in": "query",
+            "name": "theme",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "light",
+                    "dark"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "light or dark (default: the system's)",
+              "title": "Theme"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "an HTML page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          }
+        },
+        "summary": "A small HTML page for an app's iframe that runs the cloud login and posts {type:\"dimos-cloud-login\", state, email} to its parent",
+        "tags": [
+          "cloud"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/cloud/logout": {
+      "post": {
+        "description": "Forgets the stored cloud key (dimos's `logout`) and resets the login, then answers the account as GET /dimos/cloud/account?fresh=1 would.",
+        "operationId": "post_dimos_cloud_logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "`{ loggedIn, email, scopes, source, cloudUrl, error }`, logged out"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Log this machine out of Dimensional cloud",
+        "tags": [
+          "cloud"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/events": {
+      "get": {
+        "deprecated": true,
+        "description": "Deprecated and internal, kept for one release: the same events are published on zenoh at `<ns>/dimos/events/<type>` (Desktop's docs/events.md), so listen there. The stream starts with the current `launch` event, then sends every event (a client that can't keep up loses events). Each event type's payload is a component schema (LaunchEvent, LogEvent, UploadEvent, UploadsEvent, UploadRemovedEvent, CloudLoginEvent; DimosEvent is any of them).",
+        "operationId": "get_dimos_events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimosEvent"
+                }
+              }
+            },
+            "description": "Server-sent events, one `data: <DimosEvent JSON>` each; `:` keep-alives every 15 s"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "The dimos server's live events (SSE): launch phases, warning+ log records, uploads, the cloud login",
+        "tags": [
+          "events"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/global-config": {
+      "get": {
+        "description": "GlobalConfig's JSON Schema and defaults (cached 10 min) and Desktop's saved overrides from config.yaml `dimos.global_config`. No side effects.",
+        "operationId": "get_dimos_global_config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalConfig"
+                }
+              }
+            },
+            "description": "`{ schema, defaults, overrides }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "dimos GlobalConfig: JSON schema, defaults, Desktop's overrides",
+        "tags": [
+          "global-config"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      },
+      "put": {
+        "description": "Replaces config.yaml's `dimos.global_config` with `overrides` (null values dropped), keeping the rest of the file. Takes effect at the next launch; a running blueprint is untouched. 400 for a key that isn't letters, digits and `_`. Answers like GET.",
+        "operationId": "put_dimos_global_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalConfig"
+                }
+              }
+            },
+            "description": "`{ schema, defaults, overrides }`, with the saved overrides"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Save Desktop's GlobalConfig overrides (null removes one); they become `--key value` on every launch",
+        "tags": [
+          "global-config"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/healthz": {
+      "get": {
+        "description": "Answers `ok` (text/plain) while the server runs; no side effects. Desktop polls it after starting the server.",
+        "operationId": "get_dimos_healthz",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "example": "ok",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "`ok`"
+          }
+        },
+        "summary": "The dimos server's liveness: `ok`",
+        "tags": [
+          "server"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/info": {
+      "get": {
+        "description": "Reads the checkout's pyproject.toml and whether its `.venv/bin/dimos` exists, and checks the version against the range Desktop supports ($DESKTOP_DIMOS_RANGE). A launch is refused while `inRange` is false. No side effects.",
+        "operationId": "get_dimos_info",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Info"
+                }
+              }
+            },
+            "description": "`{ dir, found, installed, version, range, inRange }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "The dimos checkout this server drives: dir, version, installed",
+        "tags": [
+          "server"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/paths": {
+      "get": {
+        "description": "Absolute paths, read from the environment and Desktop's config.yaml. Desktop compares `dimosDir` with its configured checkout to tell whether this server is the right one. No side effects.",
+        "operationId": "get_dimos_paths",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paths"
+                }
+              }
+            },
+            "description": "`{ dimosDir, runsDir, logsDirs, recordingsDir }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Where dimos keeps its things: the checkout, run registry, log folders, recordings folder",
+        "tags": [
+          "server"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/runs": {
+      "get": {
+        "description": "Live runs from dimos's run registry (pid alive; also runs started from a terminal), newest first, and this server's last launch with its phase. No side effects.",
+        "operationId": "get_dimos_runs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            },
+            "description": "`{ runs: [{ run_id, pid, blueprint, started_at, log_dir }], launch: Launch | null }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Running blueprints (run id, blueprint, pid, log_dir) and the launch this server started",
+        "tags": [
+          "runs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      },
+      "post": {
+        "description": "Starts `dimos [--key value ...] run <blueprint>` in the checkout, in its own session, with Desktop's saved GlobalConfig overrides, then the body's, then `--replay` if asked. Answers at once with phase `starting`; `launch` events (or GET /dimos/runs) follow it to running, stopped or failed. 400 when the checkout's dimos is outside Desktop's range (unless config.yaml `dimos.ignore_version_range`) or the name is bad, and while the last launch is still starting or running (one at a time); 500 when dimos isn't installed or won't start.",
+        "operationId": "post_dimos_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Launch"
+                }
+              }
+            },
+            "description": "`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Launch a blueprint (stops nothing; check /dimos/runs first)",
+        "tags": [
+          "runs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos",
+        "x-mcp-tool": "run_blueprint"
+      }
+    },
+    "/dimos/runs/stop": {
+      "post": {
+        "description": "Sends the run's process group SIGINT, then SIGTERM after 20 s, then SIGKILL after 10 more, and answers once it's gone. Stops `runId` (any live run in the registry) or else this server's launch; the body is optional. 500 when there's nothing running to stop or it won't stop.",
+        "operationId": "post_dimos_runs_stop",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StopRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResult"
+                }
+              }
+            },
+            "description": "`{ output }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Stop the blueprint this server launched (or runId)",
+        "tags": [
+          "runs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos",
+        "x-mcp-tool": "stop_blueprint"
+      }
+    },
+    "/dimos/runs/{runId}/log": {
+      "get": {
+        "description": "Reads `<logs>/<runId>/main.jsonl` off disk (the checkout's logs/, then the library install's; the last 4 MB at most). Without `after`: the last `limit` matching records; with `after`: every matching record past that byte offset (tailing). An unknown run answers no records. No side effects.",
+        "operationId": "get_dimos_runs_runId_log",
+        "parameters": [
+          {
+            "description": "run id or latest",
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "description": "run id or latest",
+              "examples": [
+                "latest",
+                "20260101-120000-unitree-go2"
+              ],
+              "title": "Runid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "byte offset from an earlier answer's `offset`: only newer records",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "byte offset from an earlier answer's `offset`: only newer records",
+              "title": "After"
+            }
+          },
+          {
+            "description": "minimum level: debug, info, warning, error",
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "minimum level: debug, info, warning, error",
+              "examples": [
+                "warning"
+              ],
+              "title": "Level"
+            }
+          },
+          {
+            "description": "text to match",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "text to match",
+              "title": "Q"
+            }
+          },
+          {
+            "description": "at most this many records (default 1000; ignored with `after`)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "at most this many records (default 1000; ignored with `after`)",
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            },
+            "description": "`{ runId, records: [{ timestamp, level, logger, event, extra, raw }], offset, loggers }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "A run's structured log (main.jsonl): records with level, logger, event",
+        "tags": [
+          "logs"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/server/stop": {
+      "post": {
+        "description": "Answers, then exits 0.2 s later. A running upload's worker is killed and the upload is queued again for the next start (dimos resumes it); launched blueprints keep running (their own sessions).",
+        "operationId": "post_dimos_server_stop",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stopping"
+                }
+              }
+            },
+            "description": "`{ stopping: true }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Make the dimos server exit (Desktop starts it again when needed)",
+        "tags": [
+          "server"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/uploads": {
+      "delete": {
+        "description": "Removes every done, failed or cancelled upload from the list (what is in the cloud is still remembered, see /dimos/uploads/uploaded) and answers the queue.",
+        "operationId": "delete_dimos_uploads",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadList"
+                }
+              }
+            },
+            "description": "`{ uploads: [Upload], waitingForLogin }`, without the finished ones"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Clear the finished uploads (done, failed, cancelled) from the list",
+        "tags": [
+          "uploads"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      },
+      "get": {
+        "description": "The queue in order, and whether it waits for a cloud login. No side effects.",
+        "operationId": "get_dimos_uploads",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadList"
+                }
+              }
+            },
+            "description": "`{ uploads: [Upload], waitingForLogin }`"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "The Dimensional cloud upload queue: each upload's state, progress, speed, time left and error",
+        "tags": [
+          "uploads"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      },
+      "post": {
+        "description": "Adds the recording to the end of the queue (saved, so it survives a restart) and answers its upload, queued; one already queued or uploading for that path is answered instead. Needs a cloud login: without one it waits. 400 when the path isn't an absolute path to an existing .mcap or .db.",
+        "operationId": "post_dimos_uploads",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            },
+            "description": "`Upload`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Upload a recording (.mcap or .db) to Dimensional cloud: it joins the queue (one at a time)",
+        "tags": [
+          "uploads"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/uploads/uploaded": {
+      "get": {
+        "description": "Without `path`: `{byPath}` for every recording uploaded from here. With `path`: that one's entry, or null when it isn't uploaded. `changed` says the file differs from what was uploaded. No side effects.",
+        "operationId": "get_dimos_uploads_uploaded",
+        "parameters": [
+          {
+            "description": "a recording's absolute path",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "a recording's absolute path",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/UploadedByPath"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Uploaded"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Dimos Uploads Uploaded"
+                }
+              }
+            },
+            "description": "`{ byPath: { [path]: Uploaded } }`, or with `?path=` that one `Uploaded` or null"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Which recordings are already in Dimensional cloud (uploaded from this machine), by path, with a console link; ?path= for one",
+        "tags": [
+          "uploads"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/uploads/{id}": {
+      "delete": {
+        "description": "A queued upload turns cancelled; a running one's worker is killed and it turns cancelled; a finished one is removed (an `upload-removed` event). 404 for an unknown id.",
+        "operationId": "delete_dimos_uploads_id",
+        "parameters": [
+          {
+            "description": "upload id, e.g. u3",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "upload id, e.g. u3",
+              "examples": [
+                "u3"
+              ],
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            },
+            "description": "`{ ok: true }`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Cancel a queued or running upload, or remove a finished one from the list",
+        "tags": [
+          "uploads"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/uploads/{id}/retry": {
+      "post": {
+        "description": "Moves a finished (done, failed or cancelled) upload to the back of the queue, reset, and answers it. 404 for an unknown id; 409 while it's still queued or uploading.",
+        "operationId": "post_dimos_uploads_id_retry",
+        "parameters": [
+          {
+            "description": "upload id, e.g. u3",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "upload id, e.g. u3",
+              "examples": [
+                "u3"
+              ],
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            },
+            "description": "`Upload`, queued"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict with the current state (the message says what it is)"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
+          }
+        },
+        "summary": "Queue a failed or cancelled upload again",
+        "tags": [
+          "uploads"
+        ],
+        "x-agent": true,
+        "x-family": "dimos"
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "The server itself: liveness, the checkout it serves, where things are, stopping it. Desktop asks `GET /dimos/paths` whether a running server serves the checkout in its config.yaml, and stops one that serves another.",
+      "name": "server"
+    },
+    {
+      "description": "What dimos can run. The list is read in the server's process (cached 60 s; `?fresh=1` refills it). A blueprint's modules, config and the catalog import blueprint code, so they run in a child process with a 180 s timeout and are cached 10 min: the first call can take seconds.",
+      "name": "blueprints"
+    },
+    {
+      "description": "dimos's GlobalConfig (robot_ip, simulation, n_workers, ...) and Desktop's saved overrides (config.yaml `dimos.global_config`), which become `--key value` flags on every launch.",
+      "name": "global-config"
+    },
+    {
+      "description": "Launching and stopping blueprints. `POST /dimos/runs` runs `dimos [--key value ...] run <blueprint>` in the checkout, in its own session (it outlives the server), output to launch.log. One launch at a time: a second is refused while the first is starting or running. Its phase (starting, running, stopped, failed) is worked out from dimos's run registry and the pid on every call. Stopping sends the process group SIGINT, then SIGTERM after 20 s, then SIGKILL after 10 more.",
+      "name": "runs"
+    },
+    {
+      "description": "A run's structured log (`<logs>/<run_id>/main.jsonl`), read off disk. Tail it by passing the answer's `offset` back as `after`. Warning-or-worse records of the current launch are also `log` events.",
+      "name": "logs"
+    },
+    {
+      "description": "This machine's Dimensional cloud login: dimos's device flow (`dimos login`). Start it, show the URL and code, and the user approves it in any signed-in browser; `cloud-login` events (or polling `GET /dimos/cloud/login`) follow it.",
+      "name": "cloud"
+    },
+    {
+      "description": "Uploading recordings to Dimensional cloud with dimos's own code, one at a time, first in first out. The queue survives a restart (an interrupted upload resumes). With no login an upload goes back to the front and `waitingForLogin` turns true until a login is approved. `upload`, `uploads` and `upload-removed` events follow it.",
+      "name": "uploads"
+    },
+    {
+      "description": "The server's events, each a JSON object with a `type`: `launch`, `log`, `upload`, `uploads`, `upload-removed`, `cloud-login` (schemas: DimosEvent). They are published on zenoh at `<ns>/dimos/events/<type>` (Desktop's docs/events.md; `<ns>` is Desktop's namespace), which is where to listen. The SSE stream `GET /dimos/events` carries the same events and is deprecated (kept one release).",
+      "name": "events"
+    }
+  ]
+}

@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
 from pathlib import Path
 import sys
 import textwrap
+from typing import Any
 
+import fastapi.routing
+from pydantic import BaseModel, TypeAdapter
 import pytest
 
-from dimos.server import config, logs
+from dimos.server import config, events, logs
+from dimos.server.models import DimosEvent
 
 # Stands in for cloud_worker.py: the same arguments and MARKER lines, no network. A path with "slow" in it uploads
 # until killed, "nologin" isn't logged in; the login answers "ok" once the file `<tmp>/approve` exists.
@@ -85,3 +90,58 @@ def checkout(tmp_path: Path) -> Path:
     )
     program.chmod(0o755)
     return root
+
+
+def undeclared(value: Any, where: str = "") -> list[str]:
+    """Fields a validated model carries that its class doesn't declare (models allow extras, so nothing is lost)."""
+    if isinstance(value, BaseModel):
+        found = [f"{where}.{name}" for name in value.model_extra or {}]
+        for name in type(value).model_fields:
+            found += undeclared(getattr(value, name), f"{where}.{name}")
+        return found
+    if isinstance(value, list):
+        return [
+            problem for i, item in enumerate(value) for problem in undeclared(item, f"{where}[{i}]")
+        ]
+    if isinstance(value, dict):
+        return [
+            problem
+            for key, item in value.items()
+            for problem in undeclared(item, f"{where}[{key}]")
+        ]
+    return []
+
+
+def strictly(annotation: Any, value: Any, what: str) -> None:
+    """`value` validates against `annotation` with no undeclared field."""
+    extra = undeclared(TypeAdapter(annotation).validate_python(value), what)
+    assert not extra, f"{what} has fields its model doesn't declare: {extra}"
+
+
+@pytest.fixture
+def check_model() -> Any:
+    """`check_model(annotation, value, what)`: the strict check, for answers and events made outside a request."""
+    return strictly
+
+
+@pytest.fixture(autouse=True)
+def strict_answers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Every answer a test gets matches its route's response model, and every event the DimosEvent schema, exactly:
+    no missing, mistyped or undeclared field (so openapi.json describes what the server really sends)."""
+    serialize = fastapi.routing.serialize_response
+
+    async def checked(**kwargs: Any) -> Any:
+        field = kwargs.get("field")
+        if field is not None:
+            strictly(field.field_info.annotation, kwargs["response_content"], "the answer")
+        return await serialize(**kwargs)
+
+    send = events.Bus.send
+
+    def send_checked(bus: events.Bus, event: dict[str, Any]) -> None:
+        strictly(DimosEvent, event, f"the {event.get('type')} event")
+        send(bus, event)
+
+    monkeypatch.setattr(fastapi.routing, "serialize_response", checked)
+    monkeypatch.setattr(events.Bus, "send", send_checked)
+    yield

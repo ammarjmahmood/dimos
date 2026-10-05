@@ -76,6 +76,84 @@ def test_blueprint_list_is_read_in_process(client: TestClient) -> None:
     assert client.get("/dimos/blueprints?fresh=1").json()["blueprints"] == listed
 
 
+# what introspect.py answers, in full, so the answers are checked against their models
+INTROSPECTED: dict[str, dict[str, Any]] = {
+    "blueprint": {
+        "name": "unitree-go2",
+        "modules": [
+            {
+                "name": "camera",
+                "class": "dimos.hardware.camera.CameraModule",
+                "streams": [
+                    {"name": "color_image", "type": "dimos.msgs.Image", "direction": "out"}
+                ],
+            }
+        ],
+    },
+    "config": {
+        "name": "unitree-go2",
+        "modules": [
+            {
+                "module": "camera",
+                "class": "dimos.hardware.camera.CameraModule",
+                "args": [
+                    {
+                        "name": "fps",
+                        "type": "int",
+                        "default": 30,
+                        "description": "frames a second",
+                        "required": False,
+                        "base": False,
+                        "value": 15,
+                    },
+                    {
+                        "name": "mode",
+                        "type": "Literal['rgb', 'depth']",
+                        "default": "rgb",
+                        "description": None,
+                        "required": False,
+                        "base": False,
+                        "choices": ["rgb", "depth"],
+                    },
+                ],
+            },
+            {"module": "odd", "class": "x.Odd", "args": [], "error": "TypeError: not pydantic"},
+        ],
+    },
+    "catalog": {
+        "blueprints": [
+            {
+                "name": "unitree-go2",
+                "ref": "dimos.robot.unitree.go2:bp",
+                "robot": "go2",
+                "modules": ["Cam"],
+            }
+        ],
+        "modules": [
+            {
+                "name": "Cam",
+                "class": "dimos.hardware.camera.CameraModule",
+                "doc": "A camera.",
+                "robots": ["go2"],
+                "inputs": [],
+                "outputs": [{"name": "color_image", "type": "Image"}],
+                "skills": ["snap"],
+            }
+        ],
+        "skills": [
+            {
+                "name": "snap",
+                "doc": "Take a picture.",
+                "params": [{"name": "size", "type": "int", "default": "1"}],
+                "module": "Cam",
+                "robots": ["go2"],
+            }
+        ],
+        "errors": ["blueprint g1: ImportError: no mujoco"],
+    },
+}
+
+
 def test_blueprint_details_are_introspected_and_cached(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -83,18 +161,17 @@ def test_blueprint_details_are_introspected_and_cached(
 
     async def fake(dimos_dir: Path, args: list[str], **_: Any) -> dict[str, Any]:
         calls.append(args)
-        if args[1] == "broken":
+        if args[1:] == ["broken"]:
             raise blueprints.IntrospectError("ImportError: no torch")
-        return {"name": args[1], "modules": []}
+        return INTROSPECTED[args[0]]
 
     monkeypatch.setattr(blueprints, "introspect", fake)
-    assert client.get("/dimos/blueprints/unitree-go2").json() == {
-        "name": "unitree-go2",
-        "modules": [],
-    }
+    assert client.get("/dimos/blueprints/unitree-go2").json() == INTROSPECTED["blueprint"]
     client.get("/dimos/blueprints/unitree-go2")
-    client.get("/dimos/blueprints/unitree-go2/config")
-    assert calls == [["blueprint", "unitree-go2"], ["config", "unitree-go2"]]
+    # absent optional fields (choices, value, error) stay absent
+    assert client.get("/dimos/blueprints/unitree-go2/config").json() == INTROSPECTED["config"]
+    assert client.get("/dimos/catalog").json() == INTROSPECTED["catalog"]
+    assert calls == [["blueprint", "unitree-go2"], ["config", "unitree-go2"], ["catalog"]]
     broken = client.get("/dimos/blueprints/broken")
     assert (broken.status_code, broken.json()) == (500, {"error": "ImportError: no torch"})
     assert client.get("/dimos/blueprints/-rf").status_code == 400
@@ -156,7 +233,7 @@ def test_launch_log_and_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch
         "$ dimos --n-workers 2 --replay --robot-ip 10.0.0.2 run unitree-go2"
     )
     again = client.post("/dimos/runs", json={"blueprint": "unitree-go2"})
-    assert again.status_code == 500 and "still starting" in again.json()["error"]
+    assert again.status_code == 400 and "still starting" in again.json()["error"]
 
     # it shows as running once it is in dimos's registry
     entry = {

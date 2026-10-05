@@ -14,8 +14,10 @@
 
 """The dimos server's HTTP API, `/dimos/...`: blueprints, global config, runs and their logs, events, cloud uploads.
 
-dimOS Desktop proxies `/dimos/` to it and documents it (its OpenAPI, `x-family: dimos`); fixtures/ holds a copy of
-those paths, and test_contract.py checks every one is served here. An error is `{"error": "<message>"}`.
+dimOS Desktop proxies `/dimos/` to it. Each route's docs, request and answer models (models.py) make its OpenAPI
+document (openapi.py), served at /dimos/openapi.json and checked in as openapi.json. fixtures/ holds Desktop's own
+document of these paths; test_contract.py and test_openapi.py check this server matches it. An error is
+`{"error": "<message>"}`.
 """
 
 from __future__ import annotations
@@ -27,18 +29,37 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from fastapi import Body, FastAPI, Request
+from fastapi import FastAPI, Path as PathParam, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from pydantic import BeforeValidator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dimos.server import blueprints, config, events, logs, runs
+from dimos.server import blueprints, config, events, logs, models, runs
+from dimos.server.openapi import document, operation_id, route_doc
 from dimos.server.uploads import Uploads
 
 LIST_TTL_S = 60.0
 INTROSPECT_TTL_S = 600.0
+
+
+class EventStreamResponse(StreamingResponse):
+    media_type = "text/event-stream"
+
+
+# `?fresh`, `?fresh=1`, `?fresh=true`: skip the cache
+FreshQuery = Annotated[
+    bool,
+    BeforeValidator(lambda value: True if value == "" else value),
+    Query(description="check again now instead of answering from the cache"),
+]
+BlueprintParam = Annotated[
+    str,
+    PathParam(description="blueprint name, e.g. unitree-go2-basic", examples=["unitree-go2-basic"]),
+]
+UploadIdParam = Annotated[str, PathParam(description="upload id, e.g. u3", examples=["u3"])]
 
 
 class ApiError(Exception):
@@ -69,10 +90,6 @@ def default_state(dimos_dir: Path) -> ServerState:
     return ServerState(dimos_dir=dimos_dir, bus=bus, uploads=uploads)
 
 
-def fresh_flag(value: str | None) -> bool:
-    return value in ("1", "true", "yes", "")
-
-
 def create_app(state: ServerState, background: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -86,12 +103,16 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         for task in state.background:
             task.cancel()
 
+    # no Swagger UI: it loads its scripts from a CDN (a robot is often offline) and Desktop already browses and
+    # searches the API; /dimos/openapi.json is the one source
     app = FastAPI(
         title="dimos server",
         lifespan=lifespan,
         openapi_url="/dimos/openapi.json",
         docs_url=None,
         redoc_url=None,
+        generate_unique_id_function=operation_id,
+        separate_input_output_schemas=False,
     )
     app.state.server = state
     s = state
@@ -129,19 +150,50 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             raise ApiError(400, f"bad blueprint name: {name}")
 
     @app.get("/healthz", response_class=PlainTextResponse, include_in_schema=False)
-    @app.get("/dimos/healthz", response_class=PlainTextResponse)
+    @app.get(
+        "/dimos/healthz",
+        response_class=PlainTextResponse,
+        **route_doc(
+            "server",
+            "The dimos server's liveness: `ok`",
+            "Answers `ok` (text/plain) while the server runs; no side effects. Desktop polls it after starting the "
+            "server.",
+            errors=(),
+            ok={"content": {"text/plain": {"schema": {"type": "string", "example": "ok"}}}},
+            answer="`ok`",
+        ),
+    )
     async def healthz() -> str:
-        """The dimos server's liveness: `ok`"""
         return "ok"
 
-    @app.get("/dimos/info")
+    @app.get(
+        "/dimos/info",
+        response_model=models.Info,
+        **route_doc(
+            "server",
+            "The dimos checkout this server drives: dir, version, installed",
+            "Reads the checkout's pyproject.toml and whether its `.venv/bin/dimos` exists, and checks the version "
+            "against the range Desktop supports ($DESKTOP_DIMOS_RANGE). A launch is refused while `inRange` is "
+            "false. No side effects.",
+            agent=True,
+            answer="`{ dir, found, installed, version, range, inRange }`",
+        ),
+    )
     async def info() -> dict[str, Any]:
-        """The dimos checkout: dir, version, installed"""
         return config.info(s.dimos_dir).to_json()
 
-    @app.get("/dimos/paths")
+    @app.get(
+        "/dimos/paths",
+        response_model=models.Paths,
+        **route_doc(
+            "server",
+            "Where dimos keeps its things: the checkout, run registry, log folders, recordings folder",
+            "Absolute paths, read from the environment and Desktop's config.yaml. Desktop compares `dimosDir` with "
+            "its configured checkout to tell whether this server is the right one. No side effects.",
+            answer="`{ dimosDir, runsDir, logsDirs, recordingsDir }`",
+        ),
+    )
     async def paths() -> dict[str, Any]:
-        """Where dimos keeps its things: the checkout, run registry, log folders, recordings folder"""
         from dimos.constants import STATE_DIR
 
         return {
@@ -151,10 +203,38 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
             "recordingsDir": str(config.recordings_dir()),
         }
 
-    @app.get("/dimos/blueprints")
-    async def blueprint_list(fresh: str | None = None) -> dict[str, Any]:
-        """Every blueprint dimos can run (name, builtin/external); `?fresh=1` skips the 60 s cache"""
-        if fresh_flag(fresh):
+    @app.post(
+        "/dimos/server/stop",
+        response_model=models.Stopping,
+        **route_doc(
+            "server",
+            "Make the dimos server exit (Desktop starts it again when needed)",
+            "Answers, then exits 0.2 s later. A running upload's worker is killed and the upload is queued again "
+            "for the next start (dimos resumes it); launched blueprints keep running (their own sessions).",
+            answer="`{ stopping: true }`",
+        ),
+    )
+    async def stop_server() -> dict[str, Any]:
+        s.uploads.shutdown()
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.2, s.exit or (lambda: os._exit(0)))
+        return {"stopping": True}
+
+    @app.get(
+        "/dimos/blueprints",
+        response_model=models.BlueprintList,
+        **route_doc(
+            "blueprints",
+            "Every blueprint dimos can run (name, builtin/external)",
+            "What `dimos list` prints: built-in blueprints (without demo-*), then external ones from installed "
+            "packages. Cached for 60 s; `fresh` refills the cache first. No other side effects.",
+            errors=(400, 500),
+            agent=True,
+            answer='`{ blueprints: [{ name, kind: "builtin"|"external" }] }`',
+        ),
+    )
+    async def blueprint_list(fresh: FreshQuery = False) -> dict[str, Any]:
+        if fresh:
             s.cache.forget("list")
 
         async def compute() -> dict[str, Any]:
@@ -163,21 +243,57 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         result: dict[str, Any] = await s.cache.get("list", LIST_TTL_S, compute)
         return result
 
-    @app.get("/dimos/blueprints/{name}")
-    async def blueprint(name: str) -> Any:
-        """A blueprint's modules and each module's streams (topics, types, in/out)"""
+    @app.get(
+        "/dimos/blueprints/{name}",
+        response_model=models.Blueprint,
+        **route_doc(
+            "blueprints",
+            "A blueprint's modules and each module's streams (topics, types, in/out)",
+            "Imports the blueprint in a child process (180 s timeout; cached 10 min) and lists its modules with "
+            "their streams' names, message types and directions. 400 for a name that can't be one, 500 when the "
+            "blueprint can't be found or imported.",
+            errors=(400, 500),
+            agent=True,
+            answer="`{ name, modules: [{ name, class, streams: [{ name, type, direction }] }] }`",
+        ),
+    )
+    async def blueprint(name: BlueprintParam) -> Any:
         check_name(name)
         return await introspected(f"bp:{name}", ["blueprint", name])
 
-    @app.get("/dimos/blueprints/{name}/config")
-    async def blueprint_config(name: str) -> Any:
-        """A blueprint's configurable args per module (a module that can't be read carries its own error)"""
+    @app.get(
+        "/dimos/blueprints/{name}/config",
+        response_model=models.BlueprintConfig,
+        **route_doc(
+            "blueprints",
+            "A blueprint's configurable args per module: name, type, default, description, and the value the "
+            "blueprint sets (a module that can't be read carries its own error)",
+            "Imports the blueprint in a child process (180 s timeout; cached 10 min) and reads each module's "
+            "pydantic `config` model: every field a person can set, its type, default, description, whether it's "
+            "required or inherited from ModuleConfig, its choices (Enum/Literal) and the blueprint's value. A module "
+            "whose config can't be read has `error` instead of failing the whole answer.",
+            errors=(400, 500),
+            agent=True,
+            answer="`{ name, modules: [{ module, class, args: [{ name, type, default, description, required, base, choices?, value? }], error? }] }`",
+        ),
+    )
+    async def blueprint_config(name: BlueprintParam) -> Any:
         check_name(name)
         return await introspected(f"config:{name}", ["config", name])
 
-    @app.get("/dimos/catalog")
+    @app.get(
+        "/dimos/catalog",
+        response_model=models.Catalog,
+        **route_doc(
+            "blueprints",
+            "Every blueprint, module and skill (imports them all, in a child process: slow the first time)",
+            "Imports every built-in blueprint and module in a child process (180 s timeout; cached 10 min) and "
+            "lists blueprints with their robot and modules, modules with their streams and skills, and every skill "
+            "with its parameters. What fails to import is listed in `errors`; the rest still answers.",
+            answer="`{ blueprints: [{ name, ref, robot, modules }], modules: [{ name, class, doc, robots, inputs, outputs, skills }], skills: [{ name, doc, params, module, robots }], errors }`",
+        ),
+    )
     async def catalog() -> Any:
-        """Every blueprint, module and skill (imports them all, in a child process: slow the first time)"""
         return await introspected("catalog", ["catalog"])
 
     async def global_config_value() -> dict[str, Any]:
@@ -187,37 +303,78 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         value: dict[str, Any] = await s.cache.get("gc", INTROSPECT_TTL_S, compute)
         return {**value, "overrides": config.global_config_overrides()}
 
-    @app.get("/dimos/global-config")
+    @app.get(
+        "/dimos/global-config",
+        response_model=models.GlobalConfig,
+        **route_doc(
+            "global-config",
+            "dimos GlobalConfig: JSON schema, defaults, Desktop's overrides",
+            "GlobalConfig's JSON Schema and defaults (cached 10 min) and Desktop's saved overrides from config.yaml "
+            "`dimos.global_config`. No side effects.",
+            agent=True,
+            answer="`{ schema, defaults, overrides }`",
+        ),
+    )
     async def global_config() -> dict[str, Any]:
-        """dimos GlobalConfig: JSON schema, defaults, Desktop's overrides"""
         return await global_config_value()
 
-    @app.put("/dimos/global-config")
-    async def put_global_config(
-        overrides: dict[str, Any] = Body(..., embed=True),
-    ) -> dict[str, Any]:
-        """Save the GlobalConfig overrides (null removes one); they become `--key value` on every launch"""
-        for key in overrides:
+    @app.put(
+        "/dimos/global-config",
+        response_model=models.GlobalConfig,
+        **route_doc(
+            "global-config",
+            "Save Desktop's GlobalConfig overrides (null removes one); they become `--key value` on every launch",
+            "Replaces config.yaml's `dimos.global_config` with `overrides` (null values dropped), keeping the rest "
+            "of the file. Takes effect at the next launch; a running blueprint is untouched. 400 for a key that "
+            "isn't letters, digits and `_`. Answers like GET.",
+            errors=(400, 500),
+            answer="`{ schema, defaults, overrides }`, with the saved overrides",
+        ),
+    )
+    async def put_global_config(update: models.GlobalConfigUpdate) -> dict[str, Any]:
+        for key in update.overrides:
             if not re.fullmatch(r"[A-Za-z0-9_]+", key):
                 raise ApiError(400, f"bad config key: {key}")
-        config.set_global_config_overrides(overrides)
+        config.set_global_config_overrides(update.overrides)
         return await global_config_value()
 
-    @app.get("/dimos/runs")
+    @app.get(
+        "/dimos/runs",
+        response_model=models.RunList,
+        **route_doc(
+            "runs",
+            "Running blueprints (run id, blueprint, pid, log_dir) and the launch this server started",
+            "Live runs from dimos's run registry (pid alive; also runs started from a terminal), newest first, and "
+            "this server's last launch with its phase. No side effects.",
+            agent=True,
+            answer="`{ runs: [{ run_id, pid, blueprint, started_at, log_dir }], launch: Launch | null }`",
+        ),
+    )
     async def run_list() -> dict[str, Any]:
-        """Running blueprints (run id, blueprint, pid, log_dir) and the launch this server started"""
         return {
             "runs": await asyncio.to_thread(runs.registry_runs),
             "launch": await asyncio.to_thread(runs.current_launch),
         }
 
-    @app.post("/dimos/runs")
-    async def launch(
-        blueprint: str = Body(..., embed=True),
-        replay: bool = Body(False, embed=True),
-        overrides: dict[str, Any] = Body(default_factory=dict, embed=True),
-    ) -> dict[str, Any]:
-        """Launch a blueprint (stops nothing; check /dimos/runs first)"""
+    @app.post(
+        "/dimos/runs",
+        response_model=models.Launch,
+        **route_doc(
+            "runs",
+            "Launch a blueprint (stops nothing; check /dimos/runs first)",
+            "Starts `dimos [--key value ...] run <blueprint>` in the checkout, in its own session, with Desktop's "
+            "saved GlobalConfig overrides, then the body's, then `--replay` if asked. Answers at once with phase "
+            "`starting`; `launch` events (or GET /dimos/runs) follow it to running, stopped or failed. 400 when the "
+            "checkout's dimos is outside Desktop's range (unless config.yaml `dimos.ignore_version_range`) or the "
+            "name is bad, and while the last launch is still starting or running (one at a time); 500 when dimos isn't "
+            "installed or won't start.",
+            errors=(400, 500),
+            agent=True,
+            mcp_tool="run_blueprint",
+            answer="`Launch`: `{ blueprint, phase, startedAt, pid, output, runId, logDir, error }`",
+        ),
+    )
+    async def launch(request: models.LaunchRequest) -> dict[str, Any]:
         checkout = config.info(s.dimos_dir)
         if checkout.installed and not checkout.in_range and not config.ignore_version_range():
             raise ApiError(
@@ -225,129 +382,307 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
                 f"dimos {checkout.version or '?'} is outside the range Desktop supports ({checkout.range}); "
                 "set dimos.ignore_version_range to launch anyway",
             )
-        if not blueprint or blueprint.startswith("-"):
+        if not request.blueprint or request.blueprint.startswith("-"):
             raise ApiError(400, "bad blueprint name")
-        merged = {**config.global_config_overrides(), **overrides}
-        if replay:
+        merged = {**config.global_config_overrides(), **request.overrides}
+        if request.replay:
             merged["replay"] = True
         try:
-            started = runs.start(s.dimos_dir, blueprint, config.global_config_flags(merged))
+            started = runs.start(s.dimos_dir, request.blueprint, config.global_config_flags(merged))
+        except runs.StillRunningError as error:
+            raise ApiError(400, str(error))
         except runs.RunError as error:
             raise ApiError(500, str(error))
         s.bus.send({"type": "launch", "launch": started})
         return started
 
-    @app.post("/dimos/runs/stop")
-    async def stop(request: Request) -> dict[str, Any]:
-        """Stop the blueprint this server launched (or `runId`)"""
-        body = await request.json() if await request.body() else {}
-        run_id = body.get("runId") if isinstance(body, dict) else None
+    @app.post(
+        "/dimos/runs/stop",
+        response_model=models.StopResult,
+        **route_doc(
+            "runs",
+            "Stop the blueprint this server launched (or runId)",
+            "Sends the run's process group SIGINT, then SIGTERM after 20 s, then SIGKILL after 10 more, and answers "
+            "once it's gone. Stops `runId` (any live run in the registry) or else this server's launch; the body is "
+            "optional. 500 when there's nothing running to stop or it won't stop.",
+            errors=(400, 500),
+            agent=True,
+            mcp_tool="stop_blueprint",
+            answer="`{ output }`",
+        ),
+    )
+    async def stop(request: models.StopRequest | None = None) -> dict[str, Any]:
         try:
-            return {"output": await runs.stop(run_id)}
+            return {"output": await runs.stop(request.runId if request else None)}
         except runs.RunError as error:
             raise ApiError(500, str(error))
 
-    @app.get("/dimos/runs/{run_id}/log")
+    @app.get(
+        "/dimos/runs/{runId}/log",
+        response_model=models.LogPage,
+        **route_doc(
+            "logs",
+            "A run's structured log (main.jsonl): records with level, logger, event",
+            "Reads `<logs>/<runId>/main.jsonl` off disk (the checkout's logs/, then the library install's; the "
+            "last 4 MB at most). Without `after`: the last `limit` matching records; with `after`: every matching "
+            "record past that byte offset (tailing). An unknown run answers no records. No side effects.",
+            errors=(400, 500),
+            agent=True,
+            answer="`{ runId, records: [{ timestamp, level, logger, event, extra, raw }], offset, loggers }`",
+        ),
+    )
     async def log(
-        run_id: str,
-        after: int | None = None,
-        level: str | None = None,
-        q: str | None = None,
-        limit: int | None = None,
+        run_id: Annotated[
+            str,
+            PathParam(
+                alias="runId",
+                description="run id or latest",
+                examples=["latest", "20260101-120000-unitree-go2"],
+            ),
+        ],
+        after: Annotated[
+            int | None,
+            Query(description="byte offset from an earlier answer's `offset`: only newer records"),
+        ] = None,
+        level: Annotated[
+            str | None,
+            Query(description="minimum level: debug, info, warning, error", examples=["warning"]),
+        ] = None,
+        q: Annotated[str | None, Query(description="text to match")] = None,
+        limit: Annotated[
+            int | None,
+            Query(description="at most this many records (default 1000; ignored with `after`)"),
+        ] = None,
     ) -> dict[str, Any]:
-        """A run's structured log (main.jsonl): records with level, logger, event; `after` = byte offset to tail from"""
         filter = logs.Filter(query=q or None, min_level=level or None)
         return await asyncio.to_thread(logs.read, s.dimos_dir, run_id, after, limit or 1000, filter)
 
-    @app.get("/dimos/events", deprecated=True)
+    @app.get(
+        "/dimos/events",
+        deprecated=True,
+        response_class=EventStreamResponse,
+        **route_doc(
+            "events",
+            "The dimos server's live events (SSE): launch phases, warning+ log records, uploads, the cloud login",
+            "Deprecated and internal, kept for one release: the same events are published on zenoh at "
+            "`<ns>/dimos/events/<type>` (Desktop's docs/events.md), so listen there. The stream starts with the "
+            "current `launch` event, then sends every event (a client that can't keep up loses events). Each event "
+            "type's payload is a component schema (LaunchEvent, LogEvent, UploadEvent, UploadsEvent, "
+            "UploadRemovedEvent, CloudLoginEvent; DimosEvent is any of them).",
+            ok={
+                "description": "Server-sent events, one `data: <DimosEvent JSON>` each; `:` keep-alives every 15 s",
+                "content": {
+                    "text/event-stream": {"schema": {"$ref": "#/components/schemas/DimosEvent"}}
+                },
+            },
+        ),
+    )
     async def event_stream() -> StreamingResponse:
-        """Live events (SSE): launch phases, warning+ log records, uploads, the cloud login. Deprecated and internal,
-        kept for one release: the same events are on zenoh at `<ns>/dimos/events/<type>`"""
         stream = s.bus.stream(lambda: {"type": "launch", "launch": runs.current_launch()})
-        return StreamingResponse(
-            stream,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Deprecation": "true"},
+        return EventStreamResponse(
+            stream, headers={"Cache-Control": "no-cache", "Deprecation": "true"}
         )
 
-    @app.post("/dimos/server/stop")
-    async def stop_server() -> dict[str, Any]:
-        """Make the dimos server exit (Desktop starts it again when needed)"""
-        s.uploads.shutdown()
-        loop = asyncio.get_running_loop()
-        loop.call_later(0.2, s.exit or (lambda: os._exit(0)))
-        return {"stopping": True}
+    @app.get(
+        "/dimos/cloud/account",
+        response_model=models.Account,
+        **route_doc(
+            "cloud",
+            "Whether this machine is logged in to Dimensional cloud, and as whom",
+            "Asks Dimensional cloud who the stored key (or DIMOS_API_KEY) belongs to, in a child process (90 s "
+            "timeout). Cached for 20 s; `fresh` asks again. A logged-in answer restarts an upload queue that was "
+            "waiting for a login.",
+            errors=(400, 500),
+            agent=True,
+            answer="`{ loggedIn, email, scopes, source, cloudUrl, error }`",
+        ),
+    )
+    async def cloud_account(fresh: FreshQuery = False) -> dict[str, Any]:
+        return await s.uploads.account(fresh)
 
-    @app.get("/dimos/cloud/account")
-    async def cloud_account(fresh: str | None = None) -> dict[str, Any]:
-        """Whether this machine is logged in to Dimensional cloud, and as whom (`?fresh=1`: not the 20 s cache)"""
-        return await s.uploads.account(fresh_flag(fresh))
-
-    @app.get("/dimos/cloud/login")
+    @app.get(
+        "/dimos/cloud/login",
+        response_model=models.Login,
+        **route_doc(
+            "cloud",
+            "The cloud login in progress: state (idle, starting, pending, approved, denied, expired, failed), url, "
+            "code",
+            "The device login's state; a pending one past its expiry turns expired. No other side effects.",
+            agent=True,
+            answer="`Login`: `{ state, url, urlComplete, code, expiresAt, email, error }`",
+        ),
+    )
     async def cloud_login() -> dict[str, Any]:
-        """The cloud login in progress: state (idle, starting, pending, approved, denied, expired, failed), url, code"""
         return s.uploads.login_state()
 
-    @app.post("/dimos/cloud/login")
+    @app.post(
+        "/dimos/cloud/login",
+        response_model=models.Login,
+        **route_doc(
+            "cloud",
+            "Start logging this machine in to Dimensional cloud: returns a URL and a code the user approves in any "
+            "signed-in browser",
+            "Starts dimos's device login in a child process (or returns the one already waiting) and answers once "
+            "the code is known (pending), within 30 s. Show the URL and code; `cloud-login` events (or GET "
+            "/dimos/cloud/login) follow it. Once approved, dimos stores the key and a waiting upload queue goes on.",
+            agent=True,
+            answer="`Login`",
+        ),
+    )
     async def start_cloud_login() -> dict[str, Any]:
-        """Start the device login: a URL and a code the user approves in any signed-in browser"""
         return await s.uploads.start_login()
 
-    @app.delete("/dimos/cloud/login")
+    @app.delete(
+        "/dimos/cloud/login",
+        response_model=models.Login,
+        **route_doc(
+            "cloud",
+            "Cancel the pending cloud login",
+            "Kills the login's child process; a starting or pending login goes back to idle. Answers the login "
+            "state.",
+            answer="`Login`",
+        ),
+    )
     async def cancel_cloud_login() -> dict[str, Any]:
-        """Cancel the pending cloud login"""
         return s.uploads.cancel_login()
 
-    @app.get("/dimos/cloud/login/page", response_class=HTMLResponse)
-    async def cloud_login_page(theme: str | None = None) -> str:
-        """A small page for an app's iframe that runs the cloud login and posts {type:"dimos-cloud-login", state,
-        email} to its parent (`?theme=light|dark`)"""
+    @app.get(
+        "/dimos/cloud/login/page",
+        response_class=HTMLResponse,
+        **route_doc(
+            "cloud",
+            'A small HTML page for an app\'s iframe that runs the cloud login and posts {type:"dimos-cloud-login", '
+            "state, email} to its parent",
+            "A page an app embeds (the console itself refuses to be framed): it starts the login, shows the URL and "
+            "code, and posts the outcome to its parent window. No side effects until it's opened.",
+            errors=(400,),
+            ok={"content": {"text/html": {"schema": {"type": "string"}}}},
+            answer="an HTML page",
+        ),
+    )
+    async def cloud_login_page(
+        theme: Annotated[
+            Literal["light", "dark"] | None,
+            Query(description="light or dark (default: the system's)"),
+        ] = None,
+    ) -> str:
         return (Path(__file__).parent / "login_page.html").read_text()
 
-    @app.post("/dimos/cloud/logout")
+    @app.post(
+        "/dimos/cloud/logout",
+        response_model=models.Account,
+        **route_doc(
+            "cloud",
+            "Log this machine out of Dimensional cloud",
+            "Forgets the stored cloud key (dimos's `logout`) and resets the login, then answers the account as GET "
+            "/dimos/cloud/account?fresh=1 would.",
+            answer="`{ loggedIn, email, scopes, source, cloudUrl, error }`, logged out",
+        ),
+    )
     async def cloud_logout() -> dict[str, Any]:
-        """Log this machine out of Dimensional cloud"""
         return await s.uploads.logout()
 
-    @app.get("/dimos/uploads")
+    @app.get(
+        "/dimos/uploads",
+        response_model=models.UploadList,
+        **route_doc(
+            "uploads",
+            "The Dimensional cloud upload queue: each upload's state, progress, speed, time left and error",
+            "The queue in order, and whether it waits for a cloud login. No side effects.",
+            agent=True,
+            answer="`{ uploads: [Upload], waitingForLogin }`",
+        ),
+    )
     async def upload_list() -> dict[str, Any]:
-        """The upload queue: each upload's state, progress, speed, time left and error"""
         return s.uploads.listing()
 
-    @app.post("/dimos/uploads")
-    async def enqueue_upload(
-        path: str = Body(..., embed=True),
-        robotId: str | None = Body(None, embed=True),
-        kind: str | None = Body(None, embed=True),
-    ) -> dict[str, Any]:
-        """Upload a recording (.mcap or .db) to Dimensional cloud: it joins the queue (one at a time)"""
+    @app.post(
+        "/dimos/uploads",
+        response_model=models.Upload,
+        **route_doc(
+            "uploads",
+            "Upload a recording (.mcap or .db) to Dimensional cloud: it joins the queue (one at a time)",
+            "Adds the recording to the end of the queue (saved, so it survives a restart) and answers its upload, "
+            "queued; one already queued or uploading for that path is answered instead. Needs a cloud login: "
+            "without one it waits. 400 when the path isn't an absolute path to an existing .mcap or .db.",
+            errors=(400, 500),
+            agent=True,
+            answer="`Upload`",
+        ),
+    )
+    async def enqueue_upload(request: models.UploadRequest) -> dict[str, Any]:
         try:
-            return s.uploads.enqueue(path, robotId, kind)
+            return s.uploads.enqueue(request.path, request.robotId, request.kind)
         except ValueError as error:
             raise ApiError(400, str(error))
 
-    @app.delete("/dimos/uploads")
+    @app.delete(
+        "/dimos/uploads",
+        response_model=models.UploadList,
+        **route_doc(
+            "uploads",
+            "Clear the finished uploads (done, failed, cancelled) from the list",
+            "Removes every done, failed or cancelled upload from the list (what is in the cloud is still "
+            "remembered, see /dimos/uploads/uploaded) and answers the queue.",
+            answer="`{ uploads: [Upload], waitingForLogin }`, without the finished ones",
+        ),
+    )
     async def clear_uploads() -> dict[str, Any]:
-        """Clear the finished uploads (done, failed, cancelled) from the list"""
         return s.uploads.clear_finished()
 
-    @app.get("/dimos/uploads/uploaded")
-    async def uploaded(path: str | None = None) -> Any:
-        """Which recordings are in the cloud, by path, with a console link; `?path=` for one (null: not uploaded)"""
+    @app.get(
+        "/dimos/uploads/uploaded",
+        response_model=models.UploadedByPath | models.Uploaded | None,
+        **route_doc(
+            "uploads",
+            "Which recordings are already in Dimensional cloud (uploaded from this machine), by path, with a "
+            "console link; ?path= for one",
+            "Without `path`: `{byPath}` for every recording uploaded from here. With `path`: that one's entry, or "
+            "null when it isn't uploaded. `changed` says the file differs from what was uploaded. No side effects.",
+            errors=(400, 500),
+            agent=True,
+            answer="`{ byPath: { [path]: Uploaded } }`, or with `?path=` that one `Uploaded` or null",
+        ),
+    )
+    async def uploaded(
+        path: Annotated[str | None, Query(description="a recording's absolute path")] = None,
+    ) -> Any:
         return s.uploads.uploaded() if path is None else s.uploads.uploaded_one(path)
 
-    @app.delete("/dimos/uploads/{id}")
-    async def cancel_upload(id: str) -> dict[str, Any]:
-        """Cancel a queued or running upload, or remove a finished one from the list"""
+    @app.delete(
+        "/dimos/uploads/{id}",
+        response_model=models.Ok,
+        **route_doc(
+            "uploads",
+            "Cancel a queued or running upload, or remove a finished one from the list",
+            "A queued upload turns cancelled; a running one's worker is killed and it turns cancelled; a finished "
+            "one is removed (an `upload-removed` event). 404 for an unknown id.",
+            errors=(404, 500),
+            agent=True,
+            answer="`{ ok: true }`",
+        ),
+    )
+    async def cancel_upload(id: UploadIdParam) -> dict[str, Any]:
         try:
             s.uploads.cancel(id)
         except KeyError as error:
             raise ApiError(404, error.args[0])
         return {"ok": True}
 
-    @app.post("/dimos/uploads/{id}/retry")
-    async def retry_upload(id: str) -> dict[str, Any]:
-        """Queue a failed or cancelled upload again"""
+    @app.post(
+        "/dimos/uploads/{id}/retry",
+        response_model=models.Upload,
+        **route_doc(
+            "uploads",
+            "Queue a failed or cancelled upload again",
+            "Moves a finished (done, failed or cancelled) upload to the back of the queue, reset, and answers it. "
+            "404 for an unknown id; 409 while it's still queued or uploading.",
+            errors=(404, 409, 500),
+            agent=True,
+            answer="`Upload`, queued",
+        ),
+    )
+    async def retry_upload(id: UploadIdParam) -> dict[str, Any]:
         try:
             return s.uploads.retry(id)
         except KeyError as error:
@@ -355,4 +690,10 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         except ValueError as error:
             raise ApiError(409, str(error))
 
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            app.openapi_schema = document(app)
+        return app.openapi_schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
     return app

@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from dimos.server.events import Bus
+from dimos.server.models import DimosEvent, UploadedByPath, UploadList
 from dimos.server.uploads import Queue, Rate, Uploads, check_path
 
 
@@ -148,7 +149,7 @@ async def until(condition: Callable[[], Any], timeout: float = 20) -> None:
 
 
 async def test_uploads_run_in_a_worker_and_are_remembered(
-    tmp_path: Path, fake_worker: list[str]
+    tmp_path: Path, fake_worker: list[str], check_model: Any
 ) -> None:
     events: list[dict[str, Any]] = []
     bus = Bus()
@@ -190,12 +191,16 @@ async def test_uploads_run_in_a_worker_and_are_remembered(
         assert uploads.queue.get(waiting["id"])["errorCode"] == "not_logged_in"  # type: ignore[index]
         assert (await uploads.account(False))["loggedIn"] is True
         assert not uploads.queue.waiting_for_login
+        for event in events:
+            check_model(DimosEvent, event, f"the {event['type']} event")
+        check_model(UploadList, uploads.listing(), "the upload list")
     finally:
         uploads.shutdown()
         worker.cancel()
     # a restart keeps the queue and what is in the cloud; a changed file is marked
     again = Uploads(tmp_path, Bus(), file, tmp_path / "uploads.log", worker=fake_worker)
     assert again.uploaded()["byPath"][str(mcap)]["uploadId"] == "cloud-1"
+    check_model(UploadedByPath, again.uploaded(), "the uploaded list")
     mcap.write_bytes(b"123456")
     assert again.uploaded_one(str(mcap))["changed"] is True  # type: ignore[index]
 
