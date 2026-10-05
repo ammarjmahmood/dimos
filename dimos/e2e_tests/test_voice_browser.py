@@ -104,9 +104,10 @@ def test_hold_to_talk_ships_a_decodable_recording(
     mic.hover()
     fake_mic_page.mouse.down()
     expect(mic).to_have_attribute("data-state", "recording", timeout=15_000)
-    # Hold until the bytes already received decode to over a second of audio (at least 1.5 s): "recording" is when
-    # the page started its MediaRecorder, and on a loaded runner the engine's capture can begin well after that (a
-    # 1.5 s hold once gave Firefox 0.45 s of audio), so the hold waits for the audio itself, not the clock.
+    # Hold until the bytes already received decode to over a second of audio (at least 1.5 s), not for a wall time:
+    # Firefox's fake device on the null audio backend (media.cubeb.force_null_context, above) records slower than
+    # real time - 1.5, 3 and 5 s held decode to 0.73, 1.45 and 2.37 s (1.15, 3.45, 5.15 s without the pref) - and a
+    # loaded runner slows it further (a 1.5 s hold once gave 0.45 s), so the hold waits for the audio, not the clock.
     held = time.monotonic()
     deadline = held + 30.0
     while time.monotonic() < deadline:
