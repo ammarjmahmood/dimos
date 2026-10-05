@@ -1096,6 +1096,22 @@ class ExtrasList(ApiModel):
 
 class ExtrasInstall(ApiModel):
     extras: list[str] = Field(description="Extras to add", min_length=1, examples=[["sim"]])
+    app: str | None = Field(
+        None,
+        description="The Desktop app whose page shows the install (default `launcher`)",
+        examples=["launcher"],
+    )
+
+
+class ExtrasInstallStarted(ApiModel):
+    shell: str | None = Field(
+        description="Desktop's shell session running it: follow Desktop's GET /api/desktop/shell/{id}?wait= "
+        "(null without Desktop)"
+    )
+    job: str | None = Field(
+        description="Without Desktop, the job running it: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log"
+    )
+    command: list[str] = Field(description="The uv command it runs")
 
 
 class JobStarted(ApiModel):

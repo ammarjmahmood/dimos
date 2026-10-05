@@ -1627,6 +1627,21 @@
       "ExtrasInstall": {
         "additionalProperties": true,
         "properties": {
+          "app": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Desktop app whose page shows the install (default `launcher`)",
+            "examples": [
+              "launcher"
+            ],
+            "title": "App"
+          },
           "extras": {
             "description": "Extras to add",
             "examples": [
@@ -1646,6 +1661,50 @@
           "extras"
         ],
         "title": "ExtrasInstall",
+        "type": "object"
+      },
+      "ExtrasInstallStarted": {
+        "additionalProperties": true,
+        "properties": {
+          "command": {
+            "description": "The uv command it runs",
+            "items": {
+              "type": "string"
+            },
+            "title": "Command",
+            "type": "array"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Without Desktop, the job running it: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log",
+            "title": "Job"
+          },
+          "shell": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Desktop's shell session running it: follow Desktop's GET /api/desktop/shell/{id}?wait= (null without Desktop)",
+            "title": "Shell"
+          }
+        },
+        "required": [
+          "shell",
+          "job",
+          "command"
+        ],
+        "title": "ExtrasInstallStarted",
         "type": "object"
       },
       "ExtrasList": {
@@ -2023,30 +2082,6 @@
           "code"
         ],
         "title": "JobLog",
-        "type": "object"
-      },
-      "JobStarted": {
-        "additionalProperties": true,
-        "properties": {
-          "command": {
-            "description": "What it runs",
-            "items": {
-              "type": "string"
-            },
-            "title": "Command",
-            "type": "array"
-          },
-          "job": {
-            "description": "The job's id: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log",
-            "title": "Job",
-            "type": "string"
-          }
-        },
-        "required": [
-          "job",
-          "command"
-        ],
-        "title": "JobStarted",
         "type": "object"
       },
       "JobSummary": {
@@ -4665,7 +4700,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.5.0"
+    "version": "1.6.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5455,7 +5490,7 @@
     },
     "/dimos/extras/install": {
       "post": {
-        "description": "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> --torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. When that builds the cyclonedds package from source (unitree-dds, dds: it has wheels for python 3.10 only), the job first finds the CycloneDDS C library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an out-link in the venv), else Homebrew's; none = the job fails with `code: cyclonedds_missing` before uv runs. Answers the job at once: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log; when it ends the extras cache is dropped and discovery rescans. 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
+        "description": "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> --torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. When that builds the cyclonedds package from source (unitree-dds, dds: it has wheels for python 3.10 only), it first gets the CycloneDDS C library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an out-link in the venv), else Homebrew's; none = 400 with `code: cyclonedds_missing`. With Desktop (`$DESKTOP_URL`) the commands go to its `POST /api/desktop/shell` for the asking app (default `launcher`): it shows them over that app, nothing runs until the user presses Run, a failure can be fixed in its terminal (by the user or Desktop's agent) and retried; the answer is `{ shell }`, the session to follow with Desktop's `GET /api/desktop/shell/{id}?wait=`. The server waits for it and rescans. Without Desktop it runs as a job (`{ job }`: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log). 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
         "operationId": "post_dimos_extras_install",
         "requestBody": {
           "content": {
@@ -5472,11 +5507,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobStarted"
+                  "$ref": "#/components/schemas/ExtrasInstallStarted"
                 }
               }
             },
-            "description": "`{ job, command }`"
+            "description": "`{ shell, job, command }` (one of shell / job)"
           },
           "400": {
             "content": {
@@ -5509,7 +5544,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "Install dimos extras, as a job (streamed output); discovery rescans when it ends",
+        "summary": "Install dimos extras through Desktop's shell tool (the user sees the commands and presses Run); discovery rescans when it ends",
         "tags": [
           "extras"
         ],

@@ -31,7 +31,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from dimos.constants import DIMOS_PROJECT_ROOT
-from dimos.server import docs, events, extras
+from dimos.server import desktop, docs, events, extras
 from dimos.server.app import ServerState, create_app
 from dimos.server.discovery import Discovery
 from dimos.server.jobs import Jobs, MissingForJobError, failure_lines
@@ -363,7 +363,66 @@ def wait_done(client: TestClient, job: str) -> dict[str, Any]:
     raise AssertionError(f"job {job} never finished")
 
 
-def test_extras_install_is_a_job(
+def test_extras_install_goes_to_desktops_shell_tool(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    uv = tmp_path / "uv"
+    uv.write_text(FAKE_UV.format(python=sys.executable))
+    uv.chmod(0o755)
+    monkeypatch.setattr(extras, "find_uv", lambda: str(uv))
+    server = client.app.state.server  # type: ignore[attr-defined]
+    monkeypatch.setattr(server.discovery, "child_answer", fake_probe)
+    asked: list[tuple[str, list[dict[str, Any]], str | None]] = []
+    finish = asyncio.Event()
+
+    async def request_shell(
+        title: str, message: str, commands: list[dict[str, Any]], app: str | None = None
+    ) -> str:
+        asked.append((title, commands, app))
+        return "sh-1"
+
+    async def wait_shell(session: str) -> dict[str, Any]:
+        await finish.wait()
+        return {"status": "succeeded", "commands": []}
+
+    monkeypatch.setattr(desktop, "request_shell", request_shell)
+    monkeypatch.setattr(desktop, "wait_shell", wait_shell)
+    started = client.post("/dimos/extras/install", json={"extras": ["all"]}).json()
+    assert (started["shell"], started["job"]) == ("sh-1", None)
+    title, commands, app = asked[0]
+    assert app == "launcher" and "all" in title
+    # one command, with a note for the user, run in the checkout's venv
+    assert commands == [
+        {
+            "run": f"{uv} sync --locked --inexact --no-progress --extra all",
+            "note": "Install the all extra with uv",
+            "cwd": str(server.dimos_dir),
+            "env": {"VIRTUAL_ENV": str(server.dimos_dir / ".venv")},
+        }
+    ]
+    busy = client.post("/dimos/extras/install", json={"extras": ["sim"]})
+    assert busy.status_code == 409 and "sh-1" in busy.json()["error"]
+
+
+def test_extras_shell_commands_get_cyclonedds_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "dimos"\n')
+    (tmp_path / "uv.lock").write_text("")
+    monkeypatch.delenv("CYCLONEDDS_HOME", raising=False)
+    monkeypatch.setattr(extras, "find_nix", lambda: "/nix/bin/nix")
+    nix_build, install = extras.shell_commands(tmp_path, ["dds"], "/v/python", None, "uv", True)
+    assert nix_build["run"].startswith(
+        "/nix/bin/nix --extra-experimental-features 'nix-command flakes' build"
+    )
+    assert install["run"].startswith('export CYCLONEDDS_HOME="$(cd ')
+    monkeypatch.setattr(extras, "find_nix", lambda: None)
+    monkeypatch.setattr(extras, "BREWED_CYCLONEDDS", (tmp_path / "no-brew",))
+    with pytest.raises(MissingForJobError):
+        extras.shell_commands(tmp_path, ["dds"], "/v/python", None, "uv", True)
+
+
+def test_extras_install_is_a_job_without_desktop(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     uv = tmp_path / "uv"

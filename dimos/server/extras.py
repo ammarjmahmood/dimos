@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import sys
 from typing import Any
@@ -361,3 +362,68 @@ def install_command(
         backend,
         f"dimos[{','.join(extras)}]{pin}",
     ]
+
+
+def shell_commands(
+    dimos_dir: Path,
+    extras: list[str],
+    python: str,
+    dimos_version: str | None,
+    uv: str,
+    cyclonedds: bool,
+) -> list[dict[str, Any]]:
+    """The commands Desktop's shell tool runs for these extras, each with a note for the user: with `cyclonedds`
+    (the cyclonedds package builds here) first its C library ($CYCLONEDDS_HOME, else nix's from the nixpkgs dimos's
+    flake.lock pins, linked into the venv, else Homebrew's), then install_command. Raises MissingForJobError
+    `cyclonedds_missing` when there's no way to get the library."""
+    install = shlex.join(install_command(dimos_dir, extras, python, dimos_version, uv))
+    env = {"VIRTUAL_ENV": str(venv_dir(dimos_dir))} if is_checkout(dimos_dir) else {}
+    commands: list[dict[str, Any]] = []
+    if cyclonedds:
+        given = os.environ.get("CYCLONEDDS_HOME")
+        brewed = next((b for b in BREWED_CYCLONEDDS if (b / "lib").is_dir()), None)
+        nix = find_nix()
+        if given and (Path(given) / "lib").is_dir():
+            env.update(cyclonedds_env(Path(given)))
+        elif nix is not None:
+            link = venv_dir(dimos_dir) / "cyclonedds"
+            build = [
+                nix,
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "build",
+                "--out-link",
+                str(link),
+                f"{nixpkgs_ref(dimos_dir)}#cyclonedds",
+            ]
+            commands.append(
+                {
+                    "run": shlex.join(build),
+                    "note": "Get the CycloneDDS C library (the cyclonedds package builds against it)",
+                    "cwd": str(dimos_dir),
+                }
+            )
+            # its store path, resolved when the install runs
+            install = (
+                f'export CYCLONEDDS_HOME="$(cd {shlex.quote(str(link))} && pwd -P)"\n'
+                'export CMAKE_PREFIX_PATH="$CYCLONEDDS_HOME${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"\n'
+                + install
+            )
+        elif brewed is not None:
+            env.update(cyclonedds_env(brewed.resolve()))
+        else:
+            raise MissingForJobError(
+                "cyclonedds_missing",
+                "The cyclonedds package is built here against the CycloneDDS C library, and none was found: "
+                "install nix (Desktop's installer does), or `brew install cyclonedds`, or set CYCLONEDDS_HOME to "
+                "an install of CycloneDDS 0.10, then install again.",
+            )
+    commands.append(
+        {
+            "run": install,
+            "note": f"Install the {', '.join(extras)} extra{'s' if len(extras) > 1 else ''} with uv",
+            "cwd": str(dimos_dir),
+            "env": env,
+        }
+    )
+    return commands

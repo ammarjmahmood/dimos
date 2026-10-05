@@ -128,6 +128,12 @@ def check_model() -> Any:
 
 
 @pytest.fixture(autouse=True)
+def no_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never reach a real Desktop (port 9 refuses): the ones that want one fake it."""
+    monkeypatch.setenv("DESKTOP_URL", "http://127.0.0.1:9")
+
+
+@pytest.fixture(autouse=True)
 def strict_answers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Every answer a test gets matches its route's response model, and every event the DimosEvent schema, exactly:
     no missing, mistyped or undeclared field (so openapi.json describes what the server really sends)."""

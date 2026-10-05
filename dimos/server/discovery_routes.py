@@ -25,8 +25,9 @@ from fastapi import FastAPI, Path as PathParam, Query
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-from dimos.server import config, docs, extras, models
+from dimos.server import config, desktop, docs, extras, models
 from dimos.server.discovery import python_for
+from dimos.server.jobs import MissingForJobError
 from dimos.server.openapi import route_doc
 
 if TYPE_CHECKING:
@@ -287,24 +288,31 @@ def add(app: FastAPI, state: ServerState) -> None:
             "extras": listed,
         }
 
+    # the extras install Desktop is running for us (its shell session), until it ends
+    installing: dict[str, str | None] = {"shell": None}
+
     @app.post(
         "/dimos/extras/install",
-        response_model=models.JobStarted,
+        response_model=models.ExtrasInstallStarted,
         **route_doc(
             "extras",
-            "Install dimos extras, as a job (streamed output); discovery rescans when it ends",
+            "Install dimos extras through Desktop's shell tool (the user sees the commands and presses Run); "
+            "discovery rescans when it ends",
             "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a "
             "checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> "
             "--torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. When that builds the cyclonedds package "
-            "from source (unitree-dds, dds: it has wheels for python 3.10 only), the job first finds the CycloneDDS C "
+            "from source (unitree-dds, dds: it has wheels for python 3.10 only), it first gets the CycloneDDS C "
             "library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an "
-            "out-link in the venv), else Homebrew's; none = the job fails with `code: cyclonedds_missing` before uv "
-            "runs. Answers the job at once: follow "
-            "`<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log; when it ends the extras cache is dropped and "
-            "discovery rescans. 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
+            "out-link in the venv), else Homebrew's; none = 400 with `code: cyclonedds_missing`. With Desktop "
+            "(`$DESKTOP_URL`) the commands go to its `POST /api/desktop/shell` for the asking app (default "
+            "`launcher`): it shows them over that app, nothing runs until the user presses Run, a failure can be fixed "
+            "in its terminal (by the user or Desktop's agent) and retried; the answer is `{ shell }`, the session to "
+            "follow with Desktop's `GET /api/desktop/shell/{id}?wait=`. The server waits for it and rescans. Without "
+            "Desktop it runs as a job (`{ job }`: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log). "
+            "400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
             errors=(400, 409, 500),
             agent=True,
-            answer="`{ job, command }`",
+            answer="`{ shell, job, command }` (one of shell / job)",
         ),
     )
     async def install_extras(request: models.ExtrasInstall) -> dict[str, Any]:
@@ -315,39 +323,73 @@ def add(app: FastAPI, state: ServerState) -> None:
                 400, f"unknown extra(s): {', '.join(unknown)} (known: {', '.join(declared)})"
             )
         running = jobs.running("extras")
-        if running is not None:
-            raise ApiError(409, f"an extras install is already running: job {running.id}")
+        if running is not None or installing["shell"] is not None:
+            which = (
+                f"job {running.id}"
+                if running is not None
+                else f"Desktop shell session {installing['shell']}"
+            )
+            raise ApiError(409, f"an extras install is already running: {which}")
         uv = extras.find_uv()
         if uv is None:
             raise ApiError(500, "uv isn't installed (https://docs.astral.sh/uv/)")
         wanted = list(dict.fromkeys(request.extras))
         probed = await probe()
-        prepare = None
-        if extras.builds_cyclonedds(
+        cyclonedds = extras.builds_cyclonedds(
             s.dimos_dir,
             extras.status(s.dimos_dir, probed, lock_sizes=False),
             wanted,
             probed.get("environment", {}),
-        ):
+        )
+        python = python_for(s.dimos_dir)
+        version = config.info(s.dimos_dir).version
+        command = extras.install_command(s.dimos_dir, wanted, python, version, uv)
+
+        def then(_: Any) -> None:
+            s.cache.forget("packages")
+            discovery.refresh("extras installed")
+
+        try:
+            steps = extras.shell_commands(s.dimos_dir, wanted, python, version, uv, cyclonedds)
+        except MissingForJobError as error:
+            raise ApiError(400, f"{error.code}: {error}")
+        title = f"Install the dimOS extras {', '.join(wanted)}"
+        try:
+            session = await desktop.request_shell(
+                title,
+                "dimOS installs these optional packages into its Python environment with uv (no sudo). It can "
+                "take a few minutes.",
+                steps,
+                request.app or "launcher",
+            )
+        except desktop.DesktopUnavailableError:
+            session = None
+        if session is not None:
+            installing["shell"] = session
+
+            async def follow() -> None:
+                try:
+                    await desktop.wait_shell(session)
+                finally:
+                    installing["shell"] = None
+                    then(None)
+
+            s.background.append(asyncio.create_task(follow()))
+            return {"shell": session, "job": None, "command": command}
+        # no Desktop: a job of our own
+        prepare = None
+        if cyclonedds:
 
             async def prepare(
                 _: Any, step: Callable[[list[str]], Awaitable[int]]
             ) -> dict[str, str]:
                 return await extras.prepare_cyclonedds(s.dimos_dir, step)
 
-        command = extras.install_command(
-            s.dimos_dir, wanted, python_for(s.dimos_dir), config.info(s.dimos_dir).version, uv
-        )
         env = (
             {"VIRTUAL_ENV": str(config.venv_dir(s.dimos_dir))}
             if extras.is_checkout(s.dimos_dir)
             else {}
         )
-
-        def then(_: Any) -> None:
-            s.cache.forget("packages")
-            discovery.refresh("extras installed")
-
         job = jobs.start(
             f"Install extras: {', '.join(wanted)}",
             "extras",
@@ -357,7 +399,7 @@ def add(app: FastAPI, state: ServerState) -> None:
             then,
             prepare,
         )
-        return {"job": job.id, "command": command}
+        return {"shell": None, "job": job.id, "command": command}
 
     @app.get(
         "/dimos/jobs",
