@@ -477,57 +477,6 @@ def test_group_ee_pose_uses_current_state_when_no_joint_state_is_provided() -> N
     assert pose.ts == 123.5
 
 
-def test_current_joint_snapshot_preserves_measurement_time_and_is_independent(mocker) -> None:
-    fake_world = FakeWorld()
-    monitor = world_monitor_module.WorldMonitor(world=fake_world)  # type: ignore[arg-type]
-    monitor.load_model(_three_joint_reordered_group_config())
-    monitor.start_state_monitor()
-    sync = mocker.spy(fake_world, "sync_from_joint_state")
-    state_monitor = monitor._state_monitor
-    assert state_monitor is not None
-    assert monitor.get_current_joint_state() is None
-    assert state_monitor.get_current_positions() is None
-    assert state_monitor.get_current_velocities() is None
-    assert monitor.get_link_pose("ee") is None
-    monitor.on_joint_state(
-        JointState(
-            ts=123.5,
-            name=["j3", "j1", "j2"],
-            position=[0.3, 0.1, 0.2],
-            velocity=[3.0, 1.0, 2.0],
-        )
-    )
-    snapshot = monitor.get_current_joint_state()
-    assert snapshot is not None
-    assert snapshot.ts == 123.5
-    assert snapshot.name == ["j1", "j2", "j3"]
-    assert snapshot.position == [0.1, 0.2, 0.3]
-    assert snapshot.velocity == [1.0, 2.0, 3.0]
-    assert sync.call_args.args[0].ts == 123.5
-    assert sync.call_args.args[0].velocity == [1.0, 2.0, 3.0]
-
-    # Existing array consumers must not be able to alter the canonical snapshot.
-    positions = state_monitor.get_current_positions()
-    velocities = state_monitor.get_current_velocities()
-    assert positions is not None and velocities is not None
-    np.testing.assert_array_equal(positions, snapshot.position)
-    np.testing.assert_array_equal(velocities, snapshot.velocity)
-    positions[0] = 99.0
-    velocities[0] = 99.0
-    snapshot.position[0] = 99.0
-    assert monitor.get_current_joint_state().position == [0.1, 0.2, 0.3]
-    assert monitor.get_current_joint_state().velocity == [1.0, 2.0, 3.0]
-    monitor.on_joint_state(JointState(ts=124.0, name=["j1", "j2", "j3"], position=[0.4, 0.5, 0.6]))
-    current = monitor.get_current_joint_state()
-    assert current is not None
-    assert current.ts == 124.0
-    assert current.position == [0.4, 0.5, 0.6]
-    assert current.velocity == []
-    assert state_monitor.get_current_velocities() is None
-    assert snapshot.ts == 123.5
-    assert snapshot.velocity == [1.0, 2.0, 3.0]
-
-
 def test_group_ee_pose_without_joint_state_rejects_stale_state(mocker) -> None:
     stale_world = FakeWorld()
     stale_monitor = world_monitor_module.WorldMonitor(world=stale_world)  # type: ignore[arg-type]

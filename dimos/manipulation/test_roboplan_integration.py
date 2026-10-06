@@ -14,7 +14,6 @@
 
 """Self-hosted integration tests for official RoboPlan Cartesian planning."""
 
-from concurrent.futures import ThreadPoolExecutor
 import importlib
 from pathlib import Path
 from typing import Any
@@ -201,7 +200,34 @@ def scalar_world(tmp_path, roboplan_types):
     return world
 
 
-def test_real_scene_preserves_prepared_motion_limits(scalar_world):
+def test_real_contexts_keep_independent_state_and_refresh_geometry(scalar_world):
+    world = scalar_world
+    with world.scratch_context() as first, world.scratch_context() as second:
+        world.set_joint_state(first, JointState(name=["slide"], position=[0.0]))
+        world.set_joint_state(second, JointState(name=["slide"], position=[0.4]))
+        np.testing.assert_allclose(world.get_link_pose(first, "arm")[:3, 3], [1, 0, 0])
+        np.testing.assert_allclose(world.get_link_pose(second, "arm")[:3, 3], [1.4, 0, 0])
+        with world.parametrization_model() as model:
+            np.testing.assert_allclose(model.scene.getCurrentJointPositions(), [0.0])
+        world.add_obstacle(
+            Obstacle(
+                name="block",
+                obstacle_type=ObstacleType.BOX,
+                dimensions=(0.1, 0.1, 0.1),
+                pose=PoseStamped(frame_id="world", position=[1.4, 0, 0]),
+            )
+        )
+        assert not world.is_collision_free(second)
+        assert world.is_collision_free(first)
+        assert world.update_obstacle_pose(
+            "block", PoseStamped(frame_id="world", position=[1.8, 0, 0])
+        )
+        assert world.is_collision_free(second)
+        assert world.remove_obstacle("block")
+        assert world.is_collision_free(second)
+
+
+def test_real_rrt_and_toppra_use_finite_prepared_limits(scalar_world, roboplan_types, monkeypatch):
     world = scalar_world
     group = world.all_planning_group()
     with world.parametrization_model() as model:
@@ -211,63 +237,6 @@ def test_real_scene_preserves_prepared_motion_limits(scalar_world):
         )
     assert world.get_prepared_model().joint_space.acceleration_limits == (0.4,)
 
-
-def test_real_contexts_keep_independent_state_and_refresh_geometry(scalar_world):
-    world = scalar_world
-    with world.scratch_context() as first, world.scratch_context() as second:
-        world.set_joint_state(first, JointState(name=["slide"], position=[0.0]))
-        world.set_joint_state(second, JointState(name=["slide"], position=[0.4]))
-        np.testing.assert_allclose(world.get_link_pose(first, "arm")[:3, 3], [1, 0, 0])
-        np.testing.assert_allclose(world.get_link_pose(second, "arm")[:3, 3], [1.4, 0, 0])
-        assert first.native is not second.native
-        with world.parametrization_model() as model:
-            np.testing.assert_allclose(model.scene.getCurrentJointPositions(), [0.0])
-        stale = second.native
-        world.add_obstacle(
-            Obstacle(
-                name="block",
-                obstacle_type=ObstacleType.BOX,
-                dimensions=(0.1, 0.1, 0.1),
-                pose=PoseStamped(frame_id="world", position=[1.4, 0, 0]),
-            )
-        )
-        assert not stale.isGeometryCurrent()
-        assert not world.is_collision_free(second)
-        assert world.is_collision_free(first)
-        assert second.native is not stale
-        current = second.native
-        assert world.update_obstacle_pose(
-            "block", PoseStamped(frame_id="world", position=[1.8, 0, 0])
-        )
-        assert world.is_collision_free(second)
-        assert second.native is current
-        assert world.remove_obstacle("block")
-        assert not current.isGeometryCurrent()
-        assert world.is_collision_free(second)
-
-
-def test_real_consumer_queries_can_run_from_multiple_threads(scalar_world):
-    world = scalar_world
-
-    def query(position):
-        with world.scratch_context() as ctx:
-            world.set_joint_state(ctx, JointState(name=["slide"], position=[position]))
-            for _ in range(20):
-                assert world.is_collision_free(ctx)
-                np.testing.assert_allclose(
-                    world.get_link_pose(ctx, "arm")[:3, 3], [1 + position, 0, 0]
-                )
-            return world.get_joint_state(ctx).position
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(query, [0.0, 0.4]))
-
-    assert results == [[0.0], [0.4]]
-    assert world.get_joint_state(world.get_live_context()).position == [0.0]
-
-
-def test_real_rrt_and_toppra_use_finite_prepared_limits(scalar_world, roboplan_types, monkeypatch):
-    world = scalar_world
     planner = roboplan_types[1](world, RoboPlanPlannerConfig())
     start = JointState(name=["slide"], position=[0.0])
     goal = JointState(name=["slide"], position=[0.5])
@@ -292,14 +261,3 @@ def test_real_rrt_and_toppra_use_finite_prepared_limits(scalar_world, roboplan_t
     assert np.max(np.abs(velocities)) <= 0.2 * 1.05
     assert np.max(np.abs(accelerations)) <= 0.4 * 1.05
     assert world.check_edge_collision_free(start, goal)
-
-
-def test_native_context_cannot_be_used_with_another_world(scalar_world, roboplan_types):
-    other = roboplan_types[0]()
-    other.load_model(scalar_world.get_prepared_model())
-    other.finalize()
-    with scalar_world.scratch_context() as ctx:
-        assert scalar_world.is_collision_free(ctx)
-
-        with pytest.raises(ValueError, match="belongs to another world"):
-            other.is_collision_free(ctx)

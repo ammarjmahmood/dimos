@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-import importlib
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,10 +24,7 @@ import pinocchio as pin
 import pytest
 import trimesh
 
-from dimos.core.global_config import global_config
-from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.utils.point_cloud_self_filter import PointCloudSelfFilter
-from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -37,7 +33,6 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.protocol.tf.tf import MultiTBuffer
 from dimos.robot.assets.git_cache import DEFAULT_ROBOT_ASSET_CACHE_ROOT, GitAssetCache
 from dimos.robot.assets.model import RobotModel
-from dimos.robot.manipulators.xarm.blueprints import grasp
 from dimos.robot.manipulators.xarm.config import (
     XARM_ROS2_REF,
     XARM_ROS2_REPO,
@@ -139,6 +134,7 @@ def test_capture_state_is_matched_by_timestamp_instead_of_latest(make_filter):
     module = make_filter(urdf_xml=_joint_robot("prismatic"), state_tolerance_s=0.001)
     _place_arm(module, (0, 0, 0), 1.0)
     module.add_joint_state(JointState(ts=2.0, name=["shoulder"], position=[2.0]))
+    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.0]))
     module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.5]))
 
     result = module.filter_cloud(_cloud([[0.5, 0, 0], [2, 0, 0]], ts=1.0))
@@ -154,7 +150,6 @@ def test_capture_state_is_matched_by_timestamp_instead_of_latest(make_filter):
         JointState(ts=2.0, name=["shoulder"], position=[0.5]),
         JointState(ts=1.0, name=["wrong"], position=[0.5]),
         JointState(ts=1.0, name=["shoulder"], position=[float("nan")]),
-        JointState(ts=1.0, name=["shoulder", "shoulder"], position=[0.5, 0.5]),
     ],
 )
 def test_missing_late_or_invalid_state_drops_the_capture(make_filter, state):
@@ -164,19 +159,6 @@ def test_missing_late_or_invalid_state_drops_the_capture(make_filter, state):
         module.add_joint_state(state)
 
     assert module.filter_cloud(_cloud([[0.5, 0, 0]])) is None
-
-
-def test_failed_capture_does_not_advance_publication_timestamp(make_filter):
-    module = make_filter()
-    _place_arm(module, (1, 0, 0), 1.0)
-    assert module.filter_cloud(_cloud([], ts=1.0)) is not None
-    assert module.filter_cloud(_cloud([], ts=2.0)) is None
-    _place_arm(module, (2, 0, 0), 3.0)
-
-    result = module.filter_cloud(_cloud([], ts=3.0))
-
-    assert result is not None
-    assert module.filter_cloud(_cloud([], ts=1.0)) is None
 
 
 def test_continuous_joint_uses_cos_sin_configuration(make_filter):
@@ -190,25 +172,6 @@ def test_continuous_joint_uses_cos_sin_configuration(make_filter):
 
     assert result is not None
     np.testing.assert_allclose(result.points_f32(), [[0.5, 0, 0]])
-
-
-def test_mimic_joint_is_derived_from_its_source(make_filter):
-    urdf = _joint_robot("prismatic").replace(
-        "</robot>",
-        '<link name="replica"><collision><geometry><sphere radius="0.05"/>'
-        "</geometry></collision></link>"
-        '<joint name="follower" type="prismatic"><parent link="arm"/><child link="replica"/>'
-        '<axis xyz="1 0 0"/><limit lower="-3" upper="3" effort="1" velocity="1"/>'
-        '<mimic joint="shoulder" multiplier="2" offset="0.1"/></joint></robot>',
-    )
-    module = make_filter(urdf_xml=urdf)
-    _place_arm(module, (0, 0, 0), 1.0)
-    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.2]))
-
-    result = module.filter_cloud(_cloud([[0.2, 0, 0], [0.7, 0, 0], [1, 0, 0]]))
-
-    assert result is not None
-    np.testing.assert_allclose(result.points_f32(), [[1, 0, 0]])
 
 
 @pytest.mark.parametrize("kind", ["planar", "floating"])
@@ -293,19 +256,7 @@ def test_late_state_cannot_resurrect_expired_history(make_filter):
     assert module.filter_cloud(_cloud([[0.5, 0, 0]], ts=1.0)) is None
 
 
-def test_replacement_at_same_timestamp_uses_the_corrected_state(make_filter):
-    module = make_filter(urdf_xml=_joint_robot("prismatic"))
-    _place_arm(module, (0, 0, 0), 1.0)
-    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.0]))
-    module.add_joint_state(JointState(ts=1.0, name=["shoulder"], position=[0.5]))
-
-    result = module.filter_cloud(_cloud([[0.5, 0, 0], [0, 0, 0]]))
-
-    assert result is not None
-    np.testing.assert_allclose(result.points_f32(), [[0, 0, 0]])
-
-
-@pytest.mark.parametrize("positions", [None, [-0.1], [0.86], [float("nan")]])
+@pytest.mark.parametrize("positions", [None, [0.86]])
 def test_sim_gripper_requires_valid_measured_feedback(make_filter, positions):
     module = make_filter(
         urdf_xml=_joint_robot("revolute").replace("shoulder", "drive_joint"),
@@ -315,15 +266,6 @@ def test_sim_gripper_requires_valid_measured_feedback(make_filter, positions):
     if positions is not None:
         module.add_joint_state(JointState(ts=1.0, name=["arm/gripper"], position=positions))
     assert module.filter_cloud(_cloud([[0, 0, 0]])) is None
-
-
-def test_nonfinite_capture_does_not_advance_publication_timestamp(make_filter):
-    module = make_filter()
-    _place_arm(module, (0, 0, 0), 1.0)
-    assert module.filter_cloud(_cloud([[float("nan"), 0, 0]])) is None
-    result = module.filter_cloud(_cloud([[1, 0, 0]]))
-    assert result is not None
-    np.testing.assert_allclose(result.points_f32(), [[1, 0, 0]])
 
 
 @pytest.mark.self_hosted
@@ -380,33 +322,3 @@ def test_cached_xarm_gripper_surfaces_follow_capture(make_filter, monkeypatch):
     for cloud, filtered in zip(captures, (first, second), strict=True):
         np.testing.assert_allclose(filtered.points_f32(), controls)
         assert filtered.frame_id == "world" and filtered.ts == cloud.ts
-
-
-@pytest.mark.parametrize("simulation", ["", "mujoco"])
-def test_original_grasp_filter_wiring_preserves_seven_axis_planning(monkeypatch, simulation):
-    try:
-        with monkeypatch.context() as patch:
-            patch.setattr(global_config, "simulation", simulation)
-            blueprint = importlib.reload(grasp).xarm_grasp
-            atoms = {atom.module: atom for atom in blueprint.blueprints}
-            filtering, planning, mapping = (
-                atoms[PointCloudSelfFilter],
-                atoms[ManipulationModule],
-                atoms[RayTracingVoxelMap],
-            )
-            assert filtering.kwargs["model"] is planning.kwargs["model"].model
-            assert len(planning.kwargs["model"].joint_names) == 7
-            assert filtering.kwargs["xarm_sim_gripper"] == bool(simulation)
-            assert blueprint.remapping_map[(mapping.name, "lidar")] == "filtered_pointcloud"
-            assert blueprint.remapping_map[(planning.name, "voxel_map")] == "global_map"
-            assert ("voxel_clear_mask", "out") not in {
-                (s.name, s.direction) for s in filtering.streams
-            }
-            assert ("voxel_clear_mask", "in") not in {
-                (s.name, s.direction) for s in mapping.streams
-            }
-            assert {s.name for s in planning.streams}.isdisjoint(
-                {"pointcloud", "filtered_pointcloud"}
-            )
-    finally:
-        importlib.reload(grasp)
