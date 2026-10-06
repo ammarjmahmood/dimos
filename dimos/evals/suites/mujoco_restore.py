@@ -282,7 +282,7 @@ def _env(
     )
 
 
-# Raw manipulation: explicit command, upright cup already on its side of center.
+# Raw manipulation: explicit command; upright cup starts off-center.
 move_cup_to_center = EvalCase(
     id="xarm_move_cup_to_center",
     inputs=_RAW,
