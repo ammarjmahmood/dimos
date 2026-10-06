@@ -16,10 +16,9 @@
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field
 
 from dimos.core.module import ModuleConfig
 from dimos.manipulation.grasp_verification import GraspVerificationConfig
@@ -27,37 +26,6 @@ from dimos.manipulation.planning.groups.identifiers import assert_valid_joint_na
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.robot.assets.model import RobotModel
-
-
-class JointStateTransform(BaseModel):
-    """Explicit affine conversion from a measured source coordinate to model units.
-
-    Bounds apply to the source position. Reject mismatched units rather than
-    clamping an invalid measurement into a plausible model pose.
-    """
-
-    source: str
-    scale: float
-    offset: float
-    source_bounds: tuple[float, float]
-
-    @model_validator(mode="after")
-    def validate_conversion(self) -> JointStateTransform:
-        low, high = self.source_bounds
-        if (
-            not self.source
-            or not all(math.isfinite(v) for v in (self.scale, self.offset, low, high))
-            or self.scale == 0
-            or low >= high
-        ):
-            raise ValueError("Invalid measured joint conversion")
-        return self
-
-    def position(self, value: float) -> float:
-        low, high = self.source_bounds
-        if not math.isfinite(value) or not low <= value <= high:
-            raise ValueError(f"Measured joint '{self.source}' is outside {self.source_bounds}")
-        return self.scale * value + self.offset
 
 
 class RobotModelConfig(ModuleConfig):
@@ -69,8 +37,6 @@ class RobotModelConfig(ModuleConfig):
         base_pose: Placement transform for the model's base link in the world.
         joint_names: Ordered list of controllable joints in the canonical model
             namespace. This is not a planning group.
-        joint_state_transforms: Measured source-to-model coordinate conversions,
-            keyed by canonical target joint. These do not transform commands.
         base_link: Robot-scoped link that base_pose places in the world and
             current backends use for weld/placement.
         auto_convert_meshes: Auto-convert DAE/STL meshes to OBJ for Drake
@@ -83,7 +49,6 @@ class RobotModelConfig(ModuleConfig):
     srdf_path: Path | None = None
     base_pose: PoseStamped = Field(default_factory=PoseStamped)
     joint_names: list[str]
-    joint_state_transforms: dict[str, JointStateTransform] = Field(default_factory=dict)
     base_link: str = "base_link"
     planning_groups: list[PlanningGroupDefinition] = Field(default_factory=list)
     auto_convert_meshes: bool = False
@@ -105,8 +70,3 @@ class RobotModelConfig(ModuleConfig):
             raise ValueError("RobotModelConfig.joint_names must contain non-empty names")
         if len(self.joint_names) != len(set(self.joint_names)):
             raise ValueError("RobotModelConfig contains duplicate canonical joint names")
-        if set(self.joint_state_transforms) - set(self.joint_names):
-            raise ValueError("Joint-state transform targets must be model joints")
-        sources = [mapping.source for mapping in self.joint_state_transforms.values()]
-        if len(sources) != len(set(sources)) or set(sources) & set(self.joint_names):
-            raise ValueError("Joint-state transform sources must be unique non-model joints")

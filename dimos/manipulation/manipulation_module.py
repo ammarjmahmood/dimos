@@ -67,7 +67,6 @@ from dimos.manipulation.planning.planners.config import (
 from dimos.manipulation.planning.planners.roboplan_config import RoboPlanPlannerConfig
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.enums import IKStatus, ObstacleType
-from dimos.manipulation.planning.spec.measured_joint_state import canonicalize_measured_joint_state
 from dimos.manipulation.planning.spec.models import (
     DEFAULT_OBSTACLE_RGBA,
     CartesianTarget,
@@ -205,11 +204,6 @@ class ManipulationModuleConfig(ModuleConfig):
         targets = Counter(self.joint_state_aliases.values())
         if collided := sorted(name for name, count in targets.items() if count > 1):
             raise ValueError(f"joint_state_aliases targets are not unique: {collided}")
-        transforms = self.model.joint_state_transforms
-        if set(self.joint_state_aliases) & {mapping.source for mapping in transforms.values()}:
-            raise ValueError("Joint-state aliases and transforms must not share sources")
-        if set(self.joint_state_aliases.values()) & set(transforms):
-            raise ValueError("Joint-state aliases and transforms must not share targets")
         return self
 
 
@@ -353,13 +347,31 @@ class ManipulationModule(Module):
             if self._world_monitor is None:
                 return
 
-            try:
-                state = canonicalize_measured_joint_state(
-                    msg, self.config.model, aliases=self.config.joint_state_aliases
-                )
-            except ValueError as error:
-                logger.warning("Skipping invalid measured joint state", error=str(error))
+            aliases = self.config.joint_state_aliases
+            name_to_idx = {aliases.get(name, name): i for i, name in enumerate(msg.name)}
+            names = self.config.model.joint_names
+            canonical_names = [aliases.get(name, name) for name in msg.name]
+            if (
+                len(msg.name) != len(msg.position)
+                or len(set(canonical_names)) != len(canonical_names)
+                or not np.isfinite(msg.position).all()
+                or not np.isfinite(msg.ts)
+            ):
+                logger.warning("Skipping malformed model state")
                 return
+            missing = [name for name in names if name not in name_to_idx]
+            if missing:
+                logger.warning("Skipping incomplete model state", missing_joints=missing)
+                return
+            indices = [name_to_idx[name] for name in names]
+            state = JointState(
+                ts=msg.ts,
+                name=list(names),
+                position=[msg.position[index] for index in indices],
+                velocity=[msg.velocity[index] for index in indices]
+                if len(msg.velocity) == len(msg.name)
+                else [],
+            )
             self._world_monitor.on_joint_state(state)
             if self._init_joints is None:
                 self._init_joints = state

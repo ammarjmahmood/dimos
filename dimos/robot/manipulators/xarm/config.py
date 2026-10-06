@@ -27,7 +27,7 @@ from dimos.control.components import (
 from dimos.core.global_config import global_config
 from dimos.hardware.spec import JointLimits
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
-from dimos.manipulation.planning.spec.config import JointStateTransform, RobotModelConfig
+from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.robot.assets.model import RobotModel
@@ -72,17 +72,14 @@ XARM7_SIM_BASE_POSE = PoseStamped(frame_id="world", position=Vector3(z=0.12))
 def make_xarm7_sim_robot_config(
     base_pose: PoseStamped | None = None,
     tf_extra_links: list[str] | None = None,
-    *,
-    include_gripper_state: bool = False,
 ) -> RobotModelConfig:
     """Build the sim planning model.
 
     Pass ``base_pose`` for a scene that mounts ``link_base`` somewhere other than
     the pedestal ``data/xarm7`` uses, and ``tf_extra_links`` when a consumer needs
-    more than the tip transform. ``include_gripper_state`` is for the shipped
-    MuJoCo gripper coordinate only, not SDK feedback or a custom gripper range.
+    more than the tip transform.
     """
-    config = make_xarm7_model_config(
+    return make_xarm7_model_config(
         add_gripper=True,
         gripper_hardware_id="arm",
         base_pose=XARM7_SIM_BASE_POSE if base_pose is None else base_pose,
@@ -90,19 +87,6 @@ def make_xarm7_sim_robot_config(
         home_joints=XARM7_SIM_HOME,
         pre_grasp_offset=0.05,
     )
-    if include_gripper_state:
-        # The shipped xArm MJCF uses left_driver_joint in [0, 0.85] radians.
-        # MujocoShmClient.read_gripper_position reflects that measurement into
-        # the command coordinate. Undo the reflection for URDF drive_joint.
-        # This is simulation-specific; xArm SDK values use different units.
-        config.joint_names = [*config.joint_names, "drive_joint"]
-        config.home_joints = [*XARM7_SIM_HOME, 0.0]
-        config.joint_state_transforms = {
-            "drive_joint": JointStateTransform(
-                source="arm/gripper", scale=-1.0, offset=0.85, source_bounds=(0.0, 0.85)
-            )
-        }
-    return config
 
 
 def make_dual_xarm6_model_config() -> RobotModelConfig:

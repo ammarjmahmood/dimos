@@ -26,7 +26,6 @@ import roboplan.core as roboplan_core
 from dimos.manipulation.planning.groups.registry import PlanningGroupRegistry
 from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.joint_space import CoordinateTopology
-from dimos.manipulation.planning.spec.measured_joint_state import canonicalize_measured_joint_state
 from dimos.manipulation.planning.spec.validation import prepare_robot_model
 from dimos.manipulation.planning.world.roboplan_model import build_roboplan_model
 from dimos.manipulation.planning.world.roboplan_scene import create_roboplan_scene
@@ -79,11 +78,18 @@ class RobotPointCloudFilter:
 
     def record_joint_state(self, state: JointState) -> None:
         """Capture complete canonical positions from the coordinator stream."""
-        try:
-            state = canonicalize_measured_joint_state(state, self._prepared.config)
-        except ValueError as error:
-            logger.warning("Dropping invalid capture joint state", error=str(error))
+        names = self._prepared.config.joint_names
+        if (
+            len(state.name) != len(state.position)
+            or len(set(state.name)) != len(state.name)
+            or not np.isfinite(state.position).all()
+            or not np.isfinite(state.ts)
+            or not set(names).issubset(state.name)
+        ):
+            logger.warning("Dropping malformed or incomplete capture joint state")
             return
+        positions = dict(zip(state.name, state.position, strict=True))
+        state = JointState(ts=state.ts, name=list(names), position=[positions[n] for n in names])
         with self._lock:
             if self._closed:
                 return

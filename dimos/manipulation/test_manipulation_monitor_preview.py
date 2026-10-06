@@ -37,61 +37,6 @@ from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.msgs.trajectory_msgs.TrajectoryPoint import TrajectoryPoint
 from dimos.robot.assets.model import RobotModel
-from dimos.robot.manipulators.xarm.config import make_xarm7_sim_robot_config
-
-
-@pytest.mark.parametrize("measured, expected", [(0.0, 0.85), (0.85, 0.0), (0.35, 0.5)])
-def test_sim_gripper_measurement_reaches_model_with_original_timestamp(
-    module_factory, measured, expected
-):
-    module = _make_module_with_monitor(module_factory)
-    module.config.model = make_xarm7_sim_robot_config(include_gripper_state=True)
-    # Deliberately place the source first to exercise name-based mapping.
-    msg = JointState(
-        ts=12.5,
-        name=["arm/gripper", *module.config.model.joint_names[:7]],
-        position=[measured, *([0.1] * 7)],
-        velocity=[0.2, *([0.3] * 7)],
-    )
-    module._on_joint_state(msg)
-
-    state = module._world_monitor.on_joint_state.call_args.args[0]
-    assert state.name == module.config.model.joint_names
-    assert state.position == pytest.approx([*([0.1] * 7), expected])
-    assert state.velocity == pytest.approx([*([0.3] * 7), -0.2])
-    assert state.ts == 12.5
-    assert msg.position[0] == measured
-    group = PlanningGroupRegistry(module.config.model.planning_groups).get("manipulator")
-    assert list(group.joint_names) == module.config.model.joint_names[:7]
-    assert module._group_joint_presets(group)["home"].name == list(group.joint_names)
-
-
-@pytest.mark.parametrize(
-    "source, positions, timestamp",
-    [
-        ([], [], 12.5),
-        (["arm/gripper"], [850.0], 12.5),
-        (["arm/gripper"], [-0.01], 12.5),
-        (["arm/gripper"], [float("nan")], 12.5),
-        (["arm/gripper"], [0.0], float("nan")),
-        (["drive_joint"], [0.0], 12.5),
-        (["arm/gripper", "drive_joint"], [0.0, 0.0], 12.5),
-    ],
-)
-def test_sim_gripper_missing_ambiguous_or_wrong_units_cannot_update_model(
-    module_factory, source, positions, timestamp
-):
-    module = _make_module_with_monitor(module_factory)
-    module.config.model = make_xarm7_sim_robot_config(include_gripper_state=True)
-    module._on_joint_state(
-        JointState(
-            ts=timestamp,
-            name=[*module.config.model.joint_names[:7], *source],
-            position=[*([0.0] * 7), *positions],
-        )
-    )
-    module._world_monitor.on_joint_state.assert_not_called()
-    assert module._init_joints is None
 
 
 @pytest.fixture
