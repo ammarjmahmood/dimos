@@ -382,39 +382,38 @@ def _worker_entrypoint(conn: Connection, worker_id: int) -> None:
             logger.error("Error during worker provider shutdown", exc_info=True)
 
 
-def _warm_up(instance: Any) -> None:
-    """Pay the module's first-use imports while the blueprint is still deploying.
+def _start_warm_up(instance: ModuleBase) -> None:
+    """Pay the module's first-use imports on a daemon thread, overlapping the
+    other workers' deploys and the wiring phase instead of landing in start().
 
-    LCMEncoderMixin.subscribe() calls ``<type>.lcm_warmup()`` on the
-    subscriber's thread, i.e. inside start(); for PointCloud2 that is a 2.5 s
-    open3d import serialised into the start phase of every cloud subscriber.
-    Running it right after construction overlaps the import with the other
-    workers' deploys and the wiring phase. A concurrent lcm_warmup() from
-    start() just waits on the module import lock.
-
-    get_skills() imports langchain_core.tools (0.4 s, more on a busy worker)
-    and builds the skill schemas; McpServer asks every module for them right
-    after start(), so the same applies.
+    Subscribing calls ``<type>.lcm_warmup()`` (open3d, 2.5 s for PointCloud2)
+    and McpServer's first ``get_skills()`` imports langchain_core.tools. Either
+    one, if it arrives while this thread is still importing, just waits on the
+    module import lock.
     """
-    seen: set[Any] = set()
-    for stream in [
-        *getattr(instance, "inputs", {}).values(),
-        *getattr(instance, "ios", {}).values(),
-    ]:
-        warmup = getattr(stream.type, "lcm_warmup", None)
-        if warmup is None or stream.type in seen:
-            continue
-        seen.add(stream.type)
+    types: set[type] = set()
+    if instance.warm_up_inputs:
+        # Collected here, not on the thread: wiring RPCs add attributes to the
+        # instance, and these properties iterate its __dict__.
+        types = {stream.type for stream in [*instance.inputs.values(), *instance.ios.values()]}
+
+    def warm_up() -> None:
+        for msg_type in types:
+            warmup = getattr(msg_type, "lcm_warmup", None)
+            if warmup is None:
+                continue
+            try:
+                warmup()
+            except Exception:
+                logger.warning("Stream type warm-up failed", type=msg_type, exc_info=True)
         try:
-            warmup()
+            instance.get_skills()
+        except ImportError:
+            pass  # no agent stack installed, so nothing will ask for skills
         except Exception:
-            logger.warning("Stream type warm-up failed", type=stream.type_name, exc_info=True)
-    try:
-        instance.get_skills()
-    except ImportError:
-        pass  # no agent stack installed, so nothing will ask for skills
-    except Exception:
-        logger.warning("Skill warm-up failed", module=type(instance).__name__, exc_info=True)
+            logger.warning("Skill warm-up failed", module=type(instance).__name__, exc_info=True)
+
+    threading.Thread(target=warm_up, name=f"warmup-{type(instance).__name__}", daemon=True).start()
 
 
 def _handle_request(request: Any, state: _WorkerState) -> WorkerResponse:
@@ -426,12 +425,7 @@ def _handle_request(request: Any, state: _WorkerState) -> WorkerResponse:
 
             instance = module_class(**kwargs)
             state.instances[module_id] = instance
-            threading.Thread(
-                target=_warm_up,
-                args=(instance,),
-                name=f"warmup-{module_class.__name__}",
-                daemon=True,
-            ).start()
+            _start_warm_up(instance)
 
             return WorkerResponse(result=module_id)
 

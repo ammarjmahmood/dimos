@@ -389,8 +389,8 @@ class McpServer(Module):
     def on_system_modules(self, modules: list[RPCClient]) -> None:
         # TODO: this is a bit hacky, also not thread-safe
         assert self.rpc is not None
-        # One RPC per module; in parallel because each worker's first call also
-        # imports langchain_core.tools and builds the schemas.
+        # One RPC per module, in parallel: a worker still warming up blocks
+        # its call on the langchain import.
         per_module = safe_thread_map(modules, lambda module: module.get_skills() or [])
         app.state.skills = [skill_info for skills in per_module for skill_info in skills]
         app.state.skills_by_name = {s.func_name: s for s in app.state.skills}
