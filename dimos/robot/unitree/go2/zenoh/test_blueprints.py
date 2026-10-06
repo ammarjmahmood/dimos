@@ -22,7 +22,6 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.CompressedImage import CompressedImage
 from dimos.robot.unitree.go2.zenoh.blueprints import (
     CAMERA_ENTITY,
-    go2_dds_mid360,
     go2_dds_mid360_viewer,
     go2_zenoh_basic,
 )
@@ -34,7 +33,7 @@ def _rerun_kwargs(blueprint: Any) -> dict[str, Any]:
 
 
 def test_both_encodings_land_on_the_pane() -> None:
-    for blueprint in (go2_zenoh_basic, go2_dds_mid360, go2_dds_mid360_viewer):
+    for blueprint in (go2_zenoh_basic, go2_dds_mid360_viewer):
         kwargs = _rerun_kwargs(blueprint)
         overrides = kwargs["visual_override"]
         assert kwargs["blueprint"]().root_container is not None

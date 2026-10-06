@@ -158,6 +158,17 @@ def test_global_config() -> None:
     assert blueprint_set.global_config_overrides["option2"] == 42
 
 
+def test_call_merges_config() -> None:
+    base = ModuleA.blueprint(a=1, b=2).global_config(n_workers=3)
+    called = base(b=20, c=4)
+
+    assert called.blueprints[0].kwargs == {"a": 1, "b": 20, "c": 4}
+    assert called.global_config_overrides == base.global_config_overrides
+    assert base.blueprints[0].kwargs == {"a": 1, "b": 2}
+    with pytest.raises(TypeError):
+        autoconnect(ModuleA.blueprint(), ModuleB.blueprint())(a=1)
+
+
 def test_future_annotations_support() -> None:
     """Test that modules using `from __future__ import annotations` work correctly.
 

@@ -214,6 +214,14 @@ class Blueprint:
         blueprint = BlueprintAtom.create(module, kwargs)
         return cls(blueprints=(blueprint,))
 
+    def __call__(self, **kwargs: Any) -> "Blueprint":
+        """Re-configure a one-module blueprint: kwargs merge over its existing config."""
+        if len(self.blueprints) != 1:
+            names = ", ".join(atom.name for atom in self.blueprints)
+            raise TypeError(f"only a one-module blueprint can be called, this one has: {names}")
+        (atom,) = self.blueprints
+        return replace(self, blueprints=(replace(atom, kwargs={**atom.kwargs, **kwargs}),))
+
     def disabled_modules(self, *modules: type[ModuleBase]) -> "Blueprint":
         return replace(self, disabled_modules_tuple=self.disabled_modules_tuple + modules)
 
