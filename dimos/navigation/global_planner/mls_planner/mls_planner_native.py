@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from dimos_lcm.actionlib_msgs import GoalStatus
+
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
@@ -83,6 +85,7 @@ class MLSPlannerNative(NativeModule, spec.GlobalPlanner):
     tf: In[TFMessage]
 
     path: Out[Path]
+    nav_status: Out[GoalStatus]
     surface_map: Out[PointCloud2]
     nodes: Out[PointCloud2]
     node_edges: Out[LineSegments3D]

@@ -35,11 +35,12 @@ surface_map = "sensor_msgs.PointCloud2"
 nodes = "sensor_msgs.PointCloud2"
 node_edges = "nav_msgs.LineSegments3D"
 path = "nav_msgs.Path"
+nav_status = "actionlib_msgs.GoalStatus"
 
 [dependencies]
 dimos-module = { path = "../../../../../native/rust/dimos-module" }
 lcm-msgs = { git = "https://github.com/dimensionalOS/dimos-lcm.git", branch = "rust-codegen" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 serde = { version = "1", features = ["derive"] }
 ahash = "0.8"
 tracing = "0.1"

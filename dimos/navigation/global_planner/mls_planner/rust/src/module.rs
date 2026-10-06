@@ -17,11 +17,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::mls_planner::{Config, Planner, RegionBounds};
+use crate::mls_planner::{Config, Plan, Planner, RegionBounds};
 use crate::region_viz::{pack_cell, Cell, RegionContent, RegionViz};
-use crate::voxel::{surface_point_xyz, VoxelKey};
+use crate::voxel::{surface_point_xyz, VoxelKey, Xyz};
 use dimos_module::time::now;
 use dimos_module::{error_throttled, warn_throttled, Input, Module, Output, Tf};
+use lcm_msgs::actionlib_msgs::{GoalID, GoalStatus};
 use lcm_msgs::geometry_msgs::{Point, PointStamped, Pose, PoseStamped, Quaternion};
 use lcm_msgs::nav_msgs::Path;
 use lcm_msgs::sensor_msgs::{PointCloud2, PointField};
@@ -29,8 +30,6 @@ use lcm_msgs::std_msgs::{Header, Time};
 use tokio::sync::Notify;
 use tracing::{debug, warn};
 
-/// A point in the planner's world frame.
-type Xyz = (f32, f32, f32);
 type Xyzi = (f32, f32, f32, f32);
 
 /// State shared between the handle loop and the worker.
@@ -53,6 +52,16 @@ enum MapUpdate {
 struct SeedRegion {
     cloud: PointCloud2,
     bounds: PoseStamped,
+}
+
+/// How often the latest goal status repeats between transitions.
+const STATUS_HEARTBEAT: Duration = Duration::from_secs(1);
+
+/// The active goal and the id its status reports carry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Goal {
+    id: u64,
+    position: Xyz,
 }
 
 /// How long half a seed region waits for its counterpart before it is dropped.
@@ -145,6 +154,9 @@ pub struct MlsPlanner {
     #[output(encode = Path::encode)]
     path: Output<Path>,
 
+    #[output(encode = GoalStatus::encode)]
+    nav_status: Output<GoalStatus>,
+
     #[config]
     config: Config,
 
@@ -157,11 +169,16 @@ pub struct MlsPlanner {
     // on map processing. Seed regions queue in arrival order.
     pending: Shared<MapUpdate>,
     seed_regions: Arc<Mutex<VecDeque<SeedRegion>>>,
-    active_goal: Shared<Xyz>,
+    active_goal: Shared<Goal>,
     goal_changed: Arc<AtomicBool>,
     wake: Arc<Notify>,
+    latest_status: Shared<Report>,
+
+    // Counts every goal message that gets a status of its own.
+    goal_count: u64,
 
     worker: Option<tokio::task::JoinHandle<()>>,
+    heartbeat: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl MlsPlanner {
@@ -178,13 +195,25 @@ impl MlsPlanner {
             nodes: self.nodes.clone(),
             node_edges: self.node_edges.clone(),
             path: self.path.clone(),
+            status: self.status(),
         };
         self.worker = Some(tokio::spawn(worker.run()));
+        self.heartbeat = Some(tokio::spawn(self.status().heartbeat()));
     }
 
     async fn stop_worker(&mut self) {
-        if let Some(handle) = self.worker.take() {
+        for handle in [self.worker.take(), self.heartbeat.take()]
+            .into_iter()
+            .flatten()
+        {
             handle.abort();
+        }
+    }
+
+    fn status(&self) -> StatusReporter {
+        StatusReporter {
+            out: self.nav_status.clone(),
+            latest: Arc::clone(&self.latest_status),
         }
     }
 
@@ -237,11 +266,140 @@ impl MlsPlanner {
         self.wake.notify_one();
     }
 
-    /// Set or cancel the active goal from a click, then wake the worker.
+    /// Set, cancel or reject the active goal, then wake the worker.
     async fn on_goal(&mut self, msg: PointStamped) {
-        *self.active_goal.lock().expect("goal mutex") = goal_position(&msg.point);
+        match goal_request(&msg.point) {
+            GoalRequest::Set(position) => {
+                let id = self.next_goal_id();
+                self.status()
+                    .report(Report::new(id, GoalStatus::PENDING, "planning"))
+                    .await;
+                self.set_active_goal(Some(Goal { id, position }));
+            }
+            GoalRequest::Cancel => {
+                if self.set_active_goal(None).is_some() {
+                    let id = self.next_goal_id();
+                    self.status()
+                        .report(Report::new(id, GoalStatus::PREEMPTED, "canceled"))
+                        .await;
+                }
+            }
+            GoalRequest::Invalid => {
+                self.set_active_goal(None);
+                let id = self.next_goal_id();
+                self.status()
+                    .report(Report::new(id, GoalStatus::REJECTED, "goal is not finite"))
+                    .await;
+            }
+        }
         self.goal_changed.store(true, Ordering::SeqCst);
         self.wake.notify_one();
+    }
+
+    fn next_goal_id(&mut self) -> u64 {
+        self.goal_count += 1;
+        self.goal_count
+    }
+
+    /// Replace the active goal, returning the one it displaced.
+    fn set_active_goal(&self, goal: Option<Goal>) -> Option<Goal> {
+        std::mem::replace(&mut *self.active_goal.lock().expect("goal mutex"), goal)
+    }
+}
+
+/// One goal's state as nav_status carries it.
+#[derive(Clone, Debug, PartialEq)]
+struct Report {
+    id: u64,
+    status: u8,
+    reason: &'static str,
+    remaining_m: Option<f32>,
+}
+
+impl Report {
+    fn new(id: u64, status: i8, reason: &'static str) -> Self {
+        Self {
+            id,
+            status: status as u8,
+            reason,
+            remaining_m: None,
+        }
+    }
+
+    fn with_remaining(mut self, remaining_m: f32) -> Self {
+        self.remaining_m = Some(remaining_m);
+        self
+    }
+
+    /// Whether this differs from the last report by more than the distance.
+    fn is_transition_from(&self, last: Option<&Report>) -> bool {
+        last.is_none_or(|last| {
+            (last.id, last.status, last.reason) != (self.id, self.status, self.reason)
+        })
+    }
+
+    fn message(&self) -> GoalStatus {
+        let text = match self.remaining_m {
+            Some(remaining_m) => format!("{}, {remaining_m:.2} m from the goal", self.reason),
+            None => self.reason.to_string(),
+        };
+        GoalStatus {
+            goal_id: GoalID {
+                stamp: now(),
+                id: self.id.to_string(),
+            },
+            status: self.status,
+            text,
+        }
+    }
+}
+
+/// Record a report as the latest. True when it is a transition to publish
+/// now. A report for a goal older than the latest is dropped.
+fn record(latest: &mut Option<Report>, report: &Report) -> bool {
+    if latest.as_ref().is_some_and(|last| last.id > report.id) {
+        return false;
+    }
+    let transition = report.is_transition_from(latest.as_ref());
+    *latest = Some(report.clone());
+    transition
+}
+
+/// Publishes goal status on every transition and on the heartbeat.
+#[derive(Clone)]
+struct StatusReporter {
+    out: Output<GoalStatus>,
+    latest: Shared<Report>,
+}
+
+impl StatusReporter {
+    async fn report(&self, report: Report) {
+        let transition = record(&mut self.latest.lock().expect("status mutex"), &report);
+        if transition {
+            self.publish(&report).await;
+        }
+    }
+
+    async fn heartbeat(self) {
+        let mut tick = tokio::time::interval(STATUS_HEARTBEAT);
+        loop {
+            tick.tick().await;
+            let latest = self.latest.lock().expect("status mutex").clone();
+            if let Some(report) = latest {
+                self.publish(&report).await;
+            }
+        }
+    }
+
+    async fn publish(&self, report: &Report) {
+        if let Err(e) = self.out.publish(&report.message()).await {
+            error_throttled!(
+                Duration::from_secs(1),
+                error = %e,
+                topic = %self.out.topic,
+                "Goal status failed to publish",
+            );
+        }
     }
 }
 
@@ -253,11 +411,25 @@ fn stamps_paired(bounds: Option<&PoseStamped>, cloud: Option<&PointCloud2>) -> b
     }
 }
 
-/// The goal position, or None when any coordinate is non-finite, which is the
-/// cancel signal.
-fn goal_position(p: &Point) -> Option<Xyz> {
+/// What a goal message asks for.
+#[derive(Debug, PartialEq)]
+enum GoalRequest {
+    Set(Xyz),
+    Cancel,
+    Invalid,
+}
+
+/// A finite point sets a goal and an all-NaN point cancels. Any other
+/// non-finite point is invalid.
+fn goal_request(p: &Point) -> GoalRequest {
     let goal = (p.x as f32, p.y as f32, p.z as f32);
-    (goal.0.is_finite() && goal.1.is_finite() && goal.2.is_finite()).then_some(goal)
+    if goal.0.is_finite() && goal.1.is_finite() && goal.2.is_finite() {
+        GoalRequest::Set(goal)
+    } else if p.x.is_nan() && p.y.is_nan() && p.z.is_nan() {
+        GoalRequest::Cancel
+    } else {
+        GoalRequest::Invalid
+    }
 }
 
 /// Owns the planner graph and does map mutation, publishing, and replanning
@@ -265,7 +437,7 @@ fn goal_position(p: &Point) -> Option<Xyz> {
 struct Worker {
     pending: Shared<MapUpdate>,
     seed_regions: Arc<Mutex<VecDeque<SeedRegion>>>,
-    active_goal: Shared<Xyz>,
+    active_goal: Shared<Goal>,
     goal_changed: Arc<AtomicBool>,
     wake: Arc<Notify>,
     tf: Tf,
@@ -274,13 +446,13 @@ struct Worker {
     nodes: Output<PointCloud2>,
     node_edges: Output<Path>,
     path: Output<Path>,
+    status: StatusReporter,
 }
 
 impl Worker {
     async fn run(self) {
         let mut planner = Planner::new(self.config.worker_threads);
         let mut last_path_at: Option<Instant> = None;
-        let mut path_goal: Option<Xyz> = None;
         let mut last_viz_at: Option<Instant> = None;
         let mut viz = RegionViz::new(
             (self.config.viz_region_m / self.config.voxel_size).round() as i32,
@@ -300,8 +472,7 @@ impl Worker {
                     None => false,
                 };
                 if replan_due(goal_changed, live_update) {
-                    self.maybe_replan(&mut planner, &mut last_path_at, &mut path_goal)
-                        .await;
+                    self.maybe_replan(&mut planner, &mut last_path_at).await;
                 }
                 // Live updates apply first, then one seed region per pass.
                 let seed = self.seed_regions.lock().expect("seed mutex").pop_front();
@@ -470,12 +641,7 @@ impl Worker {
     }
 
     /// Gate and publish a replan. The planning itself lives in Planner::plan.
-    async fn maybe_replan(
-        &self,
-        planner: &mut Planner,
-        last_path_at: &mut Option<Instant>,
-        path_goal: &mut Option<Xyz>,
-    ) {
+    async fn maybe_replan(&self, planner: &mut Planner, last_path_at: &mut Option<Instant>) {
         let Some(start) = self.base_position() else {
             return;
         };
@@ -485,27 +651,24 @@ impl Worker {
         };
 
         let plan_start = Instant::now();
-        let waypoints =
-            match tokio::task::block_in_place(|| replan(planner, start, goal, &self.config)) {
-                Replan::Reached => {
-                    self.clear_goal(goal);
-                    // A goal reached before any path went out still has to end
-                    // at the follower, so hand it the goal alone.
-                    if *path_goal != Some(goal) {
-                        let arrival =
-                            build_path_from_waypoints(&[goal], &self.config.world_frame, now());
-                        publish_path(&self.path, &arrival).await;
-                    }
-                    return;
-                }
-                Replan::Blocked => {
-                    // No full path and nothing safe ahead on the cached path, so stop.
-                    publish_path(&self.path, &empty_path(&self.config.world_frame, now())).await;
-                    return;
-                }
-                Replan::Path(waypoints) => waypoints,
-            };
-        *path_goal = Some(goal);
+        let outcome =
+            tokio::task::block_in_place(|| replan(planner, start, goal.position, &self.config));
+        let (status, reason) = outcome.status();
+        let report =
+            Report::new(goal.id, status, reason).with_remaining(distance(start, goal.position));
+        let waypoints = match outcome {
+            Replan::Reached => {
+                self.clear_goal(goal);
+                self.status.report(report).await;
+                return;
+            }
+            Replan::Planned(Plan::Blocked) => {
+                publish_path(&self.path, &empty_path(&self.config.world_frame, now())).await;
+                self.status.report(report).await;
+                return;
+            }
+            Replan::Planned(Plan::Full(waypoints) | Plan::Truncated(waypoints)) => waypoints,
+        };
         let plan_ms = plan_start.elapsed().as_secs_f64() * 1e3;
         let produced = Instant::now();
         let since_last_ms = last_path_at.map_or(-1.0, |t| (produced - t).as_secs_f64() * 1e3);
@@ -518,10 +681,11 @@ impl Worker {
             plan_ms, since_last_ms, "path planned"
         );
         publish_path(&self.path, &path_msg).await;
+        self.status.report(report).await;
     }
 
     /// Clear the active goal unless a newer one replaced it meanwhile.
-    fn clear_goal(&self, goal: Xyz) {
+    fn clear_goal(&self, goal: Goal) {
         let mut guard = self.active_goal.lock().expect("goal mutex");
         if *guard == Some(goal) {
             *guard = None;
@@ -533,8 +697,22 @@ impl Worker {
 #[derive(Debug, PartialEq)]
 enum Replan {
     Reached,
-    Path(Vec<Xyz>),
-    Blocked,
+    Planned(Plan),
+}
+
+impl Replan {
+    /// The goal status this outcome reports, with its reason.
+    fn status(&self) -> (i8, &'static str) {
+        match self {
+            Replan::Reached => (GoalStatus::SUCCEEDED, "reached"),
+            Replan::Planned(Plan::Full(_)) => (GoalStatus::ACTIVE, "following the path"),
+            Replan::Planned(Plan::Truncated(_)) => (
+                GoalStatus::ACTIVE,
+                "path blocked ahead, following it while safe",
+            ),
+            Replan::Planned(Plan::Blocked) => (GoalStatus::ABORTED, "no safe path"),
+        }
+    }
 }
 
 /// Decide a replan pass. A goal already within tolerance needs no path.
@@ -542,12 +720,11 @@ fn replan(planner: &mut Planner, start: Xyz, goal: Xyz, config: &Config) -> Repl
     if is_at_goal(start, goal, config.goal_tolerance, config.goal_z_tolerance) {
         return Replan::Reached;
     }
-    let waypoints = planner.plan_or_truncate(start, goal, config);
-    if waypoints.is_empty() {
-        Replan::Blocked
-    } else {
-        Replan::Path(waypoints)
-    }
+    Replan::Planned(planner.plan_or_truncate(start, goal, config))
+}
+
+fn distance(a: Xyz, b: Xyz) -> f32 {
+    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt()
 }
 
 /// Whether a worker pass replans. Seed regions never trigger one, so a pass
@@ -863,7 +1040,7 @@ mod tests {
             (0.0, 0.0, 3.0),
             &test_config(),
         );
-        assert_eq!(outcome, Replan::Blocked);
+        assert_eq!(outcome, Replan::Planned(Plan::Blocked));
     }
 
     #[test]
@@ -1037,10 +1214,72 @@ mod tests {
     }
 
     #[test]
-    fn goal_position_passes_finite_and_cancels_on_non_finite() {
-        assert_eq!(goal_position(&point(1.0, 2.0, 3.0)), Some((1.0, 2.0, 3.0)));
-        assert_eq!(goal_position(&point(f64::NAN, 0.0, 0.0)), None);
-        assert_eq!(goal_position(&point(0.0, f64::INFINITY, 0.0)), None);
-        assert_eq!(goal_position(&point(0.0, 0.0, f64::NEG_INFINITY)), None);
+    fn goal_request_sets_on_finite_cancels_on_all_nan_and_rejects_the_rest() {
+        assert_eq!(
+            goal_request(&point(1.0, 2.0, 3.0)),
+            GoalRequest::Set((1.0, 2.0, 3.0))
+        );
+        assert_eq!(
+            goal_request(&point(f64::NAN, f64::NAN, f64::NAN)),
+            GoalRequest::Cancel
+        );
+        assert_eq!(
+            goal_request(&point(f64::NAN, 0.0, 0.0)),
+            GoalRequest::Invalid
+        );
+        assert_eq!(
+            goal_request(&point(0.0, f64::INFINITY, 0.0)),
+            GoalRequest::Invalid
+        );
+    }
+
+    #[test]
+    fn each_replan_outcome_maps_to_its_goal_status() {
+        let waypoints = || vec![(0.0, 0.0, 0.0)];
+        let full = Replan::Planned(Plan::Full(waypoints()));
+        let truncated = Replan::Planned(Plan::Truncated(waypoints()));
+        assert_eq!(Replan::Reached.status().0, GoalStatus::SUCCEEDED);
+        assert_eq!(full.status().0, GoalStatus::ACTIVE);
+        assert_eq!(truncated.status().0, GoalStatus::ACTIVE);
+        assert_ne!(full.status().1, truncated.status().1);
+        assert_eq!(
+            Replan::Planned(Plan::Blocked).status().0,
+            GoalStatus::ABORTED
+        );
+    }
+
+    #[test]
+    fn a_report_publishes_on_a_transition_and_not_on_a_distance_change() {
+        let mut latest = None;
+        let active = Report::new(1, GoalStatus::ACTIVE, "following the path");
+        assert!(record(&mut latest, &active.clone().with_remaining(4.0)));
+        assert!(!record(&mut latest, &active.clone().with_remaining(3.0)));
+        assert_eq!(latest.as_ref().and_then(|r| r.remaining_m), Some(3.0));
+        assert!(record(
+            &mut latest,
+            &Report::new(1, GoalStatus::SUCCEEDED, "reached")
+        ));
+    }
+
+    #[test]
+    fn a_report_for_an_older_goal_is_dropped() {
+        let mut latest = None;
+        let pending = Report::new(2, GoalStatus::PENDING, "planning");
+        assert!(record(&mut latest, &pending));
+        assert!(!record(
+            &mut latest,
+            &Report::new(1, GoalStatus::ACTIVE, "following the path")
+        ));
+        assert_eq!(latest, Some(pending));
+    }
+
+    #[test]
+    fn a_report_message_carries_the_id_status_reason_and_distance() {
+        let msg = Report::new(7, GoalStatus::ABORTED, "no safe path")
+            .with_remaining(1.5)
+            .message();
+        assert_eq!(msg.goal_id.id, "7");
+        assert_eq!(msg.status, GoalStatus::ABORTED as u8);
+        assert_eq!(msg.text, "no safe path, 1.50 m from the goal");
     }
 }

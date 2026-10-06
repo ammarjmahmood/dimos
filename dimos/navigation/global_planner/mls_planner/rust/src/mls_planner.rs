@@ -30,7 +30,7 @@ use crate::planner;
 use crate::surfaces::{
     add_to_by_col, extract_surfaces, extract_surfaces_region, remove_from_by_col, ColumnIz,
 };
-use crate::voxel::{voxelize, VoxelKey};
+use crate::voxel::{voxelize, VoxelKey, Xyz};
 
 #[native_config]
 #[derive(Clone)]
@@ -101,6 +101,17 @@ fn validate_wall_buffer(config: &Config) -> Result<(), ValidationError> {
         ));
     }
     Ok(())
+}
+
+/// How a plan toward the goal ended, with the waypoints to follow.
+#[derive(Debug, PartialEq)]
+pub enum Plan {
+    /// A full path to the goal.
+    Full(Vec<Xyz>),
+    /// No full path, so the cached one cut where it stops being safe.
+    Truncated(Vec<Xyz>),
+    /// No full path and nothing safe ahead.
+    Blocked,
 }
 
 impl Config {
@@ -598,13 +609,7 @@ impl Planner {
     }
 
     /// Plan to the goal, or follow the cached path as far as it is still safe.
-    /// Returns the waypoints, empty when nothing ahead is traversable (stop).
-    pub fn plan_or_truncate(
-        &mut self,
-        start: (f32, f32, f32),
-        goal: (f32, f32, f32),
-        config: &Config,
-    ) -> Vec<(f32, f32, f32)> {
+    pub fn plan_or_truncate(&mut self, start: Xyz, goal: Xyz, config: &Config) -> Plan {
         if !self.graph.nodes.is_empty() {
             if let Some((waypoints, cells)) = planner::plan(&self.graph, start, goal, config) {
                 if self.last_result != Some((goal, true)) {
@@ -612,7 +617,7 @@ impl Planner {
                 }
                 self.last_result = Some((goal, true));
                 self.last_path = Some((goal, cells));
-                return waypoints;
+                return Plan::Full(waypoints);
             }
         }
         if self.last_result != Some((goal, false)) {
@@ -622,11 +627,16 @@ impl Planner {
             );
         }
         self.last_result = Some((goal, false));
-        match &self.last_path {
+        let waypoints = match &self.last_path {
             Some((cached_goal, cells)) if *cached_goal == goal => {
                 planner::truncate_to_safe(&self.graph, cells, start, config)
             }
             _ => Vec::new(),
+        };
+        if waypoints.is_empty() {
+            Plan::Blocked
+        } else {
+            Plan::Truncated(waypoints)
         }
     }
 
