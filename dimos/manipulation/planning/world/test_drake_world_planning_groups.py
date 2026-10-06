@@ -167,6 +167,7 @@ def test_drake_loads_canonical_slash_names_natively(tmp_path: Path) -> None:
     assert world.get_prepared_model().joint_space.names == ("left/j1",)
 
 
+@pytest.mark.self_hosted
 @requires_drake
 def test_drake_robot_point_classification_is_explicitly_unsupported(tmp_path: Path) -> None:
     path = tmp_path / "robot.urdf"
