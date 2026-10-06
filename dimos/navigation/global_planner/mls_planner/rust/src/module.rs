@@ -35,6 +35,10 @@ type Xyzi = (f32, f32, f32, f32);
 /// State shared between the handle loop and the worker.
 type Shared<T> = Arc<Mutex<Option<T>>>;
 
+/// The last status reported. Held across each publish, so a heartbeat can
+/// never send an older goal's status after a newer one.
+type LatestStatus = Arc<tokio::sync::Mutex<Option<Report>>>;
+
 /// A map input handed from the handle loop to the worker. Only the newest is
 /// kept, so a dropped intermediate frame is harmless.
 enum MapUpdate {
@@ -172,7 +176,7 @@ pub struct MlsPlanner {
     active_goal: Shared<Goal>,
     goal_changed: Arc<AtomicBool>,
     wake: Arc<Notify>,
-    latest_status: Shared<Report>,
+    latest_status: LatestStatus,
 
     // Counts every goal message that gets a status of its own.
     goal_count: u64,
@@ -369,13 +373,13 @@ fn record(latest: &mut Option<Report>, report: &Report) -> bool {
 #[derive(Clone)]
 struct StatusReporter {
     out: Output<GoalStatus>,
-    latest: Shared<Report>,
+    latest: LatestStatus,
 }
 
 impl StatusReporter {
     async fn report(&self, report: Report) {
-        let transition = record(&mut self.latest.lock().expect("status mutex"), &report);
-        if transition {
+        let mut latest = self.latest.lock().await;
+        if record(&mut latest, &report) {
             self.publish(&report).await;
         }
     }
@@ -384,9 +388,9 @@ impl StatusReporter {
         let mut tick = tokio::time::interval(STATUS_HEARTBEAT);
         loop {
             tick.tick().await;
-            let latest = self.latest.lock().expect("status mutex").clone();
-            if let Some(report) = latest {
-                self.publish(&report).await;
+            let latest = self.latest.lock().await;
+            if let Some(report) = latest.as_ref() {
+                self.publish(report).await;
             }
         }
     }
@@ -471,6 +475,10 @@ impl Worker {
                     }
                     None => false,
                 };
+                let goal = *self.active_goal.lock().expect("goal mutex");
+                if stop_due(goal_changed, goal) {
+                    publish_path(&self.path, &empty_path(&self.config.world_frame, now())).await;
+                }
                 if replan_due(goal_changed, live_update) {
                     self.maybe_replan(&mut planner, &mut last_path_at).await;
                 }
@@ -725,6 +733,12 @@ fn replan(planner: &mut Planner, start: Xyz, goal: Xyz, config: &Config) -> Repl
 
 fn distance(a: Xyz, b: Xyz) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt()
+}
+
+/// Whether a worker pass stops the follower. A goal message that leaves no
+/// goal is a cancel, and the follower is still on the last path.
+fn stop_due(goal_changed: bool, goal: Option<Goal>) -> bool {
+    goal_changed && goal.is_none()
 }
 
 /// Whether a worker pass replans. Seed regions never trigger one, so a pass
@@ -1207,6 +1221,18 @@ mod tests {
                 "goal_changed {goal_changed}, live_update_applied {live_update_applied}"
             );
         }
+    }
+
+    #[test]
+    fn a_pass_stops_the_follower_only_when_a_goal_message_leaves_no_goal() {
+        let goal = Goal {
+            id: 1,
+            position: (1.0, 0.0, 0.0),
+        };
+        assert!(stop_due(true, None));
+        assert!(!stop_due(true, Some(goal)));
+        // The worker clearing a reached goal is not a goal message.
+        assert!(!stop_due(false, None));
     }
 
     fn point(x: f64, y: f64, z: f64) -> Point {
