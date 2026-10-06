@@ -24,15 +24,16 @@ clock so the real modules around it run unmodified.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import cache
+import math
 from queue import Empty, Queue
-from threading import Event, Lock, Thread
+from threading import Event, Thread
 import time
 
 import mujoco
 import mujoco.viewer
 import numpy as np
 from numpy.typing import NDArray
+from pydantic import Field
 from reactivex.disposable import Disposable
 from scipy.spatial.transform import Rotation
 
@@ -51,7 +52,7 @@ from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.sim_msgs.Contacts import Contact, Contacts
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.navigation.sim_eval.scenes import Scene, generate
+from dimos.navigation.sim_eval.scenes import FAMILIES, Scene, generate
 from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
     CAMERA_XYZ,
     MID360_PITCH_DOWN,
@@ -72,6 +73,8 @@ MOUNT_XYZ = np.add(CAMERA_XYZ, MID360_XYZ)
 MOUNT_R = Rotation.from_euler("y", MID360_PITCH_DOWN).as_matrix()
 LIDAR_HALF = (0.0325, 0.0325, 0.03)
 SCENE_PUBLISH_DT = 2.0
+COMMAND_TIMEOUT = 0.2
+STILL = np.zeros(3)
 
 BOX_EDGES = np.array(
     [
@@ -100,11 +103,6 @@ class LidarFrame:
     points: NDArray[np.float32]
     position: NDArray[np.float64]
     rotation: NDArray[np.float64]
-
-
-@cache
-def _policy() -> Go2Policy:
-    return OnnxGo2Policy.load()
 
 
 def build_model(scene: Scene) -> mujoco.MjModel:
@@ -140,11 +138,11 @@ def scene_edges(scene: Scene) -> NDArray[np.float64]:
 class SimWorld:
     """The compiled scene with the Go2 and its Mid-360, ticked from a velocity command."""
 
-    def __init__(self, scene: Scene, seed: int) -> None:
+    def __init__(self, scene: Scene, seed: int, policy: Go2Policy) -> None:
         self.scene = scene
         self.model = build_model(scene)
         self.data = mujoco.MjData(self.model)
-        self.robot = LeggedGo2(self.model, self.data, _policy())
+        self.robot = LeggedGo2(self.model, self.data, policy)
         self.lidar = SimMid360.go2(MujocoRaycaster(self.model, self.data), seed)
         self.t = 0.0
         self._tick = 0
@@ -217,7 +215,7 @@ class SimGo2WorldConfig(ModuleConfig):
     frame_id: str = "odom"
     base_frame_id: str = "base_link"
     sensor_frame_id: str = "mid360_link"
-    real_time_factor: float = 1.0
+    real_time_factor: float = Field(default=1.0, gt=0.0)
     mujoco_viewer: bool = False
 
 
@@ -228,10 +226,18 @@ class _LoadScene:
 
 
 @dataclass(frozen=True)
+class _Reset:
+    pass
+
+
+@dataclass(frozen=True)
 class _SetPose:
     x: float
     y: float
     yaw: float
+
+
+_Request = _LoadScene | _Reset | _SetPose
 
 
 class SimGo2World(Module):
@@ -249,13 +255,14 @@ class SimGo2World(Module):
     scene: Out[LineSegments3D]
 
     _thread: Thread | None = None
+    _command: tuple[NDArray[np.float64], float] = (STILL, 0.0)
 
     @rpc
     def start(self) -> None:
         super().start()
-        self._lock = Lock()
-        self._command = np.zeros(3)
-        self._requests: Queue[_LoadScene | _SetPose] = Queue()
+        self._policy = OnnxGo2Policy.load()
+        self._command = (STILL, 0.0)
+        self._requests: Queue[_Request] = Queue()
         self._stop_event = Event()
         self.register_disposable(Disposable(self.cmd_vel.subscribe(self._on_cmd_vel)))
         self._thread = Thread(target=self._run, daemon=True)
@@ -271,32 +278,36 @@ class SimGo2World(Module):
     @rpc
     def load_scene(self, family: str, seed: int) -> None:
         """Replace the scene and put the robot at its start."""
+        if family not in FAMILIES:
+            raise ValueError(f"unknown scene family {family!r}, choose from {sorted(FAMILIES)}")
         self._requests.put(_LoadScene(family, seed))
 
     @rpc
     def reset(self) -> None:
         """Put the robot back at the scene's start, at rest."""
-        self._requests.put(_SetPose(*self.scene_start()[:2], 0.0))
+        self._requests.put(_Reset())
 
     @rpc
     def set_pose(self, x: float, y: float, yaw: float) -> None:
         """Place the robot standing on the floor at (x, y) facing yaw."""
         self._requests.put(_SetPose(x, y, yaw))
 
-    def scene_start(self) -> tuple[float, float, float]:
-        with self._lock:
-            return self._scene.start
-
     def _on_cmd_vel(self, msg: Twist) -> None:
-        with self._lock:
-            self._command = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        command = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        if not all(math.isfinite(v) for v in command):
+            logger.warning("Ignored non-finite cmd_vel", command=command.tolist())
+            return
+        self._command = (command, time.monotonic())
+
+    def _current_command(self) -> NDArray[np.float64]:
+        """The latest command, or still once it is older than the driver's timeout."""
+        command, received = self._command
+        return command if time.monotonic() - received < COMMAND_TIMEOUT else STILL
 
     def _load(self, family: str, seed: int) -> SimWorld:
         scene = generate(family, seed)
-        world = SimWorld(scene, seed)
+        world = SimWorld(scene, seed, self._policy)
         world.reset(*scene.start, 0.0)
-        with self._lock:
-            self._scene = scene
         logger.info(
             "Sim world ready", scene=scene.name, goals={g.name: g.position for g in scene.goals}
         )
@@ -330,18 +341,23 @@ class SimGo2World(Module):
                 pass
             else:
                 if isinstance(request, _LoadScene):
-                    world = self._load(request.family, request.seed)
+                    try:
+                        world = self._load(request.family, request.seed)
+                    except Exception:
+                        logger.exception("Scene load failed, keeping the current scene")
+                        continue
                     if viewer is not None:
                         viewer.close()
                     viewer = self._open_viewer(world)
+                elif isinstance(request, _Reset):
+                    world.reset(*world.scene.start, 0.0)
                 else:
                     world.reset(request.x, request.y, world.scene.start[2], request.yaw)
+                self._command = (STILL, 0.0)
                 t0 = time.time()
                 last_contacts = None
                 next_scene_publish = 0.0
-            with self._lock:
-                command = self._command.copy()
-            frame = world.tick(command)
+            frame = world.tick(self._current_command())
             if viewer is not None:
                 viewer.sync()
             stamp = t0 + world.t / self.config.real_time_factor

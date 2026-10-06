@@ -19,6 +19,7 @@ import pytest
 
 from dimos.msgs.sim_msgs.Contacts import Contact
 from dimos.navigation.sim_eval.scenes import office
+from dimos.simulation.go2_legged.policy import OnnxGo2Policy
 from dimos.simulation.go2_sim.world import FRAME_DT, SimWorld, scene_edges
 
 pytestmark = pytest.mark.mujoco
@@ -29,7 +30,7 @@ STILL = np.zeros(3)
 @pytest.fixture(scope="module")
 def world() -> SimWorld:
     scene = office(1)
-    world = SimWorld(scene, seed=1)
+    world = SimWorld(scene, seed=1, policy=OnnxGo2Policy.load())
     world.reset(*scene.start, 0.0)
     return world
 
