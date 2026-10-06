@@ -310,6 +310,15 @@ already-running dimos instead. To
 compare two tool sets on one task, run the suite twice with different
 `--set modules=...`; each `trajectory.json` records the tools exposed.
 
+**Files.** An environment produces artifacts, files by name such as `recording`.
+The grader gets all of them. The agent gets only the ones named in the
+environment's `agent_artifacts`: by default the `recording` for simulators and
+the `image` for `ImageFile`. A `Dataset` names none, since its `recording` is
+the whole dataset and the agent is given the `select`ed streams instead. A file
+that holds answers, like Habitat's episode metadata with its prop positions,
+stays with the grader. Pass `agent_artifacts=(...)` to the environment to
+change it.
+
 **Limits.** The case's `timeout_s` sets the time budget for the agent and
 subsequent motion settling. `McpClientAdapter` returns what it has when its
 wait expires, marked `timeout`; `QuestionAnswer` and `Blind` rely on the
@@ -464,7 +473,11 @@ waits until every joint is slower than `at_rest_rad_s`. Floating-base robots
 still settle on `odom`. The recording keeps color, camera info, joint state,
 `tf` and `odom`; depth frames are float32, which the JPEG recorder rejects. `module_env` passes extra
 `MODULE__FIELD` overrides to the launched dimos, which beat blueprint-pinned
-values, so a case can retune a module without a new blueprint.
+values, so a case can retune a module without a new blueprint. `scene` passes
+`--mujoco-scene`: a full MJCF, robot included, that `xarm-perception-sim` loads
+instead of its default `scene.xml`. The planner's base pose is
+`XARM7_SIM_BASE_POSE` in the xArm config, so a scene must keep the arm where
+`scene.xml` puts it, or that value must change to match.
 `dimos.evals.suites.mujoco_xarm` is the xArm7 table scene with the perception
 modules disabled: pick up the cylinder, then put the red ball on top of it.
 
