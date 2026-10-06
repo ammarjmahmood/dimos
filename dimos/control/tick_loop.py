@@ -116,7 +116,7 @@ class TickLoop:
         self._publish_callback = publish_callback
         self._publish_robot_callback = publish_robot_callback
         self._publish_tf_callback = publish_tf_callback
-        self._frame_pose_period = 1.0 / frame_pose_hz
+        self._frame_pose_period = 1.0 / frame_pose_hz if publish_tf_callback else 0.0
         self._last_frame_pose_time = float("-inf")
         self._frame_id = frame_id
         self._log_ticks = log_ticks

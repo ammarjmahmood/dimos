@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from dimos.control.components import HardwareComponent, HardwareType, make_joints
-from dimos.control.coordinator import ControlCoordinator
+from dimos.control.coordinator import ControlCoordinator, ControlCoordinatorConfig
 from dimos.control.hardware_interface import ConnectedHardware
 from dimos.control.task import BaseControlTask, CoordinatorState, ResourceClaim
 from dimos.control.tick_loop import TickLoop
@@ -97,3 +97,9 @@ def test_only_coordinators_declaring_tf_can_publish_frame_poses() -> None:
     finally:
         plain.stop()
         arm.stop()
+
+
+@pytest.mark.parametrize("hz", [0.0, -1.0, float("inf")])
+def test_frame_pose_rate_must_be_finite_and_positive(hz: float) -> None:
+    with pytest.raises(ValueError, match="frame_pose_hz"):
+        ControlCoordinatorConfig(frame_pose_hz=hz)

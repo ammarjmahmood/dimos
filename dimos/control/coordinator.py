@@ -32,6 +32,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from pydantic import Field as PydanticField
+
 from dimos.control.components import (
     TWIST_SUFFIX_MAP,
     HardwareComponent,
@@ -98,9 +100,10 @@ class ControlCoordinatorConfig(ModuleConfig):
     # Transitional: goes away once every consumer reads per-robot streams.
     publish_robot_joint_states: bool = False
     joint_state_frame_id: str = "coordinator"
-    # Publish IK tasks' measured target-frame poses (e.g. the TCP) on tf.
+    # Publish IK tasks' measured target-frame poses (e.g. the TCP) on tf. Leave it off
+    # where another module (e.g. ManipulationModule) already publishes those frames.
     publish_frame_poses: bool = False
-    frame_pose_hz: float = 30.0
+    frame_pose_hz: float = PydanticField(default=30.0, gt=0, allow_inf_nan=False)
     log_ticks: bool = False
     hardware: list[HardwareComponent] = field(default_factory=lambda: [])
     tasks: list[TaskConfig] = field(default_factory=lambda: [])
