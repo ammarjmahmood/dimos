@@ -16,7 +16,7 @@
 
 import math
 
-from dimos.evals.suites.mujoco_restore import (
+from dimos.evals.suites.mujoco_xarm_tidy import (
     APPLE_RADIUS,
     APPLE_XY,
     CUP_FALLEN_QUAT,

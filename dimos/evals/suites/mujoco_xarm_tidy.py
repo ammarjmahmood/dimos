@@ -18,7 +18,7 @@ Reuses ``xarm7/scene.xml`` objects (cup, apple, orange). Prompts name the cup; t
 do not give meter values. Graders score distance from the table-top center, and
 the fallen-cup case also requires an upright orientation.
 
-    dimos evals run dimos.evals.suites.mujoco_restore --agent dimos.evals.agents.pi
+    dimos evals run dimos.evals.suites.mujoco_xarm_tidy --agent dimos.evals.agents.pi
 """
 
 from __future__ import annotations
