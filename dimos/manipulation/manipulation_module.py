@@ -24,7 +24,7 @@ import math
 import threading
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 from pydantic import Field, model_validator
@@ -84,7 +84,6 @@ from dimos.manipulation.planning.spec.protocols import (
 from dimos.manipulation.planning.trajectory_generator.config import (
     TrajectoryParametrizationConfig,
 )
-from dimos.manipulation.pointcloud.robot_pointcloud_filter import RobotPointCloudFilter
 from dimos.manipulation.visualization.config import (
     ManipulationVisualizationConfig,
     NoManipulationVisualizationConfig,
@@ -102,9 +101,6 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.perception.experimental.object import Object as DetObject
 from dimos.utils.logging_config import setup_logger
-
-if TYPE_CHECKING:
-    from dimos.manipulation.planning.world.roboplan_world import RoboPlanWorld
 
 logger = setup_logger()
 
@@ -169,8 +165,6 @@ class ManipulationModuleConfig(ModuleConfig):
     # Edge length of a voxel_map cell (meters). Must match the mapper's
     # voxel_size, or the octree will not line up with what was mapped.
     voxel_map_resolution: float = Field(default=0.05, gt=0.0)
-    # Enable robot-surface filtering before mapping with the prepared model.
-    filter_robot_points: bool = False
     default_speed_scale: float = Field(default=1.0, gt=0.0, le=1.0)
     linear_speed_scale: float = Field(default=0.5, gt=0.0, le=1.0)
     execution_timeout: float = Field(default=60.0, gt=0.0)
@@ -183,8 +177,6 @@ class ManipulationModuleConfig(ModuleConfig):
 
     @model_validator(mode="after")
     def _validate_trajectory_tasks(self) -> ManipulationModuleConfig:
-        if self.filter_robot_points and self.world_backend != "roboplan":
-            raise ValueError("filter_robot_points requires the roboplan world backend")
         model_joints = set(self.model.joint_names)
         owners: dict[str, str] = {}
         for task, joints in self.trajectory_tasks.items():
@@ -240,7 +232,6 @@ class ManipulationModule(Module):
         self._error_message = ""
         self._planning_epoch = 0
         self._started = False
-        self._pointcloud_filter: RobotPointCloudFilter | None = None
 
         # Planning components (initialized in start())
         self._world_monitor: WorldMonitor | None = None
@@ -280,7 +271,7 @@ class ManipulationModule(Module):
             if self.coordinator_joint_state is not None:
                 self.coordinator_joint_state.subscribe(self._on_joint_state)
                 logger.info("Subscribed to coordinator_joint_state port")
-            if self._pointcloud_filter is not None:
+            if self.pointcloud is not None and self.pointcloud.transport is not None:
                 self.process_observable(self.pointcloud.pure_observable(), self._handle_pointcloud)
             logger.info("ManipulationModule started")
         except BaseException:
@@ -315,12 +306,6 @@ class ManipulationModule(Module):
 
         operator = ManipulationOperator(self, self._world_monitor)
         self._world_monitor.finalize(visualization, operator=operator)
-        if self.config.filter_robot_points:
-            self._pointcloud_filter = RobotPointCloudFilter(
-                cast("RoboPlanWorld", world),
-                self.tfbuffer,
-                world_frame=self.config.world_frame,
-            )
 
         # Add floor obstacle to prevent trajectories below the table surface
         if self.config.floor_z is not None:
@@ -391,8 +376,6 @@ class ManipulationModule(Module):
                 if len(msg.velocity) == len(msg.name)
                 else [],
             )
-            if self._pointcloud_filter is not None:
-                self._pointcloud_filter.record_joint_state(state)
             self._world_monitor.on_joint_state(state)
             if self._init_joints is None:
                 self._init_joints = state
@@ -1307,9 +1290,13 @@ class ManipulationModule(Module):
 
     async def _handle_pointcloud(self, cloud: PointCloud2) -> None:
         """Dispatch capture processing without blocking the stream event loop."""
-        if self._pointcloud_filter is not None:
+        if self._world_monitor is not None:
             await asyncio.to_thread(
-                self._pointcloud_filter.publish, cloud, self.filtered_pointcloud.publish
+                self._world_monitor.publish_filtered_pointcloud,
+                cloud,
+                self.tfbuffer,
+                self.filtered_pointcloud.publish,
+                world_frame=self.config.world_frame,
             )
 
     async def handle_voxel_map(self, cloud: PointCloud2) -> None:

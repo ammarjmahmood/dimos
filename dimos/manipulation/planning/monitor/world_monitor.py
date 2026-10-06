@@ -33,6 +33,7 @@ from dimos.manipulation.planning.spec.models import (
 )
 from dimos.manipulation.planning.spec.protocols import VisualizationSpec, WorldSpec
 from dimos.manipulation.planning.spec.validation import PreparedRobotModel, prepare_robot_model
+from dimos.manipulation.pointcloud.robot_pointcloud_filter import RobotPointCloudFilter
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
@@ -41,7 +42,7 @@ from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     import numpy as np
     from numpy.typing import NDArray
@@ -53,8 +54,10 @@ if TYPE_CHECKING:
         Obstacle,
         PlanningGroupID,
     )
+    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
     from dimos.msgs.vision_msgs.Detection3D import Detection3D
     from dimos.perception.experimental.object import Object
+    from dimos.protocol.tf.tf import MultiTBuffer
 
 logger = setup_logger()
 
@@ -76,6 +79,7 @@ class WorldMonitor:
         self._prepared_model: PreparedRobotModel | None = None
         self._planning_groups = PlanningGroupRegistry()
         self._state_monitor: RobotStateMonitor | None = None
+        self._pointcloud_filter = RobotPointCloudFilter(world)
         self._obstacle_monitor: WorldObstacleMonitor | None = None
         self._viz_thread: threading.Thread | None = None
         self._viz_stop_event = threading.Event()
@@ -253,6 +257,7 @@ class WorldMonitor:
     def on_joint_state(self, msg: JointState) -> None:
         """Handle a canonical model joint-state message."""
         try:
+            self._pointcloud_filter.record_joint_state(msg)
             if self._state_monitor is not None:
                 self._state_monitor.on_joint_state(msg)
         except Exception as e:
@@ -260,6 +265,23 @@ class WorldMonitor:
             import traceback
 
             logger.error(traceback.format_exc())
+
+    def filter_pointcloud(
+        self, cloud: PointCloud2, tfbuffer: MultiTBuffer, *, world_frame: str = "world"
+    ) -> PointCloud2 | None:
+        """Remove robot returns using capture-time state and sensor transforms."""
+        return self._pointcloud_filter.filter(cloud, tfbuffer, world_frame=world_frame)
+
+    def publish_filtered_pointcloud(
+        self,
+        cloud: PointCloud2,
+        tfbuffer: MultiTBuffer,
+        output: Callable[[PointCloud2], None],
+        *,
+        world_frame: str = "world",
+    ) -> None:
+        """Filter and publish in capture order; unmatched captures emit nothing."""
+        self._pointcloud_filter.publish(cloud, tfbuffer, output, world_frame=world_frame)
 
     def on_collision_object(self, msg: CollisionObjectMessage) -> None:
         """Handle collision object message."""

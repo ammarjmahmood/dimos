@@ -580,6 +580,7 @@ class TestPlanningInitialization:
         with module:
             initialize_planning.assert_called_once_with()
             initialize_execution.assert_called_once_with()
+            assert module._tf is None
 
     def test_start_is_idempotent(self, mocker: MockerFixture, robot_config) -> None:
         module = ManipulationModule(model=robot_config)

@@ -29,7 +29,7 @@ from dimos.types.timestamped import TimestampedBufferCollection
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.manipulation.planning.world.roboplan_world import RoboPlanWorld
+    from dimos.manipulation.planning.spec.protocols import WorldSpec
 
 logger = setup_logger()
 
@@ -40,22 +40,14 @@ _STATE_HISTORY_S = 5.0
 
 
 class RobotPointCloudFilter:
-    """Match canonical capture state/TF and reuse the prepared planning world.
+    """WorldMonitor's capture history and robot-surface exclusion.
 
-    This component owns no robot geometry. RoboPlanWorld serializes the upstream
-    filter with scene updates; this lock also preserves capture/publication order.
+    This component owns no robot geometry. The world classifies points using a
+    consumer context; this lock preserves capture and publication order.
     """
 
-    def __init__(
-        self,
-        world: RoboPlanWorld,
-        tfbuffer: MultiTBuffer,
-        *,
-        world_frame: str = "world",
-    ) -> None:
+    def __init__(self, world: WorldSpec) -> None:
         self._world = world
-        self._world_frame = world_frame
-        self._tfbuffer = tfbuffer
         self._lock = RLock()
         self._states = TimestampedBufferCollection[JointState](_STATE_HISTORY_S)
         self._last_stamp: float | None = None
@@ -69,14 +61,23 @@ class RobotPointCloudFilter:
             if latest is not None:
                 self._states.prune_old(latest.ts - _STATE_HISTORY_S)
 
-    def publish(self, cloud: PointCloud2, output: Callable[[PointCloud2], None]) -> None:
+    def publish(
+        self,
+        cloud: PointCloud2,
+        tfbuffer: MultiTBuffer,
+        output: Callable[[PointCloud2], None],
+        *,
+        world_frame: str = "world",
+    ) -> None:
         """Publish aligned captures in order while preserving point fields."""
         with self._lock:
-            filtered = self.filter(cloud)
+            filtered = self.filter(cloud, tfbuffer, world_frame=world_frame)
             if filtered is not None:
                 output(filtered)
 
-    def filter(self, cloud: PointCloud2) -> PointCloud2 | None:
+    def filter(
+        self, cloud: PointCloud2, tfbuffer: MultiTBuffer, *, world_frame: str = "world"
+    ) -> PointCloud2 | None:
         """Drop unaligned captures; never substitute the world's latest state."""
         with self._lock:
             if not np.isfinite(cloud.ts) or (
@@ -89,8 +90,8 @@ class RobotPointCloudFilter:
             if state is None:
                 logger.warning("Dropping point cloud: capture-time joint state unavailable")
                 return None
-            world_from_sensor = self._tfbuffer.get(
-                self._world_frame,
+            world_from_sensor = tfbuffer.get(
+                world_frame,
                 cloud.frame_id,
                 time_point=cloud.ts,
                 time_tolerance=tolerance,
