@@ -22,6 +22,8 @@ from dimos.simulation.sensors.mid360.lidar import OcclusionMap, SimMid360
 from dimos.simulation.sensors.mid360.pattern import Mid360Pattern
 from dimos.utils.data import get_data
 
+pytestmark = pytest.mark.self_hosted
+
 ORIGIN = np.zeros(3)
 UPRIGHT = np.eye(3)
 
