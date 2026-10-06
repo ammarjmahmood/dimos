@@ -233,10 +233,7 @@ def _materialize_eval_scene(
         cup_tag = f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}">'
     else:
         w, x, y, z = cup_quat
-        cup_tag = (
-            f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}" '
-            f'quat="{w:g} {x:g} {y:g} {z:g}">'
-        )
+        cup_tag = f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}" quat="{w:g} {x:g} {y:g} {z:g}">'
     text = text.replace(_STOCK_ORANGE_BODY, f'<body name="orange" pos="{ox:g} {oy:g} 0.175">', 1)
     text = text.replace(_STOCK_CUP_BODY, cup_tag, 1)
     tag = "fallen" if cup_quat is not None else "up"
