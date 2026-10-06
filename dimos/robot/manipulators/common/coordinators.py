@@ -34,14 +34,14 @@ class ArmPoseCoordinator(ControlCoordinator):
     """Arm driven by target poses; the cartesian_ik / teleop_ik cards name-match."""
 
     cartesian_command: In[PoseStamped]
-    tf: Out[TFMessage]  # measured TCP poses, when publish_frame_poses
+    tf: Out[TFMessage]
 
 
 class ArmTwistCoordinator(ControlCoordinator):
     """Arm driven by EEF twists; the eef_twist card name-matches."""
 
     ee_twist_command: In[TwistStamped]
-    tf: Out[TFMessage]  # measured TCP poses, when publish_frame_poses
+    tf: Out[TFMessage]
 
 
 class ArmPoseTwistCoordinator(ArmPoseCoordinator):
