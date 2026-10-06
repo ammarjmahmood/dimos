@@ -10,7 +10,7 @@
     crate2nix.url = "github:nix-community/crate2nix";
     crate2nix.inputs.nixpkgs.follows = "nixpkgs";
     # Same rev as Cargo.toml's depth2depth: its flake fetches the model the crate embeds (pinned in its model.json).
-    depth2depth.url = "github:jeff-hykin/depth2depth/418511703eea73e1def3b984f0190fb56e286ff7";
+    depth2depth.url = "github:jeff-hykin/depth2depth/e240a1bcf8862c8b1f50d265ff7170d5f3fb9332";
     depth2depth.inputs.nixpkgs.follows = "nixpkgs";
   };
 

@@ -60,17 +60,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1791318843,
-        "narHash": "sha256-K0NLl3ima+LYoVKuz13RfDSAjP72OHiBwXWUnwW70XI=",
+        "lastModified": 1791321514,
+        "narHash": "sha256-MUuF4AHF8sdLZjidcAZQhrvFsqQpMAqk7A5m/dJNMzw=",
         "owner": "jeff-hykin",
         "repo": "depth2depth",
-        "rev": "418511703eea73e1def3b984f0190fb56e286ff7",
+        "rev": "e240a1bcf8862c8b1f50d265ff7170d5f3fb9332",
         "type": "github"
       },
       "original": {
         "owner": "jeff-hykin",
         "repo": "depth2depth",
-        "rev": "418511703eea73e1def3b984f0190fb56e286ff7",
+        "rev": "e240a1bcf8862c8b1f50d265ff7170d5f3fb9332",
         "type": "github"
       }
     },
