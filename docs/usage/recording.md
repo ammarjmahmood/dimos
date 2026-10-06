@@ -111,10 +111,6 @@ recordings retain their aliases and compatibility decoders. Prefer
 which now emits a deprecation warning. No file conversion or legacy codec removal
 is part of this change.
 
-For a reproducible synthetic record → Ctrl+C/flush → summary → Rerun export →
-typed replay check, see [the native MCAP example](/examples/native-mcap/README.md).
-It uses the standard CLI and an isolated loopback session, without a robot driver.
-
 ```sh skip
 dimos mem summary recording.mcap
 dimos mem rerun recording.mcap --no-gui --out recording.rrd
