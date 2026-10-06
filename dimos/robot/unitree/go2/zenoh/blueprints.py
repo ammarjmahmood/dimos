@@ -325,9 +325,6 @@ go2_dds_mid360 = autoconnect(
 ).global_config(
     transport="zenoh",
     zenoh_connect="tcp/127.0.0.1:7447",
-    # no link wait: the router is GO2DDS, which only starts after every peer has
-    # deployed, so waiting always times out; zenoh keeps dialing in the background
-    zenoh_connect_timeout=0.0,
     n_workers=11,
     robot_model="unitree_go2",
 )
