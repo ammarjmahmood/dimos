@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from functools import partial
+from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
@@ -59,7 +59,6 @@ from dimos.manipulation.planning.world.roboplan_model import (
     RoboPlanModel,
     build_roboplan_model,
 )
-from dimos.manipulation.planning.world.roboplan_scene import create_roboplan_scene
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.utils.logging_config import setup_logger
@@ -96,6 +95,7 @@ class RoboPlanWorld:
     """WorldSpec implementation backed by RoboPlan scene and collision queries."""
 
     def __init__(self, enable_viz: bool = False, **_: object) -> None:
+        self._body_filter: roboplan_core.RobotBodyFilter | None = None
         self._scene: Any | None = None
         self._model: RoboPlanModel | None = None
         self._enable_viz = enable_viz
@@ -244,7 +244,7 @@ class RoboPlanWorld:
             model = build_roboplan_model(
                 self.get_prepared_model(),
                 self._planning_groups,
-                partial(create_roboplan_scene, roboplan_core),
+                _create_scene,
             )
             self._model = model
             self._scene = model.scene
@@ -304,6 +304,31 @@ class RoboPlanWorld:
         if not len(q):
             q = np.zeros(len(model_data.config.joint_names), dtype=np.float64)
         return JointState(name=model_data.config.joint_names, position=q.astype(float).tolist())
+
+    def robot_body_mask(
+        self,
+        ctx: RoboPlanContext,
+        points: NDArray[np.float64],
+        *,
+        padding: float = 0.01,
+        extra_padding: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.bool_]:
+        """Classify world-frame points with upstream geometry and consumer state."""
+        with self._lock:
+            self._require_finalized()
+            if self._body_filter is None or self._body_filter.getOptions().padding != padding:
+                self._body_filter = roboplan_core.RobotBodyFilter(
+                    self._require_scene(),
+                    roboplan_core.RobotBodyFilterOptions(
+                        padding=padding,
+                        method=roboplan_core.RobotBodyFilterMethod.Narrowphase,
+                        num_threads=1,
+                    ),
+                )
+            return np.asarray(
+                self._body_filter.computeMask(self._full_scene_q(ctx), points, extra_padding),
+                dtype=bool,
+            )
 
     # Collision Checking
 
@@ -634,3 +659,13 @@ def _octree(obstacle: Obstacle) -> Any:
         np.array((x, y, z, resolution, 1.0, 0.5), dtype=np.float64) for x, y, z in obstacle.points
     ]
     return roboplan_core.OcTree(boxes, resolution)
+
+
+def _create_scene(
+    *, name: str, urdf: str, srdf: str, package_paths: Sequence[str], joint_limits: Path
+) -> Any:
+    description = roboplan_core.loadUrdfSceneDescriptionFromXml(urdf, package_paths)
+    scene = roboplan_core.Scene(name, description)
+    scene.importSrdf(srdf)
+    scene.importJointLimitsFromConfig(roboplan_core.loadJointLimitsConfig(joint_limits))
+    return scene

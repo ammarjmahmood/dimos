@@ -36,7 +36,6 @@ from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
-from dimos.manipulation.pointcloud.robot_pointcloud_filter_module import RobotPointCloudFilterModule
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -193,7 +192,6 @@ def _scene_registration() -> Blueprint:
 def _voxel_mapping() -> tuple[Blueprint, ...]:
     """Wrist camera -> self filter -> mapper -> the planner's octree obstacle."""
     return (
-        RobotPointCloudFilterModule.blueprint(model=_model, world_frame="world"),
         # Tabletop reach, not a room-scale lidar sweep.
         RayTracingVoxelMap.blueprint(
             voxel_size=XARM_GRASP_VOXEL_SIZE,

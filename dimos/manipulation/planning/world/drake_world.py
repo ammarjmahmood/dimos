@@ -898,6 +898,17 @@ class DrakeWorld(WorldSpec, VisualizationSpec):
             positions = [float(full_positions[idx]) for idx in robot_data.joint_indices]
             return JointState(name=robot_data.config.joint_names, position=positions)
 
+    def robot_body_mask(
+        self,
+        ctx: Context,
+        points: NDArray[np.float64],
+        *,
+        padding: float = 0.01,
+        extra_padding: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.bool_]:
+        """Reject robot point classification until this backend implements it."""
+        raise NotImplementedError("DrakeWorld does not support robot point classification")
+
     # Collision Checking (context-based)
 
     def is_collision_free(self, ctx: Context) -> bool:
