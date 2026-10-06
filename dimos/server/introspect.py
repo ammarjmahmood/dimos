@@ -17,8 +17,8 @@
 Importing a blueprint can take seconds, pull in GPU libraries or crash outright; in a child (with a timeout) none of
 that reaches the server. The answer is the last stdout line, after MARKER (importing dimos can print).
 
-    blueprint <name>  -> {"name", "modules": [{"name", "class", "doc", "summary", "file", "line", "rpcs", "skills",
-                          "streams": [{"name", "type", "direction", "topic"}]}]}
+    blueprint <name>  -> {"name", "file", "line", "modules": [{"name", "class", "doc", "summary", "file", "line", "rpcs",
+                          "skills", "streams": [{"name", "type", "direction", "topic"}]}]}
     config <name>     -> {"name", "modules": [{"module", "class", "args": [...], "error"?}]}
     catalog           -> {"blueprints", "modules", "skills", "errors"} (slow: imports every blueprint)
     anything failing  -> {"error": "<Type>: <message>"}
@@ -82,7 +82,47 @@ def blueprint(name: str) -> dict[str, Any]:
                 **source_of(atom.module),
             }
         )
-    return {"name": name, "modules": modules}
+    return {"name": name, **blueprint_source(name), "modules": modules}
+
+
+def blueprint_source(name: str) -> dict[str, Any]:
+    """Where a blueprint is defined: the file and line of its `<attr> = ...` (a module run as a blueprint: its class);
+    None for an external one."""
+    import ast
+
+    from dimos.robot.all_blueprints import all_blueprints, all_modules
+
+    none: dict[str, Any] = {"file": None, "line": None}
+    if name in all_modules:
+        path, _, attr = all_modules[name].rpartition(".")
+        try:
+            return source_of(getattr(importlib.import_module(path), attr))
+        except Exception:
+            return none
+    if name not in all_blueprints:
+        return none
+    path, _, attr = all_blueprints[name].partition(":")
+    try:
+        file = inspect.getsourcefile(importlib.import_module(path))
+        if file is None:
+            return none
+        with open(file, encoding="utf-8") as source:
+            tree = ast.parse(source.read())
+    except Exception:
+        return none
+    line = next(
+        (
+            node.lineno
+            for node in tree.body
+            if (
+                isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == attr for t in node.targets)
+            )
+            or (isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == attr)
+        ),
+        1,
+    )
+    return {"file": relative_to_checkout(file), "line": line}
 
 
 def own_doc(cls: Any) -> str:
@@ -151,16 +191,18 @@ def source_of(obj: Any) -> dict[str, Any]:
         return {"file": None, "line": None}
     if file is None:
         return {"file": None, "line": None}
+    return {"file": relative_to_checkout(file), "line": line}
+
+
+def relative_to_checkout(file: str) -> str:
+    """A file relative to the dimos checkout it was imported from, when inside it; else absolute."""
     from pathlib import Path
 
     import dimos
 
     path = Path(file).resolve()
     root = Path(dimos.__file__).resolve().parents[1]
-    return {
-        "file": str(path.relative_to(root)) if path.is_relative_to(root) else str(path),
-        "line": line,
-    }
+    return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
 
 
 def jsonable(value: Any) -> Any:

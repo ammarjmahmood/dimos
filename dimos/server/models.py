@@ -214,6 +214,16 @@ class SourceFile(ApiModel):
 
 class Blueprint(ApiModel):
     name: str = Field(description="The blueprint", examples=["unitree-go2-basic"])
+    file: str | None = Field(
+        default=None,
+        description="The file defining the blueprint (a module run as one: its class): relative to the dimos checkout "
+        "when inside it (GET /dimos/source reads it), else absolute; null when unknown; absent from servers before "
+        "API 1.8",
+        examples=["dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py"],
+    )
+    line: int | None = Field(
+        default=None, description="The line that defines it in that file (1-based)"
+    )
     modules: list[BlueprintModule] = Field(description="Its modules, in blueprint order")
 
 

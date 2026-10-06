@@ -50,6 +50,23 @@ def test_a_blueprint_lists_its_modules_and_streams(check_model: Any) -> None:
         .startswith("class CameraModule")
     )
     assert not {"build", "start", "stop"} & {m["name"] for m in camera["rpcs"]}
+    # where the blueprint itself is defined: the line that assigns it
+    defined = (ROOT / answer["file"]).read_text().splitlines()[answer["line"] - 1]
+    assert defined.startswith("demo_camera")
+
+
+def test_where_a_blueprint_or_a_module_is_defined() -> None:
+    go2 = introspect.blueprint_source("unitree-go2-basic")
+    assert go2["file"].startswith("dimos/robot/unitree/go2/")
+    assert (
+        (ROOT / go2["file"])
+        .read_text()
+        .splitlines()[go2["line"] - 1]
+        .startswith("unitree_go2_basic")
+    )
+    camera = introspect.blueprint_source("camera-module")
+    assert (ROOT / camera["file"]).read_text().splitlines()[camera["line"] - 1].startswith("class ")
+    assert introspect.blueprint_source("no-such-blueprint") == {"file": None, "line": None}
 
 
 def test_a_modules_rpcs_and_skills_carry_signatures_and_docs() -> None:

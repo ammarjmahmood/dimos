@@ -50,6 +50,9 @@ KNOWN_DIFFERENCES = {
         for field in ("doc", "summary", "file", "line", "rpcs", "skills")
     ),
     "get /dimos/blueprints/{}.modules[].streams[]: field only here: topic",
+    # where the blueprint itself is defined, new here in 1.8
+    "get /dimos/blueprints/{}: field only here: file",
+    "get /dimos/blueprints/{}: field only here: line",
 }
 
 

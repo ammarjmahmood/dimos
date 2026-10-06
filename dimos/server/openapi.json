@@ -99,6 +99,33 @@
       "Blueprint": {
         "additionalProperties": true,
         "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The file defining the blueprint (a module run as one: its class): relative to the dimos checkout when inside it (GET /dimos/source reads it), else absolute; null when unknown; absent from servers before API 1.8",
+            "examples": [
+              "dimos/robot/unitree/go2/blueprints/basic/unitree_go2_basic.py"
+            ],
+            "title": "File"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The line that defines it in that file (1-based)",
+            "title": "Line"
+          },
           "modules": {
             "description": "Its modules, in blueprint order",
             "items": {
@@ -4885,7 +4912,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.7.0"
+    "version": "1.8.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6363,7 +6390,7 @@
     },
     "/dimos/runs/restart": {
       "post": {
-        "description": "Takes the last launch's blueprint and overrides (kept even after it stopped), stops it first if it's starting or running (as POST /dimos/runs/stop), then launches it as POST /dimos/runs would. Takes no body. 400 when nothing was launched yet; 500 when it won't stop or won't start.",
+        "description": "Takes the last launch's blueprint and its own (one-off) overrides (kept even after it stopped), stops it first if it's starting or running (as POST /dimos/runs/stop), then launches it as POST /dimos/runs would, with Desktop's saved global and module config as saved now (a config change since applies). Takes no body. 400 when nothing was launched yet; 500 when it won't stop or won't start.",
         "operationId": "post_dimos_runs_restart",
         "responses": {
           "200": {
@@ -6397,7 +6424,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "Stop the blueprint this server launched (if it still runs) and launch it again with the same global config",
+        "summary": "Stop the blueprint this server launched (if it still runs) and launch it again: its own values on top of the config saved now",
         "tags": [
           "runs"
         ],

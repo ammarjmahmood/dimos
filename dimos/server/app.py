@@ -551,6 +551,11 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
                 )
         except ValueError as error:
             raise ApiError(400, str(error))
+        return with_saved(request.blueprint, one_off)
+
+    def with_saved(blueprint: str, one_off: launch_overrides.LaunchOverrides) -> runs.LaunchConfig:
+        """A launch's own values on top of Desktop's saved global config and the blueprint's saved module config, as
+        saved now."""
         effective = launch_overrides.merge(
             launch_overrides.merge(config.LAUNCH_GLOBAL_DEFAULTS, config.global_config_overrides()),
             one_off.global_,
@@ -558,9 +563,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         checked_overrides(effective)
         return runs.LaunchConfig(
             effective,
-            launch_overrides.merge_modules(
-                config.module_config(request.blueprint), one_off.modules
-            ),
+            launch_overrides.merge_modules(config.module_config(blueprint), one_off.modules),
             one_off,
         )
 
@@ -608,11 +611,12 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         response_model=models.Launch,
         **route_doc(
             "runs",
-            "Stop the blueprint this server launched (if it still runs) and launch it again with the same global "
-            "config",
-            "Takes the last launch's blueprint and overrides (kept even after it stopped), stops it first if it's "
-            "starting or running (as POST /dimos/runs/stop), then launches it as POST /dimos/runs would. Takes no "
-            "body. 400 when nothing was launched yet; 500 when it won't stop or won't start.",
+            "Stop the blueprint this server launched (if it still runs) and launch it again: its own values on top "
+            "of the config saved now",
+            "Takes the last launch's blueprint and its own (one-off) overrides (kept even after it stopped), stops it "
+            "first if it's starting or running (as POST /dimos/runs/stop), then launches it as POST /dimos/runs "
+            "would, with Desktop's saved global and module config as saved now (a config change since applies). "
+            "Takes no body. 400 when nothing was launched yet; 500 when it won't stop or won't start.",
             errors=(400, 500),
             agent=True,
             answer="`Launch` (as POST /dimos/runs)",
@@ -622,8 +626,8 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         last = runs.last_launch_args()
         if last is None:
             raise ApiError(400, "the dimos server hasn't launched anything yet")
-        blueprint, launch_config = last
-        checked_overrides(launch_config.global_)
+        blueprint, last_config = last
+        launch_config = with_saved(blueprint, last_config.one_off)
         current = await asyncio.to_thread(runs.current_launch)
         try:
             if current and current["phase"] in ("starting", "running", "stopping"):

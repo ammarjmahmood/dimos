@@ -385,6 +385,14 @@ def test_launch_log_and_stop(
         )
         assert restarted["pid"] != launched["pid"]
         launched = restarted
+    # ... with the config saved since: its own values (n_workers, replay) still on top
+    config.config_file().write_text(
+        "dimos:\n  global_config:\n    robot_ip: 10.0.0.3\n    n_workers: 5\n"
+    )
+    restarted = client.post("/dimos/runs/restart").json()
+    assert restarted["overrides"] == {**overrides, "robot_ip": "10.0.0.3"}
+    assert restarted["oneOff"] == launched["oneOff"]
+    config.config_file().write_text("dimos:\n  global_config:\n    robot_ip: 10.0.0.2\n")
     assert client.post("/dimos/runs/stop").json()["output"].startswith("stopped unitree-go2")
     # stopped while it was still starting: stopped, not failed
     assert client.get("/dimos/runs").json()["launch"]["phase"] == "stopped"
