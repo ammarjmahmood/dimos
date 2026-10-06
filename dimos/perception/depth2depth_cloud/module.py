@@ -31,8 +31,7 @@ from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 class Depth2DepthCloudConfig(NativeModuleConfig):
     cwd: str | None = "rust"
     executable: str = "result/bin/depth2depth_cloud"
-    # "." in a git checkout is git+file:<repo>?dir=..., so the flake's ../../../.. input stays inside the
-    # entered tree. Builds see tracked files only.
+    # "." in a git checkout enters the whole repo, so the flake can read ../../../../native/rust (tracked files only).
     build_command: str | None = "nix build -L ."
     stdin_config: bool = True
     # frame_id is also a NativeModuleConfig field; listed so it still crosses to the Rust config.
