@@ -23,7 +23,7 @@ from dimos.simulation.go2_legged.policy import OnnxGo2Policy
 from dimos.simulation.go2_sim.world import FRAME_DT, Go2Sim, LidarFrame, scene_edges
 from dimos.simulation.scenes.procedural import Scene, office
 
-pytestmark = pytest.mark.mujoco
+pytestmark = pytest.mark.self_hosted
 
 STILL = np.zeros(3)
 FORWARD = np.array([0.8, 0.0, 0.0])

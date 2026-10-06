@@ -29,7 +29,7 @@ from dimos.simulation.go2_legged.robot import (
     go2_spec,
 )
 
-pytestmark = pytest.mark.mujoco
+pytestmark = pytest.mark.self_hosted
 
 STILL = np.zeros(3)
 
