@@ -167,6 +167,18 @@ def test_drake_loads_canonical_slash_names_natively(tmp_path: Path) -> None:
     assert world.get_prepared_model().joint_space.names == ("left/j1",)
 
 
+@requires_drake
+def test_drake_robot_point_classification_is_explicitly_unsupported(tmp_path: Path) -> None:
+    path = tmp_path / "robot.urdf"
+    _write_urdf(path)
+    world = DrakeWorld()
+    _load(world, _config(path, [_arm_group("joint1", "joint2")]))
+    world.finalize()
+    with world.scratch_context() as ctx:
+        with pytest.raises(NotImplementedError, match="robot point classification"):
+            world.robot_body_mask(ctx, np.zeros((1, 3)))
+
+
 def test_drake_config_group_helpers_resolve_groups_without_drake_runtime(tmp_path: Path) -> None:
     urdf = tmp_path / "robot.urdf"
     _write_urdf(urdf)
