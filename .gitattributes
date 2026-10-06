@@ -41,4 +41,3 @@ Cargo.lock linguist-generated=true
 dimos/navigation/local_planner/rust/src/planner.rs linguist-generated=true
 
 # Eval PR scene screenshots (not datasets)
-docs/assets/evals/mujoco_restore/*.png -filter -diff -merge
