@@ -318,3 +318,31 @@ def test_overview_camera_has_its_own_topics(bridge: RawRobotBridge) -> None:
     (pose,) = _published(bridge, "overview/camera_pose/json")
     assert pose["xyz"] == [1.7, -0.7, 0.8] and pose["t"] == 2.0
     assert not _published(bridge, "camera_pose/json")
+
+
+def test_bridge_drives_again_after_a_restart() -> None:
+    module = RawRobotBridge(endpoint="tcp/127.0.0.1:17449")
+    for stream in (
+        "color_image",
+        "overview_image",
+        "overview_camera_info",
+        "depth_image",
+        "camera_info",
+        "lidar",
+        "odom",
+        "coordinator_joint_state",
+        "tf",
+        "cmd_vel",
+        "ee_twist_command",
+        "gripper_command",
+    ):
+        setattr(module, stream, MagicMock())
+    try:
+        module.start()
+        module.stop()
+        module.ee_twist_command.reset_mock()  # stop() itself publishes one zero twist
+        module.start()
+        module._arm.set(json.dumps({"vz": 0.05, "t": 1.0}))
+        wait_for(lambda: module.ee_twist_command.publish.call_count > 0)
+    finally:
+        module.stop()
