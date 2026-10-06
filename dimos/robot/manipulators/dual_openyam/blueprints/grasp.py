@@ -149,8 +149,8 @@ def dual_openyam_grasp_provider(graspgen: bool) -> Blueprint:
     return HeuristicGraspModule.blueprint(tool_rotation_rpy=(0.0, math.pi, 0.0), yaw_candidates=8)
 
 
-def dual_openyam_grasp_blueprint(*, graspgen: bool) -> Blueprint:
-    return autoconnect(
+def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
+    return (
         planner(
             model=dual_openyam_grasp_model_config(),
             kinematics=DUAL_OPENYAM_GRASP_PINK,
@@ -185,4 +185,9 @@ def dual_openyam_grasp_blueprint(*, graspgen: bool) -> Blueprint:
     )
 
 
-dual_openyam_grasp = dual_openyam_grasp_blueprint(graspgen=bool(global_config.graspgen))
+def dual_openyam_grasp_blueprint(*, graspgen: bool) -> Blueprint:
+    return autoconnect(*dual_openyam_grasp_modules(graspgen=graspgen))
+
+
+# Assigned through autoconnect so the registry generator sees it.
+dual_openyam_grasp = autoconnect(*dual_openyam_grasp_modules(graspgen=bool(global_config.graspgen)))
