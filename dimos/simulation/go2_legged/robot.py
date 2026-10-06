@@ -27,6 +27,7 @@ from dimos.utils.data import get_data
 
 CONTROL_DT = 0.02
 COMMAND_SLEW = np.array([0.05, 0.04, 0.10])
+STAND_AFTER_TICKS = 10
 FOOT_GEOMS = ("FL", "FR", "RL", "RR")
 LEG_DOFS = slice(6, 18)
 
@@ -100,9 +101,11 @@ class LeggedGo2:
         self._command = np.zeros(3)
         self._applied = np.zeros(12)
         self._target = policy.default_pose.copy()
+        self._idle_ticks = STAND_AFTER_TICKS
+        self.standing = True
 
     def reset(self, x: float, y: float, z_feet: float, yaw: float) -> None:
-        """Stand in the policy's default pose with the feet on z_feet, at rest."""
+        """Stand in the default pose with the feet on z_feet, at rest, until a command arrives."""
         m, d = self.model, self.data
         mujoco.mj_resetDataKeyframe(m, d, self._home)
         d.qpos[0:2] = [x, y]
@@ -116,22 +119,37 @@ class LeggedGo2:
         self._command = np.zeros(3)
         self._applied = np.zeros(12)
         self._target = self.policy.default_pose.copy()
+        self._idle_ticks = STAND_AFTER_TICKS
+        self.standing = True
         self.policy.reset()
 
     def tick(
         self, command: NDArray[np.float64], on_substep: Callable[[int], None] | None = None
     ) -> None:
-        """Advance one policy tick toward a (vx, vy, vyaw) command, calling on_substep after each physics step."""
+        """Advance one policy tick toward a (vx, vy, vyaw) command, calling on_substep after each physics step.
+
+        A command held at zero stands the robot in its default pose until the next command.
+        """
         self._command += np.clip(command - self._command, -COMMAND_SLEW, COMMAND_SLEW)
-        self._target = self.policy.act(self._observe(), self._command)
+        if np.any(self._command):
+            self._idle_ticks = 0
+            if self.standing:
+                self.standing = False
+                self.policy.reset()
+        else:
+            self._idle_ticks += 1
+            self.standing = self.standing or self._idle_ticks >= STAND_AFTER_TICKS
+        if self.standing:
+            self._target = self.policy.default_pose
+            kp, kd = self.policy.stand_kp, self.policy.stand_kd
+        else:
+            self._target = self.policy.act(self._observe(), self._command)
+            kp, kd = self.policy.kp, self.policy.kd
         d = self.data
         dt = self.model.opt.timestep
         alpha = dt / (FITTED_ACTUATOR_TAU + dt)
         for i in range(self.substeps):
-            tau = (
-                self.policy.kp * (self._target - d.qpos[self._qpos])
-                - self.policy.kd * d.qvel[self._qvel]
-            )
+            tau = kp * (self._target - d.qpos[self._qpos]) - kd * d.qvel[self._qvel]
             tau = np.clip(tau, -self._torque_limit, self._torque_limit)
             self._applied += alpha * (tau - self._applied)
             d.ctrl[self._ctrl] = self._applied

@@ -46,9 +46,14 @@ def _walk(seconds: float, command: tuple[float, float, float]) -> NDArray[np.flo
     return np.append(robot.base_pose()[0], robot.yaw())
 
 
-def test_stands_still_without_a_command() -> None:
-    end = _walk(3.0, (0.0, 0.0, 0.0))
-    assert np.hypot(end[0], end[1]) < 0.1
+def test_spawns_standing_and_stays_put_without_a_command() -> None:
+    robot = _robot()
+    assert robot.standing
+    for _ in range(150):
+        robot.tick(np.zeros(3))
+    end = robot.base_pose()[0]
+    assert np.hypot(end[0], end[1]) < 0.02
+    assert abs(robot.yaw()) < 0.02
     assert 0.25 < end[2] < 0.4
 
 
@@ -61,6 +66,24 @@ def test_walks_forward_at_about_the_commanded_speed() -> None:
 def test_turns_at_about_the_commanded_rate() -> None:
     end = _walk(4.0, (0.0, 0.0, 0.5))
     assert 1.2 < end[3] < 2.4
+
+
+def test_stands_still_after_the_command_drops_to_zero() -> None:
+    robot = _robot()
+    for _ in range(150):
+        robot.tick(np.array([0.5, 0.0, 0.5]))
+    assert not robot.standing
+    for _ in range(100):
+        robot.tick(np.zeros(3))
+    assert robot.standing
+    start, yaw = robot.base_pose()[0].copy(), robot.yaw()
+    for _ in range(150):
+        robot.tick(np.zeros(3))
+    end = robot.base_pose()[0]
+    assert np.hypot(*(end[:2] - start[:2])) < 0.02
+    assert abs(robot.yaw() - yaw) < 0.02
+    assert end[2] > 0.25
+    assert robot.upright() > 0.95
 
 
 def test_rollouts_are_deterministic() -> None:

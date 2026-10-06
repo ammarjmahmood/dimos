@@ -38,7 +38,10 @@ class Proprioception:
 
 
 class Go2Policy(Protocol):
-    """A 50 Hz joint-position policy driving the Go2's PD motors."""
+    """A 50 Hz joint-position policy driving the Go2's PD motors.
+
+    The stand gains hold the default pose while the robot is not walking.
+    """
 
     @property
     def joint_names(self) -> tuple[str, ...]: ...
@@ -51,6 +54,12 @@ class Go2Policy(Protocol):
 
     @property
     def kd(self) -> NDArray[np.float64]: ...
+
+    @property
+    def stand_kp(self) -> NDArray[np.float64]: ...
+
+    @property
+    def stand_kd(self) -> NDArray[np.float64]: ...
 
     def reset(self) -> None: ...
 
@@ -69,6 +78,8 @@ class OnnxGo2Policy:
     default_pose = np.array([0.0, 0.8, -1.5] * 4)
     kp = np.full(12, 20.0)
     kd = np.full(12, 0.5)
+    stand_kp = np.full(12, 80.0)
+    stand_kd = np.full(12, 3.0)
     action_scale = np.array([0.125, 0.25, 0.25] * 4)
     angular_velocity_scale = 0.25
     joint_velocity_scale = 0.05
