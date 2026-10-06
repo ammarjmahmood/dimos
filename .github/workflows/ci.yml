@@ -838,9 +838,9 @@ jobs:
             experimental: false
           - os: macOS
             container: null  # run on host — `container:` is Linux-only
-            markers: "self_hosted or web_browser"
             # web_browser: the cockpit browser e2e that Linux runs in the `web` job.
-            # Serial because two of its modules start a stack on the relay's fixed port.
+            markers: "self_hosted or web_browser"
+            # Serial: two web_browser modules start a stack on the relay's fixed port.
             serial-markers: "self_hosted_serial or web_browser"
             experimental: false
     runs-on:
@@ -996,7 +996,7 @@ jobs:
         # GPU/display-exclusive tests (see the `self_hosted_serial` marker in dimos/conftest.py).
         run: uv run pytest --cov=dimos/ --junitxml=junit-serial.xml -m '${{ matrix.serial-markers }}'
       - name: Run remaining tests in parallel
-        run: uv run pytest --numprocesses=logical --cov=dimos/ --cov-append --junitxml=junit.xml -m '(${{ matrix.markers }}) and not mujoco and not self_hosted_serial'
+        run: uv run pytest --numprocesses=logical --cov=dimos/ --cov-append --junitxml=junit.xml -m '(${{ matrix.markers }}) and not mujoco and not (${{ matrix.serial-markers }})'
       - name: Re-run the failing tests with maximum verbosity
         if: failure()
         env:
