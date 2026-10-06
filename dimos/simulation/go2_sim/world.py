@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from queue import Empty, Queue
 from threading import Event, Thread
 import time
 
@@ -53,7 +52,7 @@ from dimos.protocol.tf.static_tf_publisher import frames_to_edge_transforms
 from dimos.robot.unitree.go2.go2_mid360_static_transforms import FRAMES
 from dimos.simulation.go2_legged.policy import Go2Policy, load_policy
 from dimos.simulation.go2_legged.robot import CONTROL_DT, LeggedGo2, apply_fitted_physics, go2_spec
-from dimos.simulation.scenes.procedural import FAMILIES, Scene, generate
+from dimos.simulation.scenes.procedural import Scene, generate
 from dimos.simulation.sensors.mid360.lidar import SimMid360
 from dimos.simulation.sensors.mid360.pattern import POINT_RATE
 from dimos.simulation.sensors.mujoco_raycaster import MujocoRaycaster
@@ -248,27 +247,6 @@ class SimGo2WorldConfig(ModuleConfig):
     policy: str = ""
 
 
-@dataclass(frozen=True)
-class _LoadScene:
-    family: str
-    seed: int
-
-
-@dataclass(frozen=True)
-class _Reset:
-    pass
-
-
-@dataclass(frozen=True)
-class _SetPose:
-    x: float
-    y: float
-    yaw: float
-
-
-_Request = _LoadScene | _Reset | _SetPose
-
-
 class SimGo2World(Module):
     """A generated scene with the legged Go2 and its simulated Mid-360, paced to the wall clock."""
 
@@ -291,7 +269,6 @@ class SimGo2World(Module):
         super().start()
         self._policy = load_policy(self.config.policy)
         self._command = (STILL, 0.0)
-        self._requests: Queue[_Request] = Queue()
         self._stop_event = Event()
         self.register_disposable(Disposable(self.cmd_vel.subscribe(self._on_cmd_vel)))
         self._thread = Thread(target=self._run, daemon=True)
@@ -303,23 +280,6 @@ class SimGo2World(Module):
         if self._thread is not None:
             self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         super().stop()
-
-    @rpc
-    def load_scene(self, family: str, seed: int) -> None:
-        """Replace the scene and put the robot at its start."""
-        if family not in FAMILIES:
-            raise ValueError(f"unknown scene family {family!r}, choose from {sorted(FAMILIES)}")
-        self._requests.put(_LoadScene(family, seed))
-
-    @rpc
-    def reset(self) -> None:
-        """Put the robot back at the scene's start, at rest."""
-        self._requests.put(_Reset())
-
-    @rpc
-    def set_pose(self, x: float, y: float, yaw: float) -> None:
-        """Place the robot standing on the floor at (x, y) facing yaw."""
-        self._requests.put(_SetPose(x, y, yaw))
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         command = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
@@ -367,28 +327,6 @@ class SimGo2World(Module):
         last_contacts: list[Contact] | None = None
         next_scene_publish = 0.0
         while not self._stop_event.is_set():
-            try:
-                request = self._requests.get_nowait()
-            except Empty:
-                pass
-            else:
-                if isinstance(request, _LoadScene):
-                    try:
-                        sim = self._load(request.family, request.seed)
-                    except Exception:
-                        logger.exception("Scene load failed, keeping the current scene")
-                        continue
-                    if viewer is not None:
-                        viewer.close()
-                    viewer = self._open_viewer(sim)
-                elif isinstance(request, _Reset):
-                    sim.reset(*sim.scene.start, 0.0)
-                else:
-                    sim.reset(request.x, request.y, sim.scene.start[2], request.yaw)
-                self._command = (STILL, 0.0)
-                t0 = time.time()
-                last_contacts = None
-                next_scene_publish = 0.0
             frame = sim.tick(self._current_command())
             if viewer is not None:
                 viewer.sync()
