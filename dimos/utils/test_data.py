@@ -205,7 +205,8 @@ def test_backup_file_keep_last_zero_removes_all(tmp_path: Path) -> None:
     assert list(tmp_path.glob("recording_go2.*.db")) == []
 
 
-@pytest.mark.self_hosted
+# Serial: deletes and re-pulls files in the shared data dir, which other tests read.
+@pytest.mark.self_hosted_serial
 def test_pull_file() -> None:
     repo_root = data.get_project_root()
     test_file_name = "cafe.jpg"
@@ -261,7 +262,7 @@ def test_pull_file() -> None:
         )
 
 
-@pytest.mark.self_hosted
+@pytest.mark.self_hosted_serial
 def test_pull_dir() -> None:
     repo_root = data.get_project_root()
     test_dir_name = "ab_lidar_frames"
