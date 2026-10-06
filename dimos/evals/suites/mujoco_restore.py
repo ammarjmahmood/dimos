@@ -53,7 +53,8 @@ MESSY_CUP = (TABLE_CENTER[0] + _SCORE_BAND_M, TABLE_CENTER[1])
 
 # Scene fruit centers / radii (for clearance checks in tests).
 APPLE_XY = (0.40, 0.08)
-ORANGE_XY = (0.45, -0.08)
+# Stock orange sits on the cup's tidy spot; eval scenes move it toward -y.
+ORANGE_EVAL_XY = (0.45, -0.15)
 CUP_RADIUS = 0.035
 APPLE_RADIUS = 0.04
 ORANGE_RADIUS = 0.045
@@ -70,6 +71,7 @@ _DUTY = (
 )
 
 _STOCK_CUP_BODY = '<body name="cup" pos="0.50 0.0 0.19">'
+_STOCK_ORANGE_BODY = '<body name="orange" pos="0.45 -0.08 0.175">'
 
 
 def _cup_on_table(x: float, y: float) -> bool:
@@ -153,28 +155,34 @@ def stayed_put(body: str, *, band: float = _STAY_BAND_M) -> Callable[[Outcome], 
     return grade
 
 
-def _materialize_cup_at(x: float, y: float) -> Path:
-    """Write an xarm7 scene with the cup at ``(x, y)``, beside the LFS assets."""
+def _materialize_eval_scene(
+    cup_xy: tuple[float, float],
+    orange_xy: tuple[float, float] = ORANGE_EVAL_XY,
+) -> Path:
+    """Write an eval scene: cup pose plus orange moved off the table center."""
     stock = LfsPath("xarm7/scene.xml")
     root = Path(str(stock)).parent
     text = (root / "scene.xml").read_text()
-    if _STOCK_CUP_BODY not in text:
-        raise RuntimeError("xarm7/scene.xml no longer has the expected cup pose marker")
-    out = root / f"scene_cup_x{x:g}_y{y:g}_eval.xml"
-    replacement = f'<body name="cup" pos="{x:g} {y:g} 0.19">'
-    out.write_text(text.replace(_STOCK_CUP_BODY, replacement, 1))
+    if _STOCK_CUP_BODY not in text or _STOCK_ORANGE_BODY not in text:
+        raise RuntimeError("xarm7/scene.xml no longer has the expected cup/orange markers")
+    cx, cy = cup_xy
+    ox, oy = orange_xy
+    text = text.replace(_STOCK_ORANGE_BODY, f'<body name="orange" pos="{ox:g} {oy:g} 0.175">', 1)
+    text = text.replace(_STOCK_CUP_BODY, f'<body name="cup" pos="{cx:g} {cy:g} 0.19">', 1)
+    out = root / f"scene_cup_{cx:g}_{cy:g}_orange_{ox:g}_{oy:g}_eval.xml"
+    out.write_text(text)
     return out
 
 
 class _CupSceneEnv(MujocoEnvironment):
-    """Launch with the cup rewritten to a fixed ``(x, y)`` on the stock table."""
+    """Launch with cup and orange poses rewritten on the stock table."""
 
     def __init__(self, cup_xy: tuple[float, float], **kwargs: Any) -> None:
         self._cup_xy = cup_xy
         super().__init__(**kwargs)
 
     def configure_launch(self, proc: DimosCliCall) -> None:
-        self.config.scene = _materialize_cup_at(*self._cup_xy)
+        self.config.scene = _materialize_eval_scene(self._cup_xy)
         super().configure_launch(proc)
 
 

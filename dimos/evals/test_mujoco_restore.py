@@ -21,8 +21,8 @@ from dimos.evals.suites.mujoco_restore import (
     APPLE_XY,
     CUP_RADIUS,
     MESSY_CUP,
+    ORANGE_EVAL_XY,
     ORANGE_RADIUS,
-    ORANGE_XY,
     SUITE,
     TABLE_CENTER,
     at_xy,
@@ -56,12 +56,20 @@ def test_messy_cup_is_a_tenth_meter_from_center_and_clear_of_fruit() -> None:
     )
     margin = 0.01
     assert (
-        math.hypot(MESSY_CUP[0] - ORANGE_XY[0], MESSY_CUP[1] - ORANGE_XY[1])
+        math.hypot(MESSY_CUP[0] - ORANGE_EVAL_XY[0], MESSY_CUP[1] - ORANGE_EVAL_XY[1])
         > CUP_RADIUS + ORANGE_RADIUS + margin
     )
     assert (
         math.hypot(MESSY_CUP[0] - APPLE_XY[0], MESSY_CUP[1] - APPLE_XY[1])
         > CUP_RADIUS + APPLE_RADIUS + margin
+    )
+
+
+def test_tidy_cup_at_center_clears_eval_orange() -> None:
+    margin = 0.01
+    assert (
+        math.hypot(TABLE_CENTER[0] - ORANGE_EVAL_XY[0], TABLE_CENTER[1] - ORANGE_EVAL_XY[1])
+        > CUP_RADIUS + ORANGE_RADIUS + margin
     )
 
 
