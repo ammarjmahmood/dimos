@@ -99,6 +99,7 @@ from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
 from dimos.perception.experimental.object import Object as DetObject
 from dimos.utils.logging_config import setup_logger
 
@@ -220,6 +221,9 @@ class ManipulationModule(Module):
     voxel_map: In[PointCloud2]
     objects: In[list[DetObject]]
     tf: Out[TFMessage]
+    # The plan handed to the coordinator, once per execute(); the coordinator's
+    # applied_joint_position_command is what the hardware then accepted.
+    planned_joint_trajectory: Out[JointTrajectory]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -1125,6 +1129,7 @@ class ManipulationModule(Module):
                 return ExecutionResult(ExecutionStatus.REJECTED, message)
             self._last_plan = None
             self._state = ManipulationState.EXECUTING
+        self.planned_joint_trajectory.publish(target_plan.trajectory)
         try:
             result = self._execution_manager.execute(
                 target_plan,

@@ -248,6 +248,20 @@ class TestCoordinatorIntegration:
         assert len(trajectory.points) > 1
         assert trajectory.joint_names == module.config.model.joint_names
 
+    def test_execute_publishes_the_planned_trajectory(self, module, joint_state_zeros):
+        """The plan sent to the coordinator is published for recording."""
+        module._on_joint_state(joint_state_zeros)
+        published = []
+        module.planned_joint_trajectory.subscribe(published.append)
+
+        result = module.plan_to_joints({"manipulator": JointState(position=[0.05] * 7)})
+        assert result.succeeded, result.message
+        assert module.execute().status is ExecutionStatus.COMPLETED
+
+        assert len(published) == 1
+        assert published[0] is _executed(module._control_coordinator)
+        assert published[0].joint_names == module.config.model.joint_names
+
     def test_execute_rejected_by_coordinator(self, module, joint_state_zeros):
         """Test handling of coordinator rejection."""
         module._on_joint_state(joint_state_zeros)
