@@ -175,7 +175,7 @@ does not respawn them. Restart the blueprint between pick attempts that need a
 pristine scene.
 
 The independent `PointCloudSelfFilter` delegates geometry loading, kinematics,
-mimic joints and Narrowphase surface classification to RoboPlan 0.7. DimOS matches
+mimic joints and Narrowphase surface classification to RoboPlan 0.7. dimOS matches
 joint state and TF to the capture timestamp, preserves point fields, and drops
 unaligned captures. The shipped simulation gripper coordinate is converted only
 at this boundary; planning remains seven-axis. Hardware SDK feedback needs its

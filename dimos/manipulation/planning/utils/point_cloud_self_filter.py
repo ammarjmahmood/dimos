@@ -69,7 +69,7 @@ class PointCloudSelfFilter(Module):
 
     @rpc
     def start(self) -> None:
-        _ = self.tfbuffer
+        self.tfbuffer  # noqa: B018 - Initialize TF before binding input handlers.
         super().start()
 
     async def handle_pointcloud(self, cloud: PointCloud2) -> None:
