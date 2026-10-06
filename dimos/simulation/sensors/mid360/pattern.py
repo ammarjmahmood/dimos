@@ -38,29 +38,28 @@ class Mid360Pattern:
         self.f2 = f2
         self.order_fast = order_fast
         self.order_slow = order_slow
-        self.coefs = coefs
         pairs = [
             (m, q)
             for m in range(order_fast + 1)
             for q in range(-order_slow, order_slow + 1)
             if not (m == 0 and q < 0)
         ]
-        cos_cols, sin_cols, sin_pairs = [], [], []
-        col = 0
-        for p, pair in enumerate(pairs):
-            cos_cols.append(col)
-            col += 1
-            if pair != (0, 0):
-                sin_cols.append(col)
-                sin_pairs.append(p)
-                col += 1
-        if col != coefs.shape[1]:
-            raise ValueError(f"pattern has {coefs.shape[1]} coefficients, orders imply {col}")
+        columns = sum(1 if pair == (0, 0) else 2 for pair in pairs)
+        if columns != coefs.shape[1]:
+            raise ValueError(f"pattern has {coefs.shape[1]} coefficients, orders imply {columns}")
         self._m_idx = np.array([m for m, _ in pairs])
         self._q_idx = np.array([q + order_slow for _, q in pairs])
-        self._cos_cols = np.array(cos_cols)
-        self._sin_cols = np.array(sin_cols)
-        self._sin_pairs = np.array(sin_pairs)
+        folded = np.zeros((len(pairs), CHANNELS * 3), dtype=np.complex128)
+        col = 0
+        for p, pair in enumerate(pairs):
+            for c in range(CHANNELS):
+                folded[p, 3 * c : 3 * c + 3] = coefs[c, col]
+            col += 1
+            if pair != (0, 0):
+                for c in range(CHANNELS):
+                    folded[p, 3 * c : 3 * c + 3] -= 1j * coefs[c, col]
+                col += 1
+        self._folded = folded
 
     @classmethod
     def load(cls, path: str | Path) -> Mid360Pattern:
@@ -75,20 +74,17 @@ class Mid360Pattern:
 
     def directions(self, k0: int, n: int) -> NDArray[np.float64]:
         """Unit sensor-frame directions of global point indices k0 .. k0 + n."""
-        k = np.arange(k0, k0 + n)
-        t = (k // CHANNELS) / (POINT_RATE / CHANNELS)
+        g0 = k0 // CHANNELS
+        groups = np.arange(g0, (k0 + n - 1) // CHANNELS + 1)
+        t = groups / (POINT_RATE / CHANNELS)
         fast = np.exp(2j * np.pi * self.f1 * t)
         slow = np.exp(2j * np.pi * self.f2 * t)
-        fast_pow = np.cumprod(np.column_stack([np.ones(n), *[fast] * self.order_fast]), axis=1)
-        slow_pos = np.cumprod(np.column_stack([np.ones(n), *[slow] * self.order_slow]), axis=1)
+        ones = np.ones(len(groups))
+        fast_pow = np.cumprod(np.column_stack([ones, *[fast] * self.order_fast]), axis=1)
+        slow_pos = np.cumprod(np.column_stack([ones, *[slow] * self.order_slow]), axis=1)
         slow_pow = np.concatenate([np.conj(slow_pos[:, :0:-1]), slow_pos], axis=1)
         harmonic = fast_pow[:, self._m_idx] * slow_pow[:, self._q_idx]
-        basis = np.empty((n, self.coefs.shape[1]))
-        basis[:, self._cos_cols] = harmonic.real
-        basis[:, self._sin_cols] = harmonic.imag[:, self._sin_pairs]
-        out = np.empty((n, 3))
-        for c in range(CHANNELS):
-            first = (c - k0) % CHANNELS
-            out[first::CHANNELS] = basis[first::CHANNELS] @ self.coefs[c]
+        points = (harmonic @ self._folded).real.reshape(-1, 3)
+        out: NDArray[np.float64] = points[k0 - g0 * CHANNELS :][:n]
         out /= np.linalg.norm(out, axis=1, keepdims=True)
         return out
