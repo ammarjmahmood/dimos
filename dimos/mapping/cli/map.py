@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 
 import typer
 
+from dimos.mapping.cli.streams import select_stream
+
 if TYPE_CHECKING:
     from dimos_generated.geometry_msgs.msg import TransformStamped
     from dimos_generated.sensor_msgs.msg import Image, PointCloud2
@@ -335,9 +337,12 @@ def _log_reconstruction(
 
 
 def main(
-    dataset: str = typer.Argument(..., help="Dataset .db: bare name (cwd or data/) or path"),
-    lidar_stream: str = typer.Option(
-        "lidar", "--lidar", help="Lidar point-cloud stream to reconstruct"
+    dataset: str = typer.Argument(..., help="Dataset .db or .mcap: bare name or path"),
+    lidar_stream: str | None = typer.Option(
+        None, "--lidar", help="PointCloud2 stream; auto-select only a unique candidate"
+    ),
+    image_stream: str | None = typer.Option(
+        None, "--image", help="Image stream for --markers; auto-select only a unique candidate"
     ),
     seek: float = typer.Option(0.0, "--seek", help="Skip the first N seconds of the recording"),
     duration: float | None = typer.Option(
@@ -353,9 +358,9 @@ def main(
         help="Run pose graph optimization and rebuild from spatially-deduped frames",
     ),
     pgo_tol: float = typer.Option(
-        0.3,
+        0.0,
         "--pgo-tol",
-        help="Spatial dedup tolerance (meters); applies to both raw and --pgo maps. 0 disables dedup (keep every posed frame)",
+        help="Spatial dedup tolerance (meters); applies to both raw and --pgo maps. 0 disables dedup (default; keep every registered frame)",
     ),
     block_count: int = typer.Option(
         2_000_000, "--block-count", help="VoxelBlockGrid capacity (raw and PGO rebuilds)"
@@ -458,7 +463,7 @@ def main(
     import rerun as rr
 
     from dimos.mapping.loop_closure.pgo import PGO
-    from dimos.memory.cli.dataset import open_store, resolve_dataset
+    from dimos.memory.cli.dataset import open_store, resolve_dataset, stream_payload_types
     from dimos.memory.transform import QualityWindow, SpeedLimit
     from dimos.memory.utils.progress import progress
     from dimos.msgs.camera_info import camera_info_from_yaml
@@ -470,12 +475,24 @@ def main(
 
     db_path = resolve_dataset(dataset)
     store = open_store(db_path)
+    try:
+        types = stream_payload_types(store)
+        selected_lidar = select_stream(types, PointCloud2, lidar_stream, "--lidar")
+        selected_image = (
+            select_stream(types, Image, image_stream, "--image")
+            if markers or image_stream is not None
+            else None
+        )
+        assert selected_lidar is not None
+    except Exception:
+        store.stop()
+        raise
     if out is None:
         out = Path.cwd() / f"{db_path.stem}.rrd"
     if export or full_pgo:
         pgo = True
 
-    lidar = store.stream(lidar_stream, PointCloud2).from_time(seek or None).to_time(duration)
+    lidar = store.stream(selected_lidar, PointCloud2).from_time(seek or None).to_time(duration)
 
     print(lidar.summary())
 
@@ -535,7 +552,6 @@ def main(
         register = _register
     elif cloud_frame is not None:
         print(f"clouds already in world frame {world!r}; accumulating verbatim")
-        print("warning: trajectory positions come from stored obs.pose (old dataset)")
 
     def _position(obs: Observation[Any]) -> tuple[float, float, float] | None:
         """Trajectory position for dedup/path: registration tf, else the stored pose."""
@@ -561,37 +577,48 @@ def main(
             return (pose.position.x, pose.position.y, pose.position.z)
         return None
 
-    # Spatial dedup: bucket frames by 3D cell using the trajectory position,
-    # keep the latest per cell. Shared by raw and PGO rebuilds. Doesn't touch
-    # obs.data so it stays cheap (no pointcloud loading). With pgo_tol<=0 the
-    # bucketing is disabled and every positioned frame is kept (keyed by index).
-    seen: dict[Any, tuple[Observation[Any], tuple[float, float, float]]] = {}
+    # World-frame accumulation needs no trajectory. Dedup and PGO do.
+    seen: dict[Any, Observation[Any]] = {}
+    path: list[tuple[float, float, float]] = []
     for i, obs in enumerate(lidar):
         pos = _position(obs)
-        if pos is None:
-            continue
-        if pgo_tol > 0:
-            # math.floor so negative coords bucket consistently; int() truncates
-            # toward zero and silently folds -0.5 and 0.5 into the same cell.
-            key: Any = (
-                math.floor(pos[0] / pgo_tol),
-                math.floor(pos[1] / pgo_tol),
-                math.floor(pos[2] / pgo_tol),
+        if register is not None and pos is None:
+            raise typer.BadParameter(
+                f"Missing registration TF at timestamp {obs.ts}", param_hint="--frame"
             )
-        else:
-            key = i
-        seen[key] = (obs, pos)
+        if pgo_tol > 0 and pos is None:
+            raise typer.BadParameter(
+                "Spatial dedup requires trajectory positions; use --pgo-tol 0 for plain accumulation",
+                param_hint="--pgo-tol",
+            )
+        if pgo and (
+            obs.pose is None
+            or not any((obs.pose.position.x, obs.pose.position.y, obs.pose.position.z))
+            or not any(
+                (
+                    obs.pose.orientation.x,
+                    obs.pose.orientation.y,
+                    obs.pose.orientation.z,
+                    obs.pose.orientation.w,
+                )
+            )
+        ):
+            raise typer.BadParameter(
+                "PGO requires valid stored trajectory poses; registration TF alone does not populate them",
+                param_hint="--pgo",
+            )
+        key: Any = i
+        if pgo_tol > 0:
+            assert pos is not None
+            key = tuple(math.floor(value / pgo_tol) for value in pos)
+        seen[key] = obs
 
-    n_kept = len(seen)
-    pct = 100 * n_kept / total if total else 0
-    if pgo_tol > 0:
-        print(f"dedup: kept [{n_kept}/{total}] frames ({pct:.1f}%) at tol={pgo_tol}m")
-    else:
-        print(f"dedup: disabled, kept all [{n_kept}/{total}] positioned frames")
-
-    # Dict insertion order = lidar iteration order = chronological.
-    kept = [obs for obs, _ in seen.values()]
-    path: list[tuple[float, float, float]] = [pos for _, pos in seen.values()]
+    kept = list(seen.values())
+    path = [pos for obs in kept if (pos := _position(obs)) is not None]
+    n_kept = len(kept)
+    if not n_kept:
+        raise typer.BadParameter("No point-cloud observations in the selected interval")
+    print(f"dedup: kept [{n_kept}/{total}] frames at tol={pgo_tol}m")
 
     pgo_map = None
     pgo_path: list[tuple[float, float, float]] = []
@@ -649,6 +676,9 @@ def main(
             progress_cb=bar,
         )
 
+    if global_map is None:
+        raise typer.BadParameter("Selected observations contain no points to accumulate")
+
     if denoise:
         print("denoising maps (statistical outlier removal)...")
         global_map = _denoise(global_map)
@@ -662,7 +692,8 @@ def main(
         # (verified: matches lidar_base_pose + BASE_TO_OPTICAL to ~1mm). With
         # --image-pose, swap that stored pose for a different source (e.g.
         # fastlio_odometry), composing the base→optical mount onto it first.
-        color_image = store.stream("color_image", Image).from_time(seek or None).to_time(duration)
+        assert selected_image is not None
+        color_image = store.stream(selected_image, Image).from_time(seek or None).to_time(duration)
         n_images = color_image.count()
         if image_pose is not None:
             from dimos.mapping.cli.pose_fill import pose_fill
