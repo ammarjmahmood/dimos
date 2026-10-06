@@ -4,9 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Relative path: resolves against the flake, not the cwd (nix#12281). Only reachable when
-    # entered as git+file:<dimos>?dir=..., which is how the module builds it.
-    dimos-repo = { url = "path:../../../.."; flake = false; };
     crate2nix.url = "github:nix-community/crate2nix";
     crate2nix.inputs.nixpkgs.follows = "nixpkgs";
     # Same rev as Cargo.toml's depth2depth: its flake fetches the model the crate embeds (pinned in its model.json).
@@ -14,7 +11,7 @@
     depth2depth.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, dimos-repo, crate2nix, depth2depth }:
+  outputs = { self, nixpkgs, flake-utils, crate2nix, depth2depth }:
     flake-utils.lib.eachSystem [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ] (system:
       let
         isJetson = system == "aarch64-linux";
@@ -36,8 +33,8 @@
           cp ${./Cargo.lock} $out/dimos/perception/depth2depth_cloud/rust/Cargo.lock
 
           mkdir -p $out/native/rust
-          cp -r ${dimos-repo}/native/rust/dimos-module $out/native/rust/dimos-module
-          cp -r ${dimos-repo}/native/rust/dimos-module-macros $out/native/rust/dimos-module-macros
+          cp -r ${../../../../native/rust/dimos-module} $out/native/rust/dimos-module
+          cp -r ${../../../../native/rust/dimos-module-macros} $out/native/rust/dimos-module-macros
         '';
 
         generatedCargoNix = crate2nix.tools.${system}.generatedCargoNix {

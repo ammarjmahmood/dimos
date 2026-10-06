@@ -95,18 +95,6 @@
         "type": "github"
       }
     },
-    "dimos-repo": {
-      "flake": false,
-      "locked": {
-        "path": "../../../..",
-        "type": "path"
-      },
-      "original": {
-        "path": "../../../..",
-        "type": "path"
-      },
-      "parent": []
-    },
     "flake-compat": {
       "locked": {
         "lastModified": 1733328505,
@@ -329,7 +317,6 @@
       "inputs": {
         "crate2nix": "crate2nix",
         "depth2depth": "depth2depth",
-        "dimos-repo": "dimos-repo",
         "flake-utils": "flake-utils_2",
         "nixpkgs": "nixpkgs_2"
       }
