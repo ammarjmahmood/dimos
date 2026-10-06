@@ -54,8 +54,10 @@ from dimos.robot.manipulators.dual_openyam.config import (
     dual_openyam_model_config,
 )
 
-# {side}_grasp_frame sits 5.9 cm behind the fingertip midpoint; plan to the tips.
-DUAL_OPENYAM_TCP_OFFSET = (0.0535023, 0.0, -0.0295359)
+# {side}_grasp_frame is 10 cm below the gripper link on its axis. The finger
+# pads (tip_left.stl, tip_right.stl at the URDF's closed zero position) meet on
+# that axis from 12.7 to 14.7 cm below the gripper link; plan to the pad centre.
+DUAL_OPENYAM_TCP_OFFSET = (0.0, 0.0, -0.037)
 
 # Pink's defaults do not converge on this model; the WebXR teleop uses these.
 DUAL_OPENYAM_GRASP_PINK = PinkKinematicsConfig(
