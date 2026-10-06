@@ -177,9 +177,9 @@ pristine scene.
 The independent `PointCloudSelfFilter` delegates geometry loading, kinematics,
 mimic joints and Narrowphase surface classification to RoboPlan 0.7. dimOS matches
 joint state and TF to the capture timestamp, preserves point fields, and drops
-unaligned captures. The shipped simulation gripper coordinate is converted only
-at this boundary; planning remains seven-axis. Hardware SDK feedback needs its
-own verified conversion.
+unaligned captures. The xArm blueprint filters only the arm using a model without
+the gripper. Gripper points may enter the map; separate gripper control and grasp
+evaluation do not remove them. Planning and control retain their existing models.
 
 Filtering removes robot surface returns before voxel fusion. There is no solid
 volume sampling or historical robot clear mask; clearing is the mapper's ordinary

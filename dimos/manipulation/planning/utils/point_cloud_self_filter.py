@@ -46,8 +46,6 @@ class PointCloudSelfFilterConfig(ModuleConfig):
     tf_forward_tolerance_s: float = Field(default=0.05, ge=0.0)
     state_tolerance_s: float = Field(default=0.02, ge=0.0)
     state_history_s: float = Field(default=5.0, gt=0.0)
-    # Only for the shipped xArm MuJoCo gripper coordinate, never SDK feedback.
-    xarm_sim_gripper: bool = False
 
 
 class PointCloudSelfFilter(Module):
@@ -138,11 +136,6 @@ class PointCloudSelfFilter(Module):
             positions = dict(zip(state.name, state.position, strict=True))
             if not np.isfinite(list(positions.values())).all():
                 return None
-        if self.config.xarm_sim_gripper:
-            measured = positions.get("arm/gripper")
-            if measured is None or not 0.0 <= measured <= 0.85 or "drive_joint" in positions:
-                return None
-            positions["drive_joint"] = 0.85 - measured
         # Start from the model's neutral configuration, never its latest state.
         q = self._neutral_q.copy()
         for name in self._scene.getJointNames():
@@ -204,8 +197,6 @@ class PointCloudSelfFilter(Module):
                 [str(path) for path in description.package_paths.values()],
             ),
         )
-        if self.config.xarm_sim_gripper and "drive_joint" not in self._scene.getJointNames():
-            raise ValueError("xArm simulation filtering requires drive_joint")
         self._neutral_q = np.asarray(self._scene.getCurrentJointPositions()).copy()
         self._context = native.SceneContext(self._scene)
         self._body_filter = native.RobotBodyFilter(

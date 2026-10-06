@@ -36,7 +36,7 @@ from dimos.robot.assets.model import RobotModel
 from dimos.robot.manipulators.xarm.config import (
     XARM_ROS2_REF,
     XARM_ROS2_REPO,
-    make_xarm7_sim_robot_config,
+    make_xarm7_model_config,
 )
 
 # A 20cm cube on `arm`, with no external assets.
@@ -256,27 +256,15 @@ def test_late_state_cannot_resurrect_expired_history(make_filter):
     assert module.filter_cloud(_cloud([[0.5, 0, 0]], ts=1.0)) is None
 
 
-@pytest.mark.parametrize("positions", [None, [0.86]])
-def test_sim_gripper_requires_valid_measured_feedback(make_filter, positions):
-    module = make_filter(
-        urdf_xml=_joint_robot("revolute").replace("shoulder", "drive_joint"),
-        xarm_sim_gripper=True,
-    )
-    _place_arm(module, (0, 0, 0), 1.0)
-    if positions is not None:
-        module.add_joint_state(JointState(ts=1.0, name=["arm/gripper"], position=positions))
-    assert module.filter_cloud(_cloud([[0, 0, 0]])) is None
-
-
 @pytest.mark.self_hosted
-def test_cached_xarm_gripper_surfaces_follow_capture(make_filter, monkeypatch):
+def test_cached_xarm_arm_surfaces_need_no_gripper_state(make_filter, monkeypatch):
     key = GitAssetCache._source_key(XARM_ROS2_REPO, XARM_ROS2_REF)
     cached = DEFAULT_ROBOT_ASSET_CACHE_ROOT / "sources" / key / "xarm_ros2"
     if not cached.is_dir():
         pytest.skip("Pinned xArm assets are not cached; this test never fetches them")
     monkeypatch.setattr(GitAssetCache, "resolve", lambda *_: cached)
-    config = make_xarm7_sim_robot_config()
-    module = make_filter(model=config.model, xarm_sim_gripper=True)
+    config = make_xarm7_model_config(add_gripper=False)
+    module = make_filter(model=config.model)
     description = config.model.load()
     model = pin.buildModelFromXML(description.xml, mimic=True)
     geoms = pin.buildGeomFromUrdfString(
@@ -285,28 +273,24 @@ def test_cached_xarm_gripper_surfaces_follow_capture(make_filter, monkeypatch):
         pin.GeometryType.COLLISION,
         package_dirs=[str(p) for p in description.package_paths.values()],
     )
-    assert model.nq == 8
+    assert model.nq == 7
     assert len(config.joint_names) == 7
     arm = [0.0, -0.04609, 0.0, 1.83940, 0.0, 1.87106, 0.0]
     controls = np.array([[2, 2, 2], [-2, -2, -2]], dtype=np.float32)
     captures = []
-    for stamp, drive in ((1.0, 0.0), (2.0, 0.85)):
-        module.add_joint_state(
-            JointState(
-                ts=stamp, name=["arm/gripper", *config.joint_names], position=[0.85 - drive, *arm]
-            )
-        )
+    for stamp, shoulder in ((1.0, 0.0), (2.0, 0.5)):
+        arm[0] = shoulder
+        module.add_joint_state(JointState(ts=stamp, name=config.joint_names, position=arm))
         data, gdata = model.createData(), pin.GeometryData(geoms)
-        pin.updateGeometryPlacements(model, data, geoms, gdata, np.array([*arm, drive]))
+        pin.updateGeometryPlacements(model, data, geoms, gdata, np.array(arm))
         surfaces = []
         for i, geom in enumerate(geoms.geometryObjects):
-            if any(name in geom.name for name in ("gripper", "finger", "knuckle")):
-                local, _ = trimesh.sample.sample_surface(
-                    trimesh.load_mesh(geom.meshPath), 100, seed=42 + i
-                )
-                local *= np.asarray(geom.meshScale)
-                surfaces.append(local @ gdata.oMg[i].rotation.T + gdata.oMg[i].translation)
-        assert len(surfaces) == 7
+            local, _ = trimesh.sample.sample_surface(
+                trimesh.load_mesh(geom.meshPath), 100, seed=42 + i
+            )
+            local *= np.asarray(geom.meshScale)
+            surfaces.append(local @ gdata.oMg[i].rotation.T + gdata.oMg[i].translation)
+        assert surfaces
         captures.append(
             PointCloud2.from_numpy(
                 np.concatenate([*surfaces, controls]).astype(np.float32),

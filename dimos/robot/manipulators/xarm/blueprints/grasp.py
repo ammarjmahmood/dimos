@@ -194,8 +194,8 @@ def _voxel_mapping() -> tuple[Blueprint, ...]:
         # The wrist camera sees the arm itself, so the arm's returns must be
         # dropped before mapping.
         PointCloudSelfFilter.blueprint(
-            model=_model.model,
-            xarm_sim_gripper=bool(SIMULATED),
+            # Filter only the arm; gripper returns may remain in the map.
+            model=make_xarm7_model_config(add_gripper=False).model,
             state_tolerance_s=0.1,
             # ManipulationModule publishes robot TF at 10Hz, so the stock 20ms
             # tolerance cannot bracket a ~92ms publish period and drops most
