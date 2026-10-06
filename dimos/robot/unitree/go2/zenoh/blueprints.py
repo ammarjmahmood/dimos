@@ -31,9 +31,9 @@ failure can be bisected by dropping down a level:
 - ``go2-viewer``: the rerun half alone, as a zenoh client of the robot's router.
 - ``go2-dds-basic``: ``go2-zenoh-basic`` with :class:`GO2DDS` in place of the bridge, for the
   Jetson (or the Go2 itself) talking DDS to the robot directly.
-- ``go2-dds-motion-pointlio``: ``go2-zenoh-motion-pointlio`` over DDS, GO2DDS being the
+- ``go2-dds-mid360``: ``go2-zenoh-motion-pointlio`` over DDS, GO2DDS being the
   zenoh router the viewer dials.
-- ``go2-dds-motion-pointlio-relocalization``: ``go2-dds-motion-pointlio`` placed in a premap
+- ``go2-dds-mid360-relocalization``: ``go2-dds-mid360`` placed in a premap
   by :class:`LocalMapRelocalization`, which seeds the raycaster and the planner with it.
 """
 
@@ -310,7 +310,7 @@ _dds_pointlio_hidden = {
     "world/region_bounds": None,
 }
 
-go2_dds_motion_pointlio = autoconnect(
+go2_dds_mid360 = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config=_rerun_config(_dds_pointlio_hidden),
@@ -343,8 +343,8 @@ go2_dds_motion_pointlio = autoconnect(
 
 # No loaded_map republish: the channel is never-drop. Headless on the robot, so the viewer
 # modules are dropped and go2-viewer on another machine is the screen.
-go2_dds_motion_pointlio_relocalization = autoconnect(
-    go2_dds_motion_pointlio.disabled_modules(RerunBridgeModule, RerunWebSocketServer),
+go2_dds_mid360_relocalization = autoconnect(
+    go2_dds_mid360.disabled_modules(RerunBridgeModule, RerunWebSocketServer),
     relocalization(republish_loaded_map=0.0),
 ).global_config(n_workers=9)
 
