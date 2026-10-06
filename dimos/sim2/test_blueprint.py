@@ -28,6 +28,7 @@ from dimos.sim2.control.adapters import ManipulatorAdapter, WholeBodyAdapter
 from dimos.sim2.module import SimulationModuleConfig
 from dimos.sim2.scene import scene_path
 from dimos.sim2.sensors.camera.module import CameraModuleConfig
+from dimos.sim2.sensors.lidar.models.mid360 import Mid360
 from dimos.sim2.sensors.lidar.module import LidarModuleConfig
 from dimos.sim2.sensors.spec import Camera, Lidar, Mount
 from dimos.sim2.spec import RobotInstance
@@ -144,3 +145,22 @@ def test_invalid_lidar_cannot_be_reconstructed_as_an_imu(tmp_path):
 
     with pytest.raises(ValueError, match="callable"):
         SimulationModuleConfig(**kwargs)
+
+
+def test_timed_lidar_configuration_survives_worker_serialization(tmp_path):
+    robot = G1_GROOT.with_sensor(
+        Lidar("lidar", "mid360_link", Mid360, model_kwargs={"downsample": 8})
+    )
+    blueprint = simulation(
+        scene=tmp_path / "scene.xml", robots={"g1": RobotInstance(robot)}, viewer=False
+    ).blueprint
+    parsed = BlueprintConfigParser(blueprint).parse(environ={})
+    world = SimulationModuleConfig(
+        **pickle.loads(pickle.dumps(parsed.module_kwargs("simulationmodule")))
+    ).world
+    sensor = LidarModuleConfig(
+        **pickle.loads(pickle.dumps(parsed.module_kwargs("g1_lidar")))
+    ).sensor
+    configured = next(s for s in world.robots["g1"].config.sensors if isinstance(s, Lidar))
+    assert configured == sensor
+    assert sensor.model(**sensor.model_kwargs) == Mid360(downsample=8)

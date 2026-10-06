@@ -17,6 +17,7 @@
 import argparse
 from dataclasses import replace
 import json
+from queue import Queue
 import socket
 import time
 
@@ -26,6 +27,7 @@ from dimos.core.global_config import global_config
 from dimos.core.transport_factory import make_transport
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.JointState import JointState
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.protocol.service.zenohservice import ZenohService
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
 from dimos.sim2.module import SimulationModule
@@ -35,6 +37,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("robot", choices=["g1", "xarm"])
     parser.add_argument("--seconds", type=float, default=10)
+    parser.add_argument("--mid360", action="store_true", help="Use the G1 rolling Mid360 preset")
     parser.add_argument("--viewer", action="store_true")
     parser.add_argument("--rerun", action="store_true", help="Include the Rerun bridge and viewer")
     parser.add_argument("--transport", choices=["lcm", "zenoh"], default="zenoh")
@@ -43,6 +46,8 @@ def main() -> None:
         "--move", action="store_true", help="Check motion through ordinary command streams"
     )
     args = parser.parse_args()
+    if args.mid360 and args.robot != "g1":
+        parser.error("--mid360 requires g1")
     global_config.update(
         simulation="mujoco", viewer="rerun" if args.rerun else "none", transport=args.transport
     )
@@ -55,6 +60,8 @@ def main() -> None:
         router.start()
         global_config.update(zenoh_mode="client", zenoh_connect=endpoint, zenoh_multicast=False)
     name = "unitree-g1-groot-wbc" if args.robot == "g1" else "xarm7-planner-coordinator"
+    if args.mid360:
+        name = "unitree-g1-groot-mid360"
     blueprint = get_blueprint_by_name(name)
     atoms = tuple(
         replace(atom, kwargs={**atom.kwargs, "viewer": args.viewer})
@@ -88,6 +95,19 @@ def main() -> None:
             lidar = coordinator.get_instance("g1_lidar")
             assert lidar.peek_stream("pointcloud", 5.0) is not None, "no lidar published"
             assert lidar.sensor_status()["error"] is None
+            lidar_initial = lidar.sensor_status()
+            if args.mid360:
+                # Inspect the typed wire format, not the RPC's lossy cloud pickle.
+                raw_stream = make_transport("raw_pointcloud", PointCloud2)
+                samples: Queue[PointCloud2] = Queue()
+                unsubscribe = raw_stream.subscribe(samples.put)
+                try:
+                    raw = samples.get(timeout=5.0)
+                    assert raw.offset_times_u32() is not None
+                    assert raw.lines_u8() is not None
+                finally:
+                    unsubscribe()
+                    raw_stream.stop()
         started = time.monotonic()
         initial = sim.status()
         if args.move:
@@ -143,6 +163,12 @@ def main() -> None:
                     "rgb": rgb.data.shape,
                     "depth": depth.data.shape,
                     "status": state,
+                    "lidar": lidar.sensor_status() if args.robot == "g1" else None,
+                    "lidar_hz": (
+                        (lidar.sensor_status()["scans"] - lidar_initial["scans"]) / elapsed
+                        if args.mid360
+                        else None
+                    ),
                 },
                 indent=2,
             )

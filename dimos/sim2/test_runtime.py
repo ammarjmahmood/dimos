@@ -22,7 +22,7 @@ import pytest
 
 from dimos.hardware.whole_body.spec import MotorCommand
 from dimos.robot.manipulators.xarm.sim2 import XARM7
-from dimos.robot.unitree.g1.sim2 import G1_GROOT
+from dimos.robot.unitree.g1.sim2 import G1_GROOT, G1_GROOT_MID360
 from dimos.sim2.control.adapters import ManipulatorAdapter, WholeBodyAdapter
 from dimos.sim2.runtime import SimulationRuntime
 from dimos.sim2.scene import scene_path
@@ -128,6 +128,20 @@ def test_reset_immediately_publishes_new_epoch(runtime):
     assert after.metadata.episode_id == before.metadata.episode_id + 1
     assert after.metadata.sequence > before.metadata.sequence
     assert after.metadata.sim_time == 0
+
+
+def test_timed_lidar_enables_bounded_history_without_changing_motor_channels(runtime):
+    world = runtime(G1_GROOT_MID360, "g1", "logistics.xml", (0, 0, 0.793))
+    assert world.snapshot_descriptor.observation_slots == 42
+    assert world.robots["g1"].channel.descriptor.observation_slots == 2
+    for _ in range(25):
+        world.step()
+    frames = world.snapshots.read_observations()
+    assert len(frames) == 26
+    assert np.diff([f.metadata.sim_time for f in frames]) == pytest.approx(0.005)
+    world.reset()
+    latest = world.snapshots.read_observation()
+    assert latest.metadata.episode_id == world.snapshots.episode_id == world.episode
 
 
 def test_arm_deactivate_is_idempotent(runtime, device):

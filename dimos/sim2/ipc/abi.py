@@ -23,7 +23,7 @@ import numpy as np
 
 from dimos.sim2.spec import ControlInterface
 
-ABI_VERSION = 2
+ABI_VERSION = 3
 CHANNEL_MAGIC = b"DMSIM2\0\0"
 CHANNEL_HEADER_SIZE = 64
 FRAME_METADATA_SIZE = 48
@@ -90,6 +90,11 @@ class ChannelDescriptor:
     control_decimation: int
     action_layout: FrameLayout
     observation_layout: FrameLayout
+    observation_slots: int = 2
+
+    def __post_init__(self) -> None:
+        if self.observation_slots < 2:
+            raise ValueError("observation channels require at least two slots")
 
     @property
     def action_offset(self) -> int:
@@ -101,7 +106,7 @@ class ChannelDescriptor:
 
     @property
     def total_size(self) -> int:
-        return self.observation_offset + 2 * self.observation_layout.slot_size
+        return self.observation_offset + self.observation_slots * self.observation_layout.slot_size
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +122,7 @@ class ChannelDescriptor:
             "control_decimation": self.control_decimation,
             "action_layout": self.action_layout.to_dict(),
             "observation_layout": self.observation_layout.to_dict(),
+            "observation_slots": self.observation_slots,
         }
 
     @classmethod
@@ -134,6 +140,7 @@ class ChannelDescriptor:
             control_decimation=value["control_decimation"],
             action_layout=FrameLayout.from_dict(value["action_layout"]),
             observation_layout=FrameLayout.from_dict(value["observation_layout"]),
+            observation_slots=value["observation_slots"],
         )
 
 

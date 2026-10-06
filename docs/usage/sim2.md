@@ -80,6 +80,55 @@ It retains a bounded timeout for genuinely unresponsive workers. Verification:
 57 coordinator/worker tests passed, with 13 existing macOS skips, plus both
 live runs. Startup TF and macOS renderer warnings are not claimed resolved.
 
+## Rolling Mid360
+
+The G1 comparison preset changes only the lidar on the existing GR00T stack:
+
+```bash
+uv run dimos --simulation mujoco --transport zenoh --viewer rerun run unitree-g1-groot-mid360
+```
+
+Use `unitree-g1-groot-wbc` for the original ideal lidar. Both accept the same
+`--scene-package` and viewer options. The Mid360 preset binds the existing
+`mid360_link` asset site, including its inverted G1 mounting orientation; it
+does not crop the scan's vertical field of view.
+
+`Mid360` retains PimSim's official Livox four-channel angular sequence. Its
+800,000 samples repeat every four seconds at the nominal 200,000 rays/s.
+The default is 20,000 emitted rays per 100 ms scan, with scene/robot motion
+reconstructed in 200 Hz bins. The attributed data ships separately as the
+approximately 3 MB `mid360_pattern` data archive. Optional `model_kwargs`
+such as `{"downsample": 4}` retain every fourth complete four-laser group.
+
+The existing lidar worker exposes two `PointCloud2` streams:
+
+- `pointcloud`: truth-corrected returns for the existing mapper, in the
+  configured world or scan-end sensor frame.
+- `raw_pointcloud`: uncorrected acquisition-time sensor-frame returns, with
+  `offset_time` in nanoseconds from the scan-start message timestamp and
+  `line` identifying the laser channel. Misses are omitted, not fabricated.
+
+Read raw data through the typed stream; the generic RPC `peek_stream` path
+pickles point clouds and currently discards their extra per-point fields.
+This port does not change that shared message implementation.
+
+Only timed lidar enables bounded history on the existing world snapshot
+channel (42 slots at G1's default settings). Motor channels remain double
+buffered. Incomplete history delays a scan; reset boundaries never mix
+episodes. `g1_lidar.sensor_status()` reports captured/dropped scans, ray and
+return counts, last capture time and history availability. Restart the stack
+after updating: the internal shared-memory layout changed.
+
+This model is noise-free geometry, not calibrated reflectivity or dropout
+simulation. It does not add a colocated Mid360 IMU or connect Point-LIO. The
+existing mapper still consumes corrected clouds and simulator odometry.
+
+An October 6 native G1 check with walking, RGB-D and mapping active measured
+0.9998 real-time factor, about 9.8 scans/s and 14 ms for the last full-rate
+capture. Startup was 6.24 s and shutdown 0.23 s. This short headless run is
+not an all-scenes performance guarantee; startup also skipped scan windows.
+Reproduce with `python -m dimos.sim2.demo_smoke g1 --mid360 --move --seconds 6`.
+
 ## Included Scenes
 
 The eight populated scenes ship together in the existing `data/.lfs/sim2.tar.gz`

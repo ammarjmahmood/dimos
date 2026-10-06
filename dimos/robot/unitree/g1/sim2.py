@@ -23,6 +23,7 @@ from dimos.robot.unitree.g1.control_config import (
     g1_joints,
 )
 from dimos.sim2.sensors.lidar.models.fibonacci import Fibonacci
+from dimos.sim2.sensors.lidar.models.mid360 import Mid360
 from dimos.sim2.sensors.spec import Camera, Imu, Lidar
 from dimos.sim2.spec import ControlInterface, Joint, RobotConfig
 from dimos.utils.data import LfsPath
@@ -63,3 +64,6 @@ G1_GROOT = RobotConfig(
         Camera("camera", camera="front_camera"),
     ),
 )
+
+# Retain the authored inverted mount and the full vertical field of view.
+G1_GROOT_MID360 = G1_GROOT.with_sensor(Lidar("lidar", "mid360_link", Mid360))

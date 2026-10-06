@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Coherent double-buffered shared-memory robot channel."""
+"""Coherent shared-memory frames; snapshot observations may retain a bounded history."""
 
 from __future__ import annotations
 
@@ -157,6 +157,34 @@ class RobotChannel:
     def read_observation(self, *, retries: int = 20) -> ChannelFrame | None:
         return self._read("observation", retries=retries)
 
+    def read_observations(self, *, retries: int = 3) -> tuple[ChannelFrame, ...]:
+        """Read retained snapshots oldest first, leaving the next writer slot alone."""
+        layout = self.descriptor.observation_layout
+        slots = self.descriptor.observation_slots
+        for _ in range(retries):
+            latest = struct.unpack_from("<Q", self._buffer, _OBSERVATION_SEQUENCE_OFFSET)[0]
+            frames = []
+            for sequence in range(max(1, latest - slots + 2), latest + 1):
+                offset = self.descriptor.observation_offset + (sequence % slots) * layout.slot_size
+                before = _FRAME_META.unpack_from(self._buffer, offset)
+                if before[0] != sequence:
+                    break
+                values = {
+                    field.name: np.ndarray(
+                        field.shape,
+                        dtype=np.dtype(field.dtype),
+                        buffer=self._buffer,
+                        offset=offset + field.offset,
+                    ).copy()
+                    for field in layout.fields
+                }
+                if _FRAME_META.unpack_from(self._buffer, offset) != before:
+                    break
+                frames.append(ChannelFrame(FrameMetadata(*before), values))
+            else:
+                return tuple(frames)
+        raise RuntimeError("snapshot history was overwritten while reading")
+
     def reset_frames(self, episode_id: int) -> None:
         self.set_episode(episode_id)
         struct.pack_into("<I", self._buffer, _ACTION_ACTIVE_OFFSET, 0)
@@ -174,7 +202,8 @@ class RobotChannel:
     ) -> int:
         layout, base_offset, active_offset, sequence_offset = self._direction(direction)
         current_active = struct.unpack_from("<I", self._buffer, active_offset)[0]
-        target = 1 - current_active
+        slots = 2 if direction == "action" else self.descriptor.observation_slots
+        target = (current_active + 1) % slots
         sequence = int(struct.unpack_from("<Q", self._buffer, sequence_offset)[0]) + 1
         slot_offset = base_offset + target * layout.slot_size
 

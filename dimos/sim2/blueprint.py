@@ -111,7 +111,7 @@ def simulation(
                     ports += ("depth_image", "depth_camera_info")
             elif isinstance(sensor, Lidar):
                 blueprint = LidarModule.blueprint(**kwargs, root_body=config.root_body)
-                ports = ("pointcloud",)
+                ports = ("pointcloud", "raw_pointcloud")
             elif isinstance(sensor, Imu):
                 # IMU is sampled with the joint observation in the physics owner.
                 continue

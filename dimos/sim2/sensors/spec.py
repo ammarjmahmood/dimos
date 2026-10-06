@@ -43,6 +43,25 @@ class RayPattern(Protocol):
     def directions(self) -> NDArray[np.float64]: ...
 
 
+@dataclass(frozen=True, config=ConfigDict(arbitrary_types_allowed=True))
+class TimedRays:
+    directions: NDArray[np.float64]
+    offsets: NDArray[np.float64]
+    lines: NDArray[np.uint8]
+
+
+@runtime_checkable
+class TimedRayPattern(Protocol):
+    @property
+    def min_range(self) -> float: ...
+    @property
+    def max_range(self) -> float: ...
+    @property
+    def motion_sample_rate_hz(self) -> float: ...
+
+    def scan(self, start: float, duration: float) -> TimedRays: ...
+
+
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class Camera:
     name: str
@@ -67,7 +86,7 @@ class Camera:
 class Lidar:
     name: str
     site: str | Mount
-    model: Callable[..., RayPattern]
+    model: Callable[..., RayPattern | TimedRayPattern]
     model_kwargs: dict[str, Any] = field(default_factory=dict)
     rate_hz: float = 10.0
     # Optional world-frame cutoff in degrees for ideal mapping scans.

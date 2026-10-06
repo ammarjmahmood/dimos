@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from typing import Any
 
 import mujoco
+import numpy as np
 
 from dimos.sim2.ipc.abi import ChannelDescriptor
-from dimos.sim2.ipc.channel import RobotChannel
+from dimos.sim2.ipc.channel import ChannelFrame, RobotChannel
 from dimos.sim2.runtime import STATE
 
 
@@ -32,6 +34,9 @@ class WorldReader:
         self.channel = RobotChannel.attach(ChannelDescriptor.from_dict(description["snapshot"]))
         self.sequence = -1
         self.timestamp = 0.0
+        self.episode = -1
+        self._history: tuple[ChannelFrame, ...] = ()
+        self._next: mujoco.MjData | None = None
 
     def update(self) -> bool:
         if self.channel.lifecycle != "ready":
@@ -43,7 +48,64 @@ class WorldReader:
         mujoco.mj_forward(self.model, self.data)
         self.sequence = frame.metadata.sequence
         self.timestamp = float(frame.values["wall_time"][0])
+        self.episode = frame.metadata.episode_id
         return True
+
+    def history(self, start: float, end: float) -> bool:
+        """Pin a complete interval from this episode; never invent missing motion."""
+        frames = self.channel.read_observations()
+        self._history = tuple(f for f in frames if f.metadata.episode_id == self.episode)
+        times = np.array([f.metadata.sim_time for f in self._history])
+        first = max(0, bisect_right(times, start) - 1)
+        last = bisect_left(times, end) + 1
+        self._history = self._history[first:last]
+        times = times[first:last]
+        period = self.channel.descriptor.physics_dt * self.channel.descriptor.control_decimation
+        if (
+            len(times) < 2
+            or times[0] > start + 1e-9
+            or times[-1] < end - 1e-9
+            or np.any(np.diff(times) > period * 1.5)
+            or np.any(np.diff(times) < 0)
+        ):
+            self._history = ()
+            return False
+        return True
+
+    def restore_at(self, time: float) -> None:
+        """Interpolate full scene kinematics, including quaternion joints and mocap bodies."""
+        times = [f.metadata.sim_time for f in self._history]
+        if not times or time < times[0] - 1e-9 or time > times[-1] + 1e-9:
+            raise ValueError(f"snapshot history does not cover {time}")
+        index = min(bisect_left(times, time), len(times) - 1)
+        after = self._history[index]
+        before = self._history[max(0, index - 1)]
+        mujoco.mj_setState(self.model, self.data, before.values["state"], STATE)
+        duration = after.metadata.sim_time - before.metadata.sim_time
+        alpha = (
+            0.0 if duration == 0 else np.clip((time - before.metadata.sim_time) / duration, 0, 1)
+        )
+        if duration > 0:
+            if self._next is None:
+                self._next = mujoco.MjData(self.model)
+            mujoco.mj_setState(self.model, self._next, after.values["state"], STATE)
+            velocity = np.empty(self.model.nv)
+            mujoco.mj_differentiatePos(
+                self.model, velocity, duration, self.data.qpos, self._next.qpos
+            )
+            mujoco.mj_integratePos(self.model, self.data.qpos, velocity, float(alpha * duration))
+            self.data.qvel[:] += alpha * (self._next.qvel - self.data.qvel)
+            self.data.mocap_pos[:] += alpha * (self._next.mocap_pos - self.data.mocap_pos)
+            q0, q1 = self.data.mocap_quat, self._next.mocap_quat
+            q1 = q1 * np.where(np.sum(q0 * q1, axis=1, keepdims=True) < 0, -1, 1)
+            q0[:] += alpha * (q1 - q0)
+            q0[:] /= np.linalg.norm(q0, axis=1, keepdims=True)
+        self.data.time = time
+        self.timestamp = float(
+            before.values["wall_time"][0]
+            + alpha * (after.values["wall_time"][0] - before.values["wall_time"][0])
+        )
+        mujoco.mj_forward(self.model, self.data)
 
     def close(self) -> None:
         self.channel.close()

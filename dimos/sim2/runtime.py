@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import threading
 import time
 from typing import Any
@@ -38,7 +39,7 @@ from dimos.sim2.ipc.abi import (
 from dimos.sim2.ipc.channel import FrameMetadata, RobotChannel
 from dimos.sim2.scene import describe_scene, load_scene
 from dimos.sim2.scene_types import EntityState, RegionState, SceneState, SceneUpdate
-from dimos.sim2.sensors.spec import Imu
+from dimos.sim2.sensors.spec import Imu, Lidar, TimedRayPattern
 from dimos.sim2.spec import ControlInterface, RobotConfig, WorldConfig
 
 STATE = mujoco.mjtState.mjSTATE_INTEGRATION
@@ -98,6 +99,30 @@ class SimulationRuntime:
         self.robots: dict[str, RobotBinding] = {}
         nstate = mujoco.mj_stateSize(self.model, STATE)
         self.state = np.empty(nstate)
+        snapshot_hz = config.snapshot_hz
+        history_seconds = 0.0
+        for instance in config.robots.values():
+            for sensor in instance.config.sensors:
+                if isinstance(sensor, Lidar):
+                    pattern = sensor.model(**sensor.model_kwargs)
+                    if isinstance(pattern, TimedRayPattern):
+                        if (
+                            not sensor.rate_hz
+                            <= pattern.motion_sample_rate_hz
+                            <= 1 / config.timestep
+                        ):
+                            raise ValueError(
+                                "timed lidar motion rate must lie between scan and physics rates"
+                            )
+                        snapshot_hz = max(snapshot_hz, pattern.motion_sample_rate_hz)
+                        history_seconds = max(history_seconds, 2 / sensor.rate_hz)
+        ticks_per_snapshot = 1 / snapshot_hz / config.timestep
+        self._snapshot_stride = max(
+            1, math.floor(ticks_per_snapshot) if history_seconds else round(ticks_per_snapshot)
+        )
+        snapshot_slots = max(
+            2, math.ceil(history_seconds / (self._snapshot_stride * config.timestep)) + 2
+        )
         self.snapshot_descriptor = ChannelDescriptor(
             abi_version=ABI_VERSION,
             sim_id=sim_id,
@@ -108,7 +133,7 @@ class SimulationRuntime:
             dof=0,
             capabilities=(),
             physics_dt=config.timestep,
-            control_decimation=1,
+            control_decimation=self._snapshot_stride,
             action_layout=FrameLayout((), 64),
             observation_layout=FrameLayout(
                 (
@@ -117,6 +142,7 @@ class SimulationRuntime:
                 ),
                 ((56 + nstate * 8 + 63) // 64) * 64,
             ),
+            observation_slots=snapshot_slots,
         )
         self.snapshots = RobotChannel.create(self.snapshot_descriptor)
         try:
@@ -180,6 +206,7 @@ class SimulationRuntime:
 
     def _finish_change(self) -> SceneState:
         self.episode += 1
+        self.snapshots.set_episode(self.episode)
         mujoco.mj_forward(self.model, self.data)
         for binding in self.robots.values():
             binding.channel.set_episode(self.episode)
@@ -397,8 +424,7 @@ class SimulationRuntime:
             else:
                 values.update(gripper=[0.0], error_code=[0])
             b.channel.publish_observation(values, meta)
-        stride = max(1, round(1.0 / self.config.snapshot_hz / self.config.timestep))
-        if force_snapshot or self.tick % stride == 0:
+        if force_snapshot or self.tick % self._snapshot_stride == 0:
             mujoco.mj_getState(self.model, self.data, self.state, STATE)
             self.snapshots.publish_observation(
                 {"state": self.state, "wall_time": [timestamp]}, meta

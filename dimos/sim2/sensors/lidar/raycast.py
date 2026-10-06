@@ -41,6 +41,18 @@ class Raycaster:
         min_range: float,
         max_range: float,
     ) -> NDArray[np.float64]:
+        distances = self.ranges(data, origin, directions, max_range)
+        valid = (distances >= min_range) & (distances <= max_range)
+        return np.asarray(origin + directions[valid] * distances[valid, None], dtype=np.float64)
+
+    def ranges(
+        self,
+        data: mujoco.MjData,
+        origin: NDArray[np.float64],
+        directions: NDArray[np.float64],
+        max_range: float,
+    ) -> NDArray[np.float64]:
+        """One range per ray; misses stay negative so timing/line indices remain aligned."""
         rays = np.ascontiguousarray(directions, dtype=np.float64)
         distances = np.full(len(rays), -1.0)
         ids = np.full(len(rays), -1, dtype=np.int32)
@@ -58,5 +70,4 @@ class Raycaster:
             len(rays),
             max_range,
         )
-        valid = (distances >= min_range) & (distances <= max_range)
-        return np.asarray(origin + rays[valid] * distances[valid, None], dtype=np.float64)
+        return distances
