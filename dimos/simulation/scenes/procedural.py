@@ -83,6 +83,11 @@ class Scene:
         return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def _uniform(rng: np.random.Generator, low: float, high: float) -> float:
+    """A uniform draw with the arithmetic done in Python, so every platform rounds it the same way."""
+    return low + (high - low) * float(rng.random())
+
+
 def _walls(scene: Scene, x0: float, y0: float, x1: float, y1: float, z: float, top: float) -> None:
     t = WALL_THICKNESS
     scene.add((x0 - t, y0 - t, z), (x0, y1 + t, top), "wall")
@@ -146,11 +151,13 @@ def _clutter(
 ) -> None:
     for _ in range(n):
         for _ in range(PLACEMENT_TRIES):
-            hx, hy = rng.uniform(0.15, 0.5), rng.uniform(0.15, 0.5)
-            cx, cy = rng.uniform(x0 + hx, x1 - hx), rng.uniform(y0 + hy, y1 - hy)
+            hx, hy = _uniform(rng, 0.15, 0.5), _uniform(rng, 0.15, 0.5)
+            cx, cy = _uniform(rng, x0 + hx, x1 - hx), _uniform(rng, y0 + hy, y1 - hy)
             if _clear_of_start(cx - hx, cy - hy, cx + hx, cy + hy, start):
                 scene.add(
-                    (cx - hx, cy - hy, z), (cx + hx, cy + hy, z + rng.uniform(0.2, 1.0)), "clutter"
+                    (cx - hx, cy - hy, z),
+                    (cx + hx, cy + hy, z + _uniform(rng, 0.2, 1.0)),
+                    "clutter",
                 )
                 break
 
@@ -166,14 +173,14 @@ def _table(
     start: Vec3,
 ) -> None:
     """A table on four legs, with its top anywhere from below to well above the robot's height."""
-    lx, ly = rng.uniform(1.0, 1.8), rng.uniform(0.6, 0.9)
+    lx, ly = _uniform(rng, 1.0, 1.8), _uniform(rng, 0.6, 0.9)
     for _ in range(PLACEMENT_TRIES):
-        tx, ty = rng.uniform(x0, x1 - lx), rng.uniform(y0, y1 - ly)
+        tx, ty = _uniform(rng, x0, x1 - lx), _uniform(rng, y0, y1 - ly)
         if _clear_of_start(tx, ty, tx + lx, ty + ly, start):
             break
     else:
         return
-    top = z + rng.uniform(0.45, 0.8)
+    top = z + _uniform(rng, 0.45, 0.8)
     scene.add((tx, ty, top - TABLE_TOP_THICKNESS), (tx + lx, ty + ly, top), "clutter")
     for px in (tx, tx + lx - TABLE_LEG):
         for py in (ty, ty + ly - TABLE_LEG):
@@ -185,25 +192,25 @@ def _table(
 def office(seed: int) -> Scene:
     """One floor of rooms joined by doorways, with clutter and tables kept clear of the start."""
     rng = np.random.default_rng(seed)
-    width, length = float(rng.uniform(12, 18)), float(rng.uniform(9, 13))
-    z0 = float(rng.uniform(0.0, 0.08))
+    width, length = float(_uniform(rng, 12, 18)), float(_uniform(rng, 9, 13))
+    z0 = float(_uniform(rng, 0.0, 0.08))
     scene = Scene(f"office_{seed}", {"width": width, "length": length, "z0": z0})
     top = z0 + CEILING_HEIGHT
     scene.add((0.0, 0.0, z0 - SLAB_THICKNESS), (width, length, z0), "floor")
     _walls(scene, 0, 0, width, length, z0, top)
     _ceiling(scene, 0, 0, width, length, top)
-    wy = rng.uniform(0.4, 0.6) * length
-    xs = sorted(rng.uniform(0.25, 0.75, size=int(rng.integers(1, 3))) * width)
+    wy = _uniform(rng, 0.4, 0.6) * length
+    xs = sorted(_uniform(rng, 0.25, 0.75) * width for _ in range(int(rng.integers(1, 3))))
     doors_mid = []
     for a, b in zip([0.0, *xs], [*xs, width], strict=True):
-        door_width = rng.uniform(*DOOR_WIDTH)
+        door_width = _uniform(rng, *DOOR_WIDTH)
         if b - a > door_width + 1.0:
-            doors_mid.append((rng.uniform(a + 0.4, b - door_width - 0.4), door_width))
+            doors_mid.append((_uniform(rng, a + 0.4, b - door_width - 0.4), door_width))
     _wall_with_doors(scene, 1, wy, 0, width, z0, top, doors_mid)
     for x in xs:
         for a, b in ((0.0, wy), (wy + WALL_THICKNESS, length)):
-            door_width = rng.uniform(*DOOR_WIDTH)
-            door = (rng.uniform(a + 0.3, b - door_width - 0.3), door_width)
+            door_width = _uniform(rng, *DOOR_WIDTH)
+            door = (_uniform(rng, a + 0.3, b - door_width - 0.3), door_width)
             _wall_with_doors(scene, 0, x, a, b, z0, top, [door])
     scene.start = (1.0, 1.0, z0)
     clutter = int(rng.integers(8, 16))
