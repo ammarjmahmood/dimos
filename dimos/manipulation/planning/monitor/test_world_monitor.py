@@ -466,7 +466,7 @@ def test_group_ee_pose_uses_current_state_when_no_joint_state_is_provided() -> N
     monitor = world_monitor_module.WorldMonitor(world=fake_world)  # type: ignore[arg-type]
     monitor.load_model(_three_joint_reordered_group_config())
     monitor.start_state_monitor()
-    monitor.on_joint_state(JointState(name=["j1", "j2", "j3"], position=[0.1, 0.2, 0.3]))
+    monitor.on_joint_state(JointState(ts=123.5, name=["j1", "j2", "j3"], position=[0.1, 0.2, 0.3]))
 
     pose = monitor.get_group_ee_pose("manipulator")
 
@@ -474,6 +474,44 @@ def test_group_ee_pose_uses_current_state_when_no_joint_state_is_provided() -> N
     assert set_calls[0][2].name == ["j1", "j2", "j3"]
     assert set_calls[0][2].position == [0.1, 0.2, 0.3]
     assert pose.position.x == 1
+    assert pose.ts == 123.5
+
+
+def test_current_joint_snapshot_preserves_measurement_time_and_is_independent(mocker) -> None:
+    fake_world = FakeWorld()
+    monitor = world_monitor_module.WorldMonitor(world=fake_world)  # type: ignore[arg-type]
+    monitor.load_model(_three_joint_reordered_group_config())
+    monitor.start_state_monitor()
+    sync = mocker.spy(fake_world, "sync_from_joint_state")
+    assert monitor.get_current_joint_state() is None
+    assert monitor.get_link_pose("ee") is None
+    monitor.on_joint_state(
+        JointState(
+            ts=123.5,
+            name=["j3", "j1", "j2"],
+            position=[0.3, 0.1, 0.2],
+            velocity=[3.0, 1.0, 2.0],
+        )
+    )
+    snapshot = monitor.get_current_joint_state()
+    assert snapshot is not None
+    assert snapshot.ts == 123.5
+    assert snapshot.name == ["j1", "j2", "j3"]
+    assert snapshot.position == [0.1, 0.2, 0.3]
+    assert snapshot.velocity == [1.0, 2.0, 3.0]
+    assert sync.call_args.args[0].ts == 123.5
+    assert sync.call_args.args[0].velocity == [1.0, 2.0, 3.0]
+
+    snapshot.position[0] = 99.0
+    assert monitor.get_current_joint_state().position == [0.1, 0.2, 0.3]
+    monitor.on_joint_state(JointState(ts=124.0, name=["j1", "j2", "j3"], position=[0.4, 0.5, 0.6]))
+    current = monitor.get_current_joint_state()
+    assert current is not None
+    assert current.ts == 124.0
+    assert current.position == [0.4, 0.5, 0.6]
+    assert current.velocity == []
+    assert snapshot.ts == 123.5
+    assert snapshot.velocity == [1.0, 2.0, 3.0]
 
 
 def test_group_ee_pose_without_joint_state_rejects_stale_state(mocker) -> None:

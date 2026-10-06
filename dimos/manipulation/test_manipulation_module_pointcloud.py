@@ -30,7 +30,6 @@ from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
 from dimos.manipulation.planning.monitor.world_monitor import WorldMonitor
 from dimos.manipulation.planning.spec.config import RobotModelConfig
-from dimos.manipulation.planning.spec.validation import prepare_robot_model
 from dimos.manipulation.pointcloud.robot_pointcloud_filter import RobotPointCloudFilter
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -54,7 +53,7 @@ _URDF = """<robot name="test" version="1.0">
 def make_module(tmp_path, monkeypatch):
     modules = []
 
-    def make(*, xml=_URDF, joint_names=("slide",), planar=False, **overrides):
+    def make(*, xml=_URDF, joint_names=("slide",), planar=False, tf_extra_links=(), **overrides):
         model_path = tmp_path / f"robot-{len(modules)}.urdf"
         model_path.write_text(xml)
         model = RobotModel.from_file(model_path)
@@ -71,6 +70,7 @@ def make_module(tmp_path, monkeypatch):
             joint_names=list(joint_names),
             base_link=base_link,
             base_pose=PoseStamped(frame_id="world", position=[1, 0, 0]),
+            tf_extra_links=list(tf_extra_links),
             planning_groups=[
                 PlanningGroupDefinition(
                     name="arm", joint_names=tuple(joint_names), base_link=base_link, tip_link="arm"
@@ -81,13 +81,14 @@ def make_module(tmp_path, monkeypatch):
             importlib.import_module("dimos.manipulation.planning.world.roboplan_world")
         ).RoboPlanWorld
         world = world_type()
-        world.load_model(prepare_robot_model(config))
+        monitor = WorldMonitor(world)
+        monitor.load_model(config)
         world.finalize()
         module = ManipulationModule(
             model=config,
             **{"filter_robot_points": True, **overrides},
         )
-        monkeypatch.setattr(module, "_world_monitor", WorldMonitor(world))
+        monkeypatch.setattr(module, "_world_monitor", monitor)
         monkeypatch.setattr(module, "_tf", MultiTBuffer())
         if module.config.filter_robot_points:
             monkeypatch.setattr(
@@ -160,6 +161,94 @@ def test_capture_state_is_used_instead_of_latest_state(make_module):
 
     assert filtered is not None
     np.testing.assert_allclose(filtered.points_f32(), [[0.6, 0, 0]])
+
+
+def test_tf_waits_for_joint_measurement_before_publishing_dynamic_frames(make_module, mocker):
+    module = make_module()
+    module._world_monitor.start_state_monitor()
+    publish = mocker.patch.object(module.tf, "publish")
+    mocker.patch.object(
+        module._tf_stop_event, "wait", side_effect=lambda _: module._tf_stop_event.set()
+    )
+
+    module._tf_publish_loop()
+
+    publish.assert_not_called()
+
+
+def test_delayed_wrist_tf_preserves_capture_state_while_the_robot_moves(make_module, mocker):
+    xml = _URDF.replace(
+        "</robot>",
+        '<link name="wrist"/><joint name="wrist_mount" type="fixed">'
+        '<parent link="arm"/><child link="wrist"/></joint></robot>',
+    )
+    module = make_module(
+        xml=xml,
+        tf_extra_links=("wrist",),
+        static_transforms=[
+            Transform(frame_id="wrist", child_frame_id="camera", translation=Vector3(0, 0.2, 0))
+        ],
+    )
+    monitor = module._world_monitor
+    monitor.start_state_monitor()
+    _state(module, stamp=100.0, position=0.0)
+    published = []
+
+    def receive(message):
+        # Exercise the wire format and fixed mount as well as dynamic FK edges.
+        received = TFMessage.lcm_decode(message.lcm_encode())
+        published.append(received)
+        for transform in received.transforms:
+            module.tfbuffer.receive_transform(transform)
+        module._tf_stop_event.set()
+
+    mocker.patch.object(module.tf, "publish", side_effect=receive)
+    mocker.patch.object(module._tf_stop_event, "wait")
+    get_pose = monitor.get_group_ee_pose
+
+    def move_after_tip_fk(group_id, state):
+        pose = get_pose(group_id, state)
+        # A new measurement arrives between tip FK and wrist FK in one tick.
+        _state(module, stamp=100.25, position=0.5)
+        return pose
+
+    mocker.patch.object(monitor, "get_group_ee_pose", side_effect=move_after_tip_fk)
+    module._tf_publish_loop()
+    module._tf_stop_event.clear()
+    module._tf_publish_loop()
+
+    assert [[tf.ts for tf in msg.transforms] for msg in published] == [
+        [100.0, 100.0, 100.0],
+        [100.25, 100.25, 100.25],
+    ]
+    assert [tf.child_frame_id for tf in published[0].transforms] == ["arm", "wrist", "camera"]
+    assert [msg.transforms[1].translation.x for msg in published] == [1.0, 1.5]
+    # Process both captures after motion: remove the robot in each camera frame
+    # and retain the same real obstacle at world x=1.2.
+    for stamp, obstacle_x in [(100.0, 0.2), (100.25, -0.3)]:
+        filtered = module._pointcloud_filter.filter(
+            _cloud([[0.1, -0.2, 0], [obstacle_x, -0.2, 0]], stamp=stamp)
+        )
+        assert filtered is not None
+        assert filtered.ts == stamp
+        np.testing.assert_allclose(filtered.points_f32(), [[obstacle_x, -0.2, 0]])
+
+
+@pytest.mark.parametrize(
+    "capture,retained_x", [(100.03125, 0.6), (100.0625, 0.1), (100.09375, 0.1)]
+)
+def test_moving_capture_uses_nearest_state_and_later_state_on_ties(
+    make_module, capture, retained_x
+):
+    module = make_module()
+    _state(module, stamp=100.0, position=0.0)
+    _state(module, stamp=100.125, position=0.5)
+    _tf(module, stamp=capture)
+
+    filtered = module._pointcloud_filter.filter(_cloud([[0.1, 0, 0], [0.6, 0, 0]], stamp=capture))
+
+    assert filtered is not None
+    np.testing.assert_allclose(filtered.points_f32(), [[retained_x, 0, 0]])
 
 
 def test_capture_tf_is_received_from_camera_transport(make_module, monkeypatch):

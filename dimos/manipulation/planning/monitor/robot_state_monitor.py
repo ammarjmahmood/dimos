@@ -86,6 +86,7 @@ class RobotStateMonitor:
         # Latest state
         self._latest_positions: NDArray[np.float64] | None = None
         self._latest_velocities: NDArray[np.float64] | None = None
+        self._latest_timestamp: float | None = None
         self._last_update_time: float | None = None
 
         # Running state
@@ -141,14 +142,17 @@ class RobotStateMonitor:
                 # (e.g., after dynamically adding obstacles)
                 self._latest_positions = positions
                 self._latest_velocities = velocities
+                self._latest_timestamp = msg.ts
                 self._last_update_time = current_time
 
                 # Sync to world's live context (for visualization)
                 try:
                     # Create JointState for world sync (API uses JointState)
                     joint_state = JointState(
+                        ts=msg.ts,
                         name=self._joint_names,
                         position=positions.tolist(),
+                        velocity=velocities.tolist() if velocities is not None else [],
                     )
                     self._world.sync_from_joint_state(joint_state)
                 except Exception as e:
@@ -212,6 +216,20 @@ class RobotStateMonitor:
             velocities.append(msg.velocity[idx])
 
         return np.array(velocities, dtype=np.float64)
+
+    def get_current_joint_state(self) -> JointState | None:
+        """Copy one canonical snapshot with its original measurement timestamp."""
+        with self._lock:
+            if self._latest_positions is None:
+                return None
+            return JointState(
+                ts=self._latest_timestamp,
+                name=list(self._joint_names),
+                position=self._latest_positions.tolist(),
+                velocity=self._latest_velocities.tolist()
+                if self._latest_velocities is not None
+                else [],
+            )
 
     def get_current_positions(self) -> NDArray[np.float64] | None:
         """Get current joint positions (thread-safe).
