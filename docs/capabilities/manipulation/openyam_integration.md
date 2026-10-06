@@ -94,19 +94,31 @@ component.
 ## Grasping on the dual rig
 
 `dual-openyam-grasp` is the xArm grasp stack on the dual OpenYAM: coordinator,
-planner, pick-and-place, scene registration and a heuristic grasp provider,
-with a fixed RealSense over the table. Each arm is a planning group with its
-own gripper, so pick-and-place calls take `left_manipulator` or
-`right_manipulator`.
+planner, pick-and-place, scene registration and a grasp provider, with a fixed
+RealSense over the table. Each arm is a planning group with its own gripper, so
+pick-and-place calls take `left_manipulator` or `right_manipulator`.
 
 ```bash
-# robot
+# robot, heuristic top-down grasps
 dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
   --realsensecamera.serial-number <SERIAL>
+
+# robot, GraspGenX grasps (up to 100 ranked learned grasps per object)
+dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
+  --realsensecamera.serial-number <SERIAL> --graspgen
 
 # in-memory arms, no CAN or camera needed
 dimos run dual-openyam-grasp --disable real-sense-camera --disable object-scene-registration-module
 ```
+
+`--graspgen` is a global flag read when the blueprint is imported, so it also
+works as `dimos --graspgen run dual-openyam-grasp ...`. GraspGenX has the same
+requirements as on the xArm: Linux x86_64, a CUDA 12.8-compatible GPU and
+`uv >= 0.9.25`; the first launch prepares its isolated environment and downloads
+the checkpoints, which takes minutes. The gripper is described to GraspGenX as
+a sweep volume measured off the URDF finger meshes
+(`DUAL_OPENYAM_GRIPPER_SWEEP_VOLUME`): 9.4 cm opening, pads 2 cm tall, 14.7 cm
+from the gripper link to the fingertips.
 
 Then from `dimos shell`:
 

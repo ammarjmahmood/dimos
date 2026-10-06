@@ -16,14 +16,19 @@
 ```bash
 dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
     --realsensecamera.serial-number <SERIAL>
+dimos run dual-openyam-grasp ... --graspgen                  # GraspGenX grasps
 dimos run dual-openyam-grasp                                 # in-memory arms, no CAN
 ```
 
 The port of the xArm grasp stack: coordinator, planner, pick-and-place, scene
-registration and a heuristic grasp provider, with a fixed depth camera over
-the table instead of a wrist camera. Both arms are planning groups with their
-own grippers, so ``pick_object`` takes ``left_manipulator`` or
+registration and a grasp provider, with a fixed depth camera over the table
+instead of a wrist camera. Both arms are planning groups with their own
+grippers, so ``pick_object`` takes ``left_manipulator`` or
 ``right_manipulator``.
+
+The grasp provider is chosen at import time from ``global_config.graspgen``,
+as the xArm stack chooses sim or hardware: the heuristic top-down grasp by
+default, GraspGenX with ``--graspgen``.
 """
 
 from __future__ import annotations
@@ -31,8 +36,10 @@ from __future__ import annotations
 from dataclasses import replace
 import math
 
-from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.coordination.blueprints import Blueprint, autoconnect
+from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
+from dimos.manipulation.grasping.grasp_gen_x.module import GraspGenXModule
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
@@ -58,6 +65,26 @@ from dimos.robot.manipulators.dual_openyam.config import (
 # pads (tip_left.stl, tip_right.stl at the URDF's closed zero position) meet on
 # that axis from 12.7 to 14.7 cm below the gripper link; plan to the pad centre.
 DUAL_OPENYAM_TCP_OFFSET = (0.0, 0.0, -0.037)
+
+# The same gripper in GraspGenX's convention: origin on the gripper link,
+# approach along +Z (the URDF's -Z), jaws closing along X (the URDF's Y). The
+# fingers slide 4.7 cm each, so the open and half-open sweep volumes share
+# their centre; the pads are up to 2.8 cm wide and 2 cm tall.
+DUAL_OPENYAM_GRIPPER_SWEEP_VOLUME = {
+    "extents_open": (0.094, 0.028, 0.020),
+    "offset_open": (0.0, 0.0, 0.137),
+    "extents_half_open": (0.047, 0.028, 0.020),
+    "offset_half_open": (0.0, 0.0, 0.137),
+    "fingertip_depth": 0.1468,
+}
+# GraspGenX frame -> {side}_tcp: swap the X and Y axes and flip Z, then move
+# 13.7 cm along the approach to the pad centre.
+DUAL_OPENYAM_GRASP_FRAME_TO_TCP = (
+    (0.0, 1.0, 0.0, 0.0),
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, -1.0, 0.137),
+    (0.0, 0.0, 0.0, 1.0),
+)
 
 # Pink's defaults do not converge on this model; the WebXR teleop uses these.
 DUAL_OPENYAM_GRASP_PINK = PinkKinematicsConfig(
@@ -110,38 +137,52 @@ def dual_openyam_grasp_model_config() -> RobotModelConfig:
     return config
 
 
-dual_openyam_grasp = autoconnect(
-    planner(
-        model=dual_openyam_grasp_model_config(),
-        kinematics=DUAL_OPENYAM_GRASP_PINK,
-        default_speed_scale=0.25,
-        static_transforms=[DUAL_OPENYAM_CAMERA_TRANSFORM],
-        visualization={"backend": "viser"},
-        world_frame="world",
-    ),
-    ManipulationSkills.blueprint(),
-    PickAndPlaceModule.blueprint(planning_frame="world", pregrasp_along_tool_z=True),
-    # Same reason for the half turn about Y; the extra yaws matter because the
+def dual_openyam_grasp_provider(graspgen: bool) -> Blueprint:
+    if graspgen:
+        return GraspGenXModule.blueprint(
+            gripper=DUAL_OPENYAM_GRIPPER_SWEEP_VOLUME,
+            grasp_frame_to_tcp=DUAL_OPENYAM_GRASP_FRAME_TO_TCP,
+        )
+    # The half turn about Y turns the top-down grasp into the OpenYAM grasp
+    # frame, which points back at the wrist; the extra yaws matter because the
     # two arms accept different wrist bands over the same object.
-    HeuristicGraspModule.blueprint(tool_rotation_rpy=(0.0, math.pi, 0.0), yaw_candidates=8),
-    RealSenseCamera.blueprint(width=640, height=480, fps=30, enable_pointcloud=True),
-    ObjectSceneRegistrationModule.blueprint(
-        target_frame="world",
-        detector_backend="moondream",
-        segmentation_backend="edgetam",
-        detect_on_request=True,
-        distance_threshold=0.08,
-        min_detections_for_permanent=3,
-        max_distance=1.5,
-        use_aabb=True,
-        max_obstacle_width=0.06,
-    ),
-    DualOpenYamCoordinator.blueprint(
-        instance_name="ControlCoordinator",
-        tasks=[
-            dual_openyam_trajectory_task(),
-            dual_openyam_gripper_task("left"),
-            dual_openyam_gripper_task("right"),
-        ],
-    ),
-)
+    return HeuristicGraspModule.blueprint(tool_rotation_rpy=(0.0, math.pi, 0.0), yaw_candidates=8)
+
+
+def dual_openyam_grasp_blueprint(*, graspgen: bool) -> Blueprint:
+    return autoconnect(
+        planner(
+            model=dual_openyam_grasp_model_config(),
+            kinematics=DUAL_OPENYAM_GRASP_PINK,
+            default_speed_scale=0.25,
+            static_transforms=[DUAL_OPENYAM_CAMERA_TRANSFORM],
+            visualization={"backend": "viser"},
+            world_frame="world",
+        ),
+        ManipulationSkills.blueprint(),
+        PickAndPlaceModule.blueprint(planning_frame="world", pregrasp_along_tool_z=True),
+        dual_openyam_grasp_provider(graspgen),
+        RealSenseCamera.blueprint(width=640, height=480, fps=30, enable_pointcloud=True),
+        ObjectSceneRegistrationModule.blueprint(
+            target_frame="world",
+            detector_backend="moondream",
+            segmentation_backend="edgetam",
+            detect_on_request=True,
+            distance_threshold=0.08,
+            min_detections_for_permanent=3,
+            max_distance=1.5,
+            use_aabb=True,
+            max_obstacle_width=0.06,
+        ),
+        DualOpenYamCoordinator.blueprint(
+            instance_name="ControlCoordinator",
+            tasks=[
+                dual_openyam_trajectory_task(),
+                dual_openyam_gripper_task("left"),
+                dual_openyam_gripper_task("right"),
+            ],
+        ),
+    )
+
+
+dual_openyam_grasp = dual_openyam_grasp_blueprint(graspgen=bool(global_config.graspgen))
