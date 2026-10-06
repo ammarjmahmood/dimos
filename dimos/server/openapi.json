@@ -229,6 +229,45 @@
             "title": "Class",
             "type": "string"
           },
+          "doc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The class's whole docstring (or the nearest base's that isn't dimos's Module plumbing; empty when none); absent from servers before API 1.7",
+            "title": "Doc"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The file defining the class: relative to the dimos checkout when inside it (GET /dimos/source reads it), else absolute; null when unknown",
+            "examples": [
+              "dimos/hardware/camera/module.py"
+            ],
+            "title": "File"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The class statement's line in that file (1-based)",
+            "title": "Line"
+          },
           "name": {
             "description": "The module's name in the blueprint",
             "examples": [
@@ -237,6 +276,36 @@
             "title": "Name",
             "type": "string"
           },
+          "rpcs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModuleMethod"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its RPC methods that aren't skills, less the ones every module has (build, start, stop, ...)",
+            "title": "Rpcs"
+          },
+          "skills": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModuleMethod"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its skills",
+            "title": "Skills"
+          },
           "streams": {
             "description": "Its streams",
             "items": {
@@ -244,6 +313,18 @@
             },
             "title": "Streams",
             "type": "array"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The docstring's first paragraph, on one line (at most 300 characters)",
+            "title": "Summary"
           }
         },
         "required": [
@@ -3012,6 +3093,56 @@
         "title": "ModuleList",
         "type": "object"
       },
+      "ModuleMethod": {
+        "additionalProperties": true,
+        "description": "An RPC method (or a skill: an RPC an agent can call) on a module.",
+        "properties": {
+          "doc": {
+            "description": "Its whole docstring (empty when it has none)",
+            "title": "Doc",
+            "type": "string"
+          },
+          "name": {
+            "description": "The method",
+            "examples": [
+              "get_battery_soc"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "description": "Its parameters (self left out)",
+            "items": {
+              "$ref": "#/components/schemas/SkillParam"
+            },
+            "title": "Params",
+            "type": "array"
+          },
+          "return_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its return annotation, if any",
+            "examples": [
+              "float"
+            ],
+            "title": "Return Type"
+          }
+        },
+        "required": [
+          "name",
+          "params",
+          "return_type",
+          "doc"
+        ],
+        "title": "ModuleMethod",
+        "type": "object"
+      },
       "ModuleSummary": {
         "additionalProperties": true,
         "properties": {
@@ -4122,6 +4253,30 @@
         "title": "SkillParam",
         "type": "object"
       },
+      "SourceFile": {
+        "additionalProperties": true,
+        "properties": {
+          "file": {
+            "description": "The file, as asked for",
+            "examples": [
+              "dimos/hardware/camera/module.py"
+            ],
+            "title": "File",
+            "type": "string"
+          },
+          "text": {
+            "description": "Its contents",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "text"
+        ],
+        "title": "SourceFile",
+        "type": "object"
+      },
       "StopRequest": {
         "additionalProperties": true,
         "properties": {
@@ -4198,6 +4353,21 @@
             ],
             "title": "Name",
             "type": "string"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The topic it's wired to in this blueprint (a transport_map pin, else /<name> after remapping when that name has one type; null when it gets a random topic at run time)",
+            "examples": [
+              "/color_image"
+            ],
+            "title": "Topic"
           },
           "type": {
             "description": "Its message type",
@@ -4715,7 +4885,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.6.0"
+    "version": "1.7.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -4779,7 +4949,7 @@
     },
     "/dimos/blueprints/{name}": {
       "get": {
-        "description": "Imports the blueprint in a child process (180 s timeout; cached 10 min) and lists its modules with their streams' names, message types and directions. 400 for a name that can't be one, 500 when the blueprint can't be found or imported.",
+        "description": "Imports the blueprint in a child process (180 s timeout; cached 10 min) and lists its modules with their streams' names, message types, directions and wired topics, each module's docstring (whole, and its first paragraph as `summary`), RPC methods and skills (signature and docstring) and where its class is defined (`file`, `line`; GET /dimos/source reads the file). 400 for a name that can't be one, 500 when the blueprint can't be found or imported.",
         "operationId": "get_dimos_blueprints_name",
         "parameters": [
           {
@@ -4806,7 +4976,7 @@
                 }
               }
             },
-            "description": "`{ name, modules: [{ name, class, streams: [{ name, type, direction }] }] }`"
+            "description": "`{ name, modules: [{ name, class, doc, summary, file, line, rpcs, skills, streams: [{ name, type, direction, topic }] }] }`"
           },
           "400": {
             "content": {
@@ -4829,7 +4999,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "A blueprint's modules and each module's streams (topics, types, in/out)",
+        "summary": "A blueprint's modules and each module's streams (topics, types, in/out), docstring, RPC methods, skills and source location",
         "tags": [
           "blueprints"
         ],
@@ -6462,6 +6632,63 @@
         "summary": "Make the dimos server exit (Desktop starts it again when needed)",
         "tags": [
           "server"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/source": {
+      "get": {
+        "description": "`file` is a path relative to the checkout (as GET /dimos/blueprints/{name} gives a module's `file`) or an absolute one inside it. Only .py files inside the checkout are read: 400 for anything else, 404 when there's no such file.",
+        "operationId": "get_dimos_source",
+        "parameters": [
+          {
+            "description": "The file: relative to the checkout, or absolute inside it",
+            "in": "query",
+            "name": "file",
+            "required": true,
+            "schema": {
+              "description": "The file: relative to the checkout, or absolute inside it",
+              "title": "File",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceFile"
+                }
+              }
+            },
+            "description": "`{ file, text }`"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "A Python file of the dimos checkout, as text (a module's code)",
+        "tags": [
+          "blueprints"
         ],
         "x-agent": false,
         "x-family": "dimos"

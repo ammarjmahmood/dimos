@@ -236,6 +236,24 @@ def test_blueprint_details_are_introspected_and_cached(
     assert client.get("/dimos/blueprints/-rf").status_code == 400
 
 
+def test_source_reads_only_python_files_in_the_checkout(client: TestClient, checkout: Path) -> None:
+    (checkout / "dimos" / "arm").mkdir(parents=True)
+    (checkout / "dimos" / "arm" / "module.py").write_text("class Arm:\n    pass\n")
+    (checkout.parent / "secret.py").write_text("token = 1\n")
+    (checkout / "notes.txt").write_text("hi\n")
+    answer = client.get("/dimos/source", params={"file": "dimos/arm/module.py"})
+    assert answer.json() == {"file": "dimos/arm/module.py", "text": "class Arm:\n    pass\n"}
+    absolute = str(checkout / "dimos" / "arm" / "module.py")
+    assert (
+        client.get("/dimos/source", params={"file": absolute})
+        .json()["text"]
+        .startswith("class Arm")
+    )
+    for outside in ("../secret.py", str(checkout.parent / "secret.py"), "notes.txt"):
+        assert client.get("/dimos/source", params={"file": outside}).status_code == 400, outside
+    assert client.get("/dimos/source", params={"file": "dimos/nope.py"}).status_code == 404
+
+
 async def test_introspection_runs_in_a_child_with_a_timeout(tmp_path: Path) -> None:
     python = tmp_path / "python"
     python.write_text(

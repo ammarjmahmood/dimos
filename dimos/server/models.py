@@ -149,6 +149,27 @@ class Stream(ApiModel):
     direction: StreamDirection = Field(
         description="in: the module reads it; out: it publishes it; inout: both"
     )
+    topic: str | None = Field(
+        default=None,
+        description="The topic it's wired to in this blueprint (a transport_map pin, else /<name> after remapping when "
+        "that name has one type; null when it gets a random topic at run time)",
+        examples=["/color_image"],
+    )
+
+
+class SkillParam(ApiModel):
+    name: str = Field(description="The parameter", examples=["distance"])
+    type: str | None = Field(description="Its annotation, if any", examples=["float"])
+    default: str | None = Field(description="repr() of its default (null: none)", examples=["1.0"])
+
+
+class ModuleMethod(ApiModel):
+    """An RPC method (or a skill: an RPC an agent can call) on a module."""
+
+    name: str = Field(description="The method", examples=["get_battery_soc"])
+    params: list[SkillParam] = Field(description="Its parameters (self left out)")
+    return_type: str | None = Field(description="Its return annotation, if any", examples=["float"])
+    doc: str = Field(description="Its whole docstring (empty when it has none)")
 
 
 class BlueprintModule(ApiModel):
@@ -159,6 +180,36 @@ class BlueprintModule(ApiModel):
         examples=["dimos.hardware.camera.CameraModule"],
     )
     streams: list[Stream] = Field(description="Its streams")
+    doc: str | None = Field(
+        default=None,
+        description="The class's whole docstring (or the nearest base's that isn't dimos's Module plumbing; empty when "
+        "none); absent from servers before API 1.7",
+    )
+    summary: str | None = Field(
+        default=None,
+        description="The docstring's first paragraph, on one line (at most 300 characters)",
+    )
+    file: str | None = Field(
+        default=None,
+        description="The file defining the class: relative to the dimos checkout when inside it (GET /dimos/source "
+        "reads it), else absolute; null when unknown",
+        examples=["dimos/hardware/camera/module.py"],
+    )
+    line: int | None = Field(
+        default=None, description="The class statement's line in that file (1-based)"
+    )
+    rpcs: list[ModuleMethod] | None = Field(
+        default=None,
+        description="Its RPC methods that aren't skills, less the ones every module has (build, start, stop, ...)",
+    )
+    skills: list[ModuleMethod] | None = Field(default=None, description="Its skills")
+
+
+class SourceFile(ApiModel):
+    file: str = Field(
+        description="The file, as asked for", examples=["dimos/hardware/camera/module.py"]
+    )
+    text: str = Field(description="Its contents")
 
 
 class Blueprint(ApiModel):
@@ -234,12 +285,6 @@ class BlueprintConfigUpdate(ApiModel):
 class Port(ApiModel):
     name: str = Field(description="The stream's name", examples=["odom"])
     type: str = Field(description="Its message type's name", examples=["Odometry"])
-
-
-class SkillParam(ApiModel):
-    name: str = Field(description="The parameter", examples=["distance"])
-    type: str | None = Field(description="Its annotation, if any", examples=["float"])
-    default: str | None = Field(description="repr() of its default (null: none)", examples=["1.0"])
 
 
 class CatalogBlueprint(ApiModel):

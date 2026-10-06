@@ -36,7 +36,60 @@ def test_a_blueprint_lists_its_modules_and_streams(check_model: Any) -> None:
         "name": "color_image",
         "type": "dimos.msgs.sensor_msgs.Image.Image",
         "direction": "out",
-    } in (camera["streams"])
+    } in [{k: v for k, v in s.items() if k != "topic"} for s in camera["streams"]]
+    stream = next(s for s in camera["streams"] if s["name"] == "color_image")
+    assert stream["topic"] == "/color_image"
+    # the module's docstring, methods and where its code is (a file GET /dimos/source can read)
+    vis = next(m for m in answer["modules"] if m["class"].endswith(".WebsocketVisModule"))
+    assert vis["summary"] and vis["doc"].startswith(vis["summary"][:40])
+    assert camera["file"] == "dimos/hardware/sensors/camera/module.py"
+    assert (
+        (ROOT / camera["file"])
+        .read_text()
+        .splitlines()[camera["line"] - 1]
+        .startswith("class CameraModule")
+    )
+    assert not {"build", "start", "stop"} & {m["name"] for m in camera["rpcs"]}
+
+
+def test_a_modules_rpcs_and_skills_carry_signatures_and_docs() -> None:
+    from dimos.agents.annotation import skill
+    from dimos.core.core import rpc
+    from dimos.core.module import Module
+
+    class Arm(Module):
+        """Moves an arm.
+
+        More about it."""
+
+        @rpc
+        def home(self, speed: float = 1.0) -> bool:
+            """Back to the home pose."""
+            return True
+
+        @skill
+        def wave(self, times: int) -> str:
+            """Wave at someone."""
+            return "ok"
+
+    found = introspect.methods(Arm)
+    assert found["rpcs"] == [
+        {
+            "name": "home",
+            "params": [{"name": "speed", "type": "float", "default": "1.0"}],
+            "return_type": "bool",
+            "doc": "Back to the home pose.",
+        }
+    ]
+    assert [(m["name"], m["doc"]) for m in found["skills"]] == [("wave", "Wave at someone.")]
+    assert introspect.own_doc(Arm) == "Moves an arm.\n\nMore about it."
+
+    class Bare(Module):
+        pass
+
+    # Module's own docstring describes every module, not this one
+    assert introspect.own_doc(Bare) == ""
+    assert introspect.source_of(Bare)["line"] is not None
 
 
 def test_a_blueprints_config_and_a_modules_own(check_model: Any) -> None:

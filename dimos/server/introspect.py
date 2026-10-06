@@ -17,7 +17,8 @@
 Importing a blueprint can take seconds, pull in GPU libraries or crash outright; in a child (with a timeout) none of
 that reaches the server. The answer is the last stdout line, after MARKER (importing dimos can print).
 
-    blueprint <name>  -> {"name", "modules": [{"name", "class", "streams": [{"name", "type", "direction"}]}]}
+    blueprint <name>  -> {"name", "modules": [{"name", "class", "doc", "summary", "file", "line", "rpcs", "skills",
+                          "streams": [{"name", "type", "direction", "topic"}]}]}
     config <name>     -> {"name", "modules": [{"module", "class", "args": [...], "error"?}]}
     catalog           -> {"blueprints", "modules", "skills", "errors"} (slow: imports every blueprint)
     anything failing  -> {"error": "<Type>: <message>"}
@@ -62,18 +63,104 @@ def atoms_of(name: str) -> list[Any]:
 
 
 def blueprint(name: str) -> dict[str, Any]:
-    modules = [
-        {
-            "name": atom.name,
-            "class": type_name(atom.module),
-            "streams": [
-                {"name": s.name, "type": type_name(s.type), "direction": s.direction}
-                for s in atom.streams
-            ],
-        }
-        for atom in atoms_of(name)
-    ]
+    from dimos.robot.get_all_blueprints import get_by_name
+    from dimos.server.discover import blueprint_modules
+
+    bp = get_by_name(name)
+    wired = blueprint_modules(bp, {})
+    modules = []
+    for atom, entry in zip(bp.active_blueprints, wired, strict=True):
+        doc = own_doc(atom.module)
+        modules.append(
+            {
+                "name": atom.name,
+                "class": type_name(atom.module),
+                "doc": doc,
+                "summary": doc.split("\n\n")[0].replace("\n", " ")[:300],
+                "streams": entry["streams"],
+                **methods(atom.module),
+                **source_of(atom.module),
+            }
+        )
     return {"name": name, "modules": modules}
+
+
+def own_doc(cls: Any) -> str:
+    """A class's docstring, from it or the nearest base that isn't dimos's own Module plumbing (whose docstring
+    describes every module, not this one)."""
+    for base in getattr(cls, "__mro__", (cls,)):
+        if str(getattr(base, "__module__", "")).startswith("dimos.core."):
+            break
+        doc = base.__dict__.get("__doc__")
+        if isinstance(doc, str) and doc.strip():
+            return inspect.cleandoc(doc)
+    return ""
+
+
+@functools.cache
+def base_rpcs() -> frozenset[str]:
+    """The RPCs every module inherits (build, start, stop, ...): not worth listing on each one."""
+    try:
+        from dimos.core.module import Module
+
+        return frozenset(dict(Module.rpcs))
+    except Exception:
+        return frozenset()
+
+
+def return_type(fn: Any) -> str | None:
+    try:
+        annotation = inspect.signature(fn).return_annotation
+    except (TypeError, ValueError):
+        return None
+    if annotation is inspect.Signature.empty:
+        return None
+    return str(getattr(annotation, "__name__", annotation)).replace("typing.", "")
+
+
+def methods(cls: Any) -> dict[str, list[dict[str, Any]]]:
+    """A module's RPC methods and skills (a skill is an RPC an agent can call), each with its signature and docstring;
+    the RPCs every module inherits are left out."""
+    rpcs: list[dict[str, Any]] = []
+    skills: list[dict[str, Any]] = []
+    try:
+        found = sorted(dict(getattr(cls, "rpcs", {}) or {}).items())
+    except Exception:
+        found = []
+    for name, fn in found:
+        skill = bool(getattr(fn, "__skill__", False))
+        if not skill and name in base_rpcs():
+            continue
+        entry = {
+            "name": name,
+            "params": params(fn),
+            "return_type": return_type(fn),
+            "doc": inspect.getdoc(fn) or "",
+        }
+        (skills if skill else rpcs).append(entry)
+    return {"rpcs": rpcs, "skills": skills}
+
+
+def source_of(obj: Any) -> dict[str, Any]:
+    """Where a class is defined: its file (relative to the dimos checkout it was imported from, when inside it) and
+    first line."""
+    try:
+        file = inspect.getsourcefile(obj)
+        line = inspect.getsourcelines(obj)[1]
+    except (TypeError, OSError):
+        return {"file": None, "line": None}
+    if file is None:
+        return {"file": None, "line": None}
+    from pathlib import Path
+
+    import dimos
+
+    path = Path(file).resolve()
+    root = Path(dimos.__file__).resolve().parents[1]
+    return {
+        "file": str(path.relative_to(root)) if path.is_relative_to(root) else str(path),
+        "line": line,
+    }
 
 
 def jsonable(value: Any) -> Any:

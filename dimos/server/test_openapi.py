@@ -43,6 +43,13 @@ KNOWN_DIFFERENCES = {
     "get /dimos/blueprints.blueprints[]: field only here: importable",
     "get /dimos/blueprints.blueprints[]: field only here: import_error",
     "get /dimos/blueprints.blueprints[]: field only here: missing_module",
+    # a module's docs, methods, code location and its streams' wired topics, new here in 1.7 (Desktop reads them when
+    # they're there)
+    *(
+        f"get /dimos/blueprints/{{}}.modules[]: field only here: {field}"
+        for field in ("doc", "summary", "file", "line", "rpcs", "skills")
+    ),
+    "get /dimos/blueprints/{}.modules[].streams[]: field only here: topic",
 }
 
 

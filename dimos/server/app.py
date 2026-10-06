@@ -303,18 +303,48 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         response_model=models.Blueprint,
         **route_doc(
             "blueprints",
-            "A blueprint's modules and each module's streams (topics, types, in/out)",
+            "A blueprint's modules and each module's streams (topics, types, in/out), docstring, RPC methods, "
+            "skills and source location",
             "Imports the blueprint in a child process (180 s timeout; cached 10 min) and lists its modules with "
-            "their streams' names, message types and directions. 400 for a name that can't be one, 500 when the "
-            "blueprint can't be found or imported.",
+            "their streams' names, message types, directions and wired topics, each module's docstring (whole, and "
+            "its first paragraph as `summary`), RPC methods and skills (signature and docstring) and where its class "
+            "is defined (`file`, `line`; GET /dimos/source reads the file). 400 for a name that can't be one, 500 "
+            "when the blueprint can't be found or imported.",
             errors=(400, 500),
             agent=True,
-            answer="`{ name, modules: [{ name, class, streams: [{ name, type, direction }] }] }`",
+            answer="`{ name, modules: [{ name, class, doc, summary, file, line, rpcs, skills, streams: [{ name, "
+            "type, direction, topic }] }] }`",
         ),
     )
     async def blueprint(name: BlueprintParam) -> Any:
         check_name(name)
         return await introspected(f"bp:{name}", ["blueprint", name])
+
+    @app.get(
+        "/dimos/source",
+        response_model=models.SourceFile,
+        **route_doc(
+            "blueprints",
+            "A Python file of the dimos checkout, as text (a module's code)",
+            "`file` is a path relative to the checkout (as GET /dimos/blueprints/{name} gives a module's `file`) or "
+            "an absolute one inside it. Only .py files inside the checkout are read: 400 for anything else, 404 "
+            "when there's no such file.",
+            errors=(400, 404),
+            answer="`{ file, text }`",
+        ),
+    )
+    async def source(
+        file: Annotated[
+            str, Query(description="The file: relative to the checkout, or absolute inside it")
+        ],
+    ) -> Any:
+        root = s.dimos_dir.resolve()
+        path = (root / file).resolve()
+        if path.suffix != ".py" or not path.is_relative_to(root):
+            raise ApiError(400, f"not a .py file in the dimos checkout: {file}")
+        if not path.is_file():
+            raise ApiError(404, f"no such file: {file}")
+        return {"file": file, "text": await asyncio.to_thread(path.read_text, "utf-8", "replace")}
 
     @app.get(
         "/dimos/blueprints/{name}/config",
