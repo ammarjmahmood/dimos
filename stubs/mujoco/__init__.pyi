@@ -71,6 +71,20 @@ def mj_resetDataKeyframe(model: MjModel, data: MjData, key: int) -> None: ...
 def mj_name2id(model: MjModel, type: int, name: str | None) -> int: ...
 def mj_id2name(model: MjModel, type: int, id: int) -> str | None: ...
 def mj_saveModel(model: MjModel, filename: str, buffer: Any = ...) -> None: ...
+def mj_multiRay(
+    m: MjModel,
+    d: MjData,
+    pnt: NDArray[np.float64],
+    vec: NDArray[np.float64],
+    geomgroup: NDArray[np.uint8] | None,
+    flg_static: int,
+    bodyexclude: int,
+    geomid: NDArray[np.int32],
+    dist: NDArray[np.float64],
+    normal: NDArray[np.float64] | None,
+    nray: int,
+    cutoff: float,
+) -> None: ...
 def set_mjcb_control(
     cb: Callable[[MjModel, MjData], None] | None,
 ) -> None: ...
