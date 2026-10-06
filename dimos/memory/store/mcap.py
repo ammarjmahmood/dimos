@@ -232,7 +232,13 @@ class McapStore(Store):
         signatures: dict[str, tuple[Any, ...]] = {}
         if summary is not None and summary.statistics is not None:
             for cid, ch in summary.channels.items():
-                signature = (ch.message_encoding, ch.schema_id, tuple(sorted(ch.metadata.items())))
+                schema = summary.schemas.get(ch.schema_id)
+                schema_signature = (schema.name, schema.encoding, schema.data) if schema else None
+                signature = (
+                    ch.message_encoding,
+                    schema_signature,
+                    tuple(sorted(ch.metadata.items())),
+                )
                 if ch.topic in signatures and signatures[ch.topic] != signature:
                     raise ValueError(f"MCAP topic {ch.topic!r} has conflicting channel definitions")
                 signatures[ch.topic] = signature

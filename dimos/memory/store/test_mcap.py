@@ -256,3 +256,33 @@ def test_duplicate_channel_counts_or_conflict(tmp_path, conflicting):
         with McapStore(path=str(path)) as store:
             assert store.streams.imu.count() == 2
             assert len(store.streams.imu.to_list()) == 2
+
+
+@pytest.mark.parametrize("changed_field", [None, "name", "encoding", "data"])
+def test_duplicate_channels_compare_schema_content(tmp_path, changed_field):
+    path = tmp_path / "schemas.mcap"
+    with path.open("wb") as output:
+        writer = mcap_writer.Writer(output)
+        writer.start()
+        for index in range(2):
+            schema = {"name": "example", "encoding": "jsonschema", "data": b"{}"}
+            if index == 1 and changed_field is not None:
+                schema[changed_field] = b'{"type":"string"}' if changed_field == "data" else "other"
+            schema_id = writer.register_schema(**schema)
+            channel = writer.register_channel(
+                topic="raw", message_encoding="custom", schema_id=schema_id
+            )
+            writer.add_message(
+                channel_id=channel, log_time=index, publish_time=index, data=bytes([index])
+            )
+        writer.finish()
+    if changed_field is not None:
+        with pytest.raises(ValueError, match="conflicting channel definitions"):
+            McapStore(path=str(path))
+    else:
+        with McapStore(path=str(path)) as store:
+            assert store.streams.raw.count() == 2
+            assert [observation.data for observation in store.streams.raw.to_list()] == [
+                b"\x00",
+                b"\x01",
+            ]
