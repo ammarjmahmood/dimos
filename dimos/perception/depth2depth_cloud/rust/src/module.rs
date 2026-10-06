@@ -115,7 +115,7 @@ pub struct Config {
 }
 
 #[derive(Module)]
-#[module(name = "depth2depth_cloud", setup = start)]
+#[module(name = "depth2depth_cloud", setup = start, teardown = stop)]
 pub struct Depth2DepthCloud {
     #[input(decode = CompressedImage::decode, handler = on_image)]
     image: Input<CompressedImage>,
@@ -137,6 +137,7 @@ pub struct Depth2DepthCloud {
 
     shared: Arc<Shared>,
     wake: Option<SyncSender<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 /// What the handlers hand the worker.
@@ -187,7 +188,18 @@ impl Depth2DepthCloud {
         let (predicted, to_calibrate) = sync_channel(0);
         let calibrator = worker.clone();
         std::thread::spawn(move || calibrator.calibrate(to_calibrate));
-        std::thread::spawn(move || worker.run(woken, predicted));
+        self.worker = Some(std::thread::spawn(move || worker.run(woken, predicted)));
+    }
+
+    /// Stop the worker and let it drop the model while CUDA is still up: left to process exit, TensorRT
+    /// tears down after CUDA has unloaded and logs an error doing it.
+    async fn stop(&mut self) {
+        self.wake = None;
+        if let Some(worker) = self.worker.take() {
+            // A worker still building its TensorRT engine isn't waited for.
+            let joined = tokio::task::spawn_blocking(move || worker.join());
+            let _ = tokio::time::timeout(Duration::from_secs(2), joined).await;
+        }
     }
 
     async fn on_image(&mut self, msg: CompressedImage) {
