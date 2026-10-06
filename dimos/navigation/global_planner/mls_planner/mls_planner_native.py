@@ -16,9 +16,13 @@
 
 from __future__ import annotations
 
+import math
+
 from dimos_lcm.actionlib_msgs import GoalStatus
+from reactivex.disposable import Disposable
 
 from dimos.constants import DIMOS_PROJECT_ROOT
+from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
@@ -28,6 +32,10 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.navigation import spec
+from dimos.navigation.base import NavigationState
+
+# The planner keeps retrying an aborted goal, so it still holds one.
+_HOLDS_GOAL = frozenset({GoalStatus.PENDING, GoalStatus.ACTIVE, GoalStatus.ABORTED})
 
 
 class MLSPlannerNativeConfig(NativeModuleConfig):
@@ -89,3 +97,61 @@ class MLSPlannerNative(NativeModule, spec.GlobalPlanner):
     surface_map: Out[PointCloud2]
     nodes: Out[PointCloud2]
     node_edges: Out[LineSegments3D]
+
+    _status: GoalStatus | None = None
+    # The goal id a sent message is newer than, and the status to assume
+    # until the planner answers it.
+    _unanswered: tuple[int, int] | None = None
+
+    @rpc
+    def start(self) -> None:
+        super().start()
+        self.register_disposable(
+            Disposable(self.nav_status.transport.subscribe(self._on_nav_status, self.nav_status))
+        )
+
+    def _on_nav_status(self, msg: GoalStatus) -> None:
+        self._status = msg
+
+    def _goal_status(self) -> int | None:
+        """Status of the newest goal, assumed while a sent message is unanswered."""
+        status = self._status
+        unanswered = self._unanswered
+        if unanswered is None:
+            return None if status is None else int(status.status)
+        after_id, assumed = unanswered
+        if status is not None and int(status.goal_id.id) > after_id:
+            return int(status.status)
+        return assumed
+
+    def _send(self, point: PointStamped, assumed: int) -> None:
+        """Publish a goal message and assume its status until the planner answers."""
+        status = self._status
+        self._unanswered = (0 if status is None else int(status.goal_id.id), assumed)
+        self.goal.transport.publish(point)
+
+    @rpc
+    def set_goal(self, goal: PoseStamped) -> bool:
+        """Send the pose's position as the goal. The planner has no goal heading."""
+        self._send(
+            PointStamped(goal.x, goal.y, goal.z, ts=goal.ts, frame_id=goal.frame_id),
+            GoalStatus.PENDING,
+        )
+        return True
+
+    @rpc
+    def cancel_goal(self) -> bool:
+        """Cancel the goal. False when the planner held none."""
+        held = self._goal_status() in _HOLDS_GOAL
+        self._send(PointStamped(math.nan, math.nan, math.nan), GoalStatus.PREEMPTED)
+        return held
+
+    @rpc
+    def get_state(self) -> NavigationState:
+        if self._goal_status() in (GoalStatus.PENDING, GoalStatus.ACTIVE):
+            return NavigationState.FOLLOWING_PATH
+        return NavigationState.IDLE
+
+    @rpc
+    def is_goal_reached(self) -> bool:
+        return bool(self._goal_status() == GoalStatus.SUCCEEDED)
