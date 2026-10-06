@@ -27,7 +27,6 @@ from dimos.utils.data import get_data
 
 CONTROL_DT = 0.02
 COMMAND_SLEW = np.array([0.05, 0.04, 0.10])
-STAND_AFTER_TICKS = 10
 LEG_DOFS = slice(6, 18)
 BASE_QUAT = slice(3, 7)
 BASE_ANGULAR_VELOCITY = slice(3, 6)
@@ -103,11 +102,9 @@ class LeggedGo2:
         self._command = np.zeros(3)
         self._applied = np.zeros(len(joints))
         self._target = policy.default_pose.copy()
-        self._idle_ticks = STAND_AFTER_TICKS
-        self.standing = True
 
     def reset(self, x: float, y: float, z_feet: float, yaw: float) -> None:
-        """Stand in the default pose with the feet on z_feet, at rest, until a command arrives."""
+        """Stand in the policy's default pose with the feet on z_feet, at rest."""
         m, d = self.model, self.data
         mujoco.mj_resetDataKeyframe(m, d, self._home)
         d.qpos[0:2] = [x, y]
@@ -121,32 +118,15 @@ class LeggedGo2:
         self._command = np.zeros(3)
         self._applied = np.zeros(len(self._applied))
         self._target = self.policy.default_pose.copy()
-        self._idle_ticks = STAND_AFTER_TICKS
-        self.standing = True
         self.policy.reset()
 
     def tick(
         self, command: NDArray[np.float64], on_substep: Callable[[int], None] | None = None
     ) -> None:
-        """Advance one policy tick toward a velocity command.
-
-        A command held at zero stands the robot in its default pose until the next command.
-        """
+        """Advance one policy tick toward a velocity command."""
         self._command += np.clip(command - self._command, -COMMAND_SLEW, COMMAND_SLEW)
-        if np.any(self._command):
-            self._idle_ticks = 0
-            if self.standing:
-                self.standing = False
-                self.policy.reset()
-        else:
-            self._idle_ticks += 1
-            self.standing = self.standing or self._idle_ticks >= STAND_AFTER_TICKS
-        if self.standing:
-            self._target = self.policy.default_pose
-            kp, kd = self.policy.stand_kp, self.policy.stand_kd
-        else:
-            self._target = self.policy.act(self._observe(), self._command)
-            kp, kd = self.policy.kp, self.policy.kd
+        self._target = self.policy.act(self._observe(), self._command)
+        kp, kd = self.policy.kp, self.policy.kd
         d = self.data
         dt = self.model.opt.timestep
         alpha = dt / (FITTED_ACTUATOR_TAU + dt)

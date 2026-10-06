@@ -81,14 +81,9 @@ def test_reset_places_the_feet_on_the_requested_height(make_robot: Callable[[], 
     assert lowest == pytest.approx(0.3, abs=1e-6)
 
 
-def test_spawns_standing_and_stays_put_without_a_command(
-    make_robot: Callable[[], LeggedGo2],
-) -> None:
-    robot = make_robot()
-    assert robot.standing
-    end = _walk(robot, 3.0, (0.0, 0.0, 0.0))
-    assert np.hypot(end[0], end[1]) < 0.02
-    assert abs(end[3]) < 0.02
+def test_stays_upright_without_a_command(make_robot: Callable[[], LeggedGo2]) -> None:
+    end = _walk(make_robot(), 3.0, (0.0, 0.0, 0.0))
+    assert np.hypot(end[0], end[1]) < 0.3
     assert 0.25 < end[2] < 0.4
 
 
@@ -101,19 +96,6 @@ def test_walks_forward_at_about_the_commanded_speed(make_robot: Callable[[], Leg
 def test_turns_at_about_the_commanded_rate(make_robot: Callable[[], LeggedGo2]) -> None:
     end = _walk(make_robot(), 4.0, (0.0, 0.0, 0.5))
     assert 1.2 < end[3] < 2.4
-
-
-def test_stands_still_after_the_command_drops_to_zero(make_robot: Callable[[], LeggedGo2]) -> None:
-    robot = make_robot()
-    _walk(robot, 3.0, (0.5, 0.0, 0.5))
-    assert not robot.standing
-    _walk(robot, 2.0, (0.0, 0.0, 0.0))
-    assert robot.standing
-    start = _walk(robot, 0.0, (0.0, 0.0, 0.0))
-    end = _walk(robot, 3.0, (0.0, 0.0, 0.0))
-    assert np.hypot(*(end[:2] - start[:2])) < 0.02
-    assert abs(end[3] - start[3]) < 0.02
-    assert end[2] > 0.25
 
 
 def test_rollouts_are_deterministic(make_robot: Callable[[], LeggedGo2]) -> None:

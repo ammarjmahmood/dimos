@@ -51,7 +51,7 @@ from dimos.msgs.sim_msgs.Contacts import Contact, Contacts, Part
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.tf.static_tf_publisher import frames_to_edge_transforms
 from dimos.robot.unitree.go2.go2_mid360_static_transforms import FRAMES
-from dimos.simulation.go2_legged.policy import Go2Policy, OnnxGo2Policy
+from dimos.simulation.go2_legged.policy import Go2Policy, load_policy
 from dimos.simulation.go2_legged.robot import CONTROL_DT, LeggedGo2, apply_fitted_physics, go2_spec
 from dimos.simulation.scenes.procedural import FAMILIES, Scene, generate
 from dimos.simulation.sensors.mid360.lidar import SimMid360
@@ -244,6 +244,8 @@ class SimGo2WorldConfig(ModuleConfig):
     sensor_frame_id: str = "mid360_link"
     real_time_factor: float = Field(default=1.0, gt=0.0)
     mujoco_viewer: bool = False
+    # a .onnx or FREE .bin path, empty for the bundled policy
+    policy: str = ""
 
 
 @dataclass(frozen=True)
@@ -287,7 +289,7 @@ class SimGo2World(Module):
     @rpc
     def start(self) -> None:
         super().start()
-        self._policy = OnnxGo2Policy.load()
+        self._policy = load_policy(self.config.policy)
         self._command = (STILL, 0.0)
         self._requests: Queue[_Request] = Queue()
         self._stop_event = Event()

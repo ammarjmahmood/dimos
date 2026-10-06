@@ -70,7 +70,6 @@ def test_frames_come_out_at_10hz_in_the_sensor_frame(sim: Go2Sim) -> None:
 def test_deskew_keeps_the_floor_flat_while_walking(sim: Go2Sim) -> None:
     for _ in range(75):
         sim.tick(FORWARD)
-    assert not sim.robot.standing
     _floor_is_flat(_next_frame(sim, FORWARD), sim.scene.params["z0"])
 
 
