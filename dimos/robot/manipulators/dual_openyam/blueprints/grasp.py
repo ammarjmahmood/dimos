@@ -115,7 +115,8 @@ DUAL_OPENYAM_CAMERA_TRANSFORM = Transform(
 # --realsensecamera.serial-number, --left_wrist/realsensecamera.serial-number
 # and --right_wrist/realsensecamera.serial-number.
 DUAL_OPENYAM_OVERHEAD_CAMERA_SERIAL = "230322272156"
-DUAL_OPENYAM_WRIST_CAMERA_SERIALS = {"left": "260322276650", "right": "260322272983"}
+# Sides verified 2026-10-06 by covering the left wrist lens.
+DUAL_OPENYAM_WRIST_CAMERA_SERIALS = {"left": "260322272983", "right": "260322276650"}
 
 # Streams a run keeps for ACT and VLA training: the joint states, the plans
 # the planner sent and the commands the hardware accepted, every camera's
