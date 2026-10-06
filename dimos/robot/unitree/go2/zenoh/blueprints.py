@@ -28,7 +28,7 @@ failure can be bisected by dropping down a level:
   raycaster's local map, the follower reading the required precision off the path stamps.
 - ``go2-zenoh-motion-pointlio``: ``go2-zenoh-motion`` running its own ``PointLio``,
   for when the MID-360 hangs off this box rather than the robot.
-- ``go2-viewer``: the rerun half alone, as a zenoh client of the robot's router.
+- ``go2-dds-mid360-viewer``: the rerun half alone, as a zenoh client of the robot's router.
 - ``go2-dds-basic``: ``go2-zenoh-basic`` with :class:`GO2DDS` in place of the bridge, for the
   Jetson (or the Go2 itself) talking DDS to the robot directly.
 - ``go2-dds-mid360``: ``go2-zenoh-motion-pointlio`` over DDS, GO2DDS being the
@@ -342,7 +342,7 @@ go2_dds_mid360 = autoconnect(
 )
 
 # No loaded_map republish: the channel is never-drop. Headless on the robot, so the viewer
-# modules are dropped and go2-viewer on another machine is the screen.
+# modules are dropped and go2-dds-mid360-viewer on another machine is the screen.
 go2_dds_mid360_relocalization = autoconnect(
     go2_dds_mid360.disabled_modules(RerunBridgeModule, RerunWebSocketServer),
     relocalization(republish_loaded_map=0.0),
@@ -358,7 +358,7 @@ GO2_ROUTER = os.environ.get("DIMOS_GO2_ROUTER", "tcp/go22:7447")
 # Ceiling cut for map_regions in odom: the origin is the lidar at start, ~0.5m above the floor.
 MAP_CEILING_M = 1.5
 
-go2_viewer = autoconnect(
+go2_dds_mid360_viewer = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config={
