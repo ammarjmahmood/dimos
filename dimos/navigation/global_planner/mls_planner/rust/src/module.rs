@@ -280,6 +280,7 @@ impl Worker {
     async fn run(self) {
         let mut planner = Planner::new(self.config.worker_threads);
         let mut last_path_at: Option<Instant> = None;
+        let mut path_goal: Option<Xyz> = None;
         let mut last_viz_at: Option<Instant> = None;
         let mut viz = RegionViz::new(
             (self.config.viz_region_m / self.config.voxel_size).round() as i32,
@@ -299,7 +300,8 @@ impl Worker {
                     None => false,
                 };
                 if replan_due(goal_changed, live_update) {
-                    self.maybe_replan(&mut planner, &mut last_path_at).await;
+                    self.maybe_replan(&mut planner, &mut last_path_at, &mut path_goal)
+                        .await;
                 }
                 // Live updates apply first, then one seed region per pass.
                 let seed = self.seed_regions.lock().expect("seed mutex").pop_front();
@@ -468,31 +470,42 @@ impl Worker {
     }
 
     /// Gate and publish a replan. The planning itself lives in Planner::plan.
-    async fn maybe_replan(&self, planner: &mut Planner, last_path_at: &mut Option<Instant>) {
+    async fn maybe_replan(
+        &self,
+        planner: &mut Planner,
+        last_path_at: &mut Option<Instant>,
+        path_goal: &mut Option<Xyz>,
+    ) {
         let Some(start) = self.base_position() else {
             return;
         };
         let start = (start.0, start.1, start.2 - self.config.start_z_offset_m);
-        let goal = {
-            let mut guard = self.active_goal.lock().expect("goal mutex");
-            let Some(goal) = *guard else {
-                return;
-            };
-            if is_at_goal(start, goal, self.config.goal_tolerance) {
-                *guard = None;
-                return;
-            }
-            goal
+        let Some(goal) = *self.active_goal.lock().expect("goal mutex") else {
+            return;
         };
 
         let plan_start = Instant::now();
         let waypoints =
-            tokio::task::block_in_place(|| planner.plan_or_truncate(start, goal, &self.config));
-        if waypoints.is_empty() {
-            // No full path and nothing safe ahead on the cached path, so stop.
-            publish_path(&self.path, &empty_path(&self.config.world_frame, now())).await;
-            return;
-        }
+            match tokio::task::block_in_place(|| replan(planner, start, goal, &self.config)) {
+                Replan::Reached => {
+                    self.clear_goal(goal);
+                    // A goal reached before any path went out still has to end
+                    // at the follower, so hand it the goal alone.
+                    if *path_goal != Some(goal) {
+                        let arrival =
+                            build_path_from_waypoints(&[goal], &self.config.world_frame, now());
+                        publish_path(&self.path, &arrival).await;
+                    }
+                    return;
+                }
+                Replan::Blocked => {
+                    // No full path and nothing safe ahead on the cached path, so stop.
+                    publish_path(&self.path, &empty_path(&self.config.world_frame, now())).await;
+                    return;
+                }
+                Replan::Path(waypoints) => waypoints,
+            };
+        *path_goal = Some(goal);
         let plan_ms = plan_start.elapsed().as_secs_f64() * 1e3;
         let produced = Instant::now();
         let since_last_ms = last_path_at.map_or(-1.0, |t| (produced - t).as_secs_f64() * 1e3);
@@ -505,6 +518,35 @@ impl Worker {
             plan_ms, since_last_ms, "path planned"
         );
         publish_path(&self.path, &path_msg).await;
+    }
+
+    /// Clear the active goal unless a newer one replaced it meanwhile.
+    fn clear_goal(&self, goal: Xyz) {
+        let mut guard = self.active_goal.lock().expect("goal mutex");
+        if *guard == Some(goal) {
+            *guard = None;
+        }
+    }
+}
+
+/// What a replan pass decided for the active goal.
+#[derive(Debug, PartialEq)]
+enum Replan {
+    Reached,
+    Path(Vec<Xyz>),
+    Blocked,
+}
+
+/// Decide a replan pass. A goal already within tolerance needs no path.
+fn replan(planner: &mut Planner, start: Xyz, goal: Xyz, config: &Config) -> Replan {
+    if is_at_goal(start, goal, config.goal_tolerance, config.goal_z_tolerance) {
+        return Replan::Reached;
+    }
+    let waypoints = planner.plan_or_truncate(start, goal, config);
+    if waypoints.is_empty() {
+        Replan::Blocked
+    } else {
+        Replan::Path(waypoints)
     }
 }
 
@@ -549,9 +591,9 @@ fn region_messages(
     (surface, edges)
 }
 
-/// True if within tolerance of the goal on the ground plane.
-fn is_at_goal(start: Xyz, goal: Xyz, tol: f32) -> bool {
-    (start.0 - goal.0).hypot(start.1 - goal.1) < tol
+/// True if within tolerance of the goal on the ground plane and vertically.
+fn is_at_goal(start: Xyz, goal: Xyz, tol: f32, z_tol: f32) -> bool {
+    (start.0 - goal.0).hypot(start.1 - goal.1) < tol && (start.2 - goal.2).abs() < z_tol
 }
 
 fn same_stamp(a: &Time, b: &Time) -> bool {
@@ -782,9 +824,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_at_goal_respects_tolerance_and_ignores_z() {
-        assert!(is_at_goal((0.0, 0.0, 0.0), (0.05, 0.0, 9.0), 0.1));
-        assert!(!is_at_goal((0.0, 0.0, 0.0), (0.2, 0.0, 0.0), 0.1));
+    fn is_at_goal_respects_the_planar_and_vertical_tolerances() {
+        assert!(is_at_goal((0.0, 0.0, 0.0), (0.05, 0.0, 0.4), 0.1, 0.5));
+        assert!(!is_at_goal((0.0, 0.0, 0.0), (0.05, 0.0, 9.0), 0.1, 0.5));
+        assert!(!is_at_goal((0.0, 0.0, 0.0), (0.2, 0.0, 0.0), 0.1, 0.5));
+    }
+
+    fn test_config() -> Config {
+        Config {
+            world_frame: "odom".into(),
+            base_frame: "base_link".into(),
+            voxel_size: 0.1,
+            robot_height: 0.5,
+            start_z_offset_m: 0.0,
+            max_overhead_m: 2.0,
+            surface_closing_radius: 0.3,
+            node_spacing_m: 1.0,
+            wall_clearance_m: 0.0,
+            wall_buffer_m: 0.3,
+            wall_buffer_weight: 1.0,
+            step_threshold_m: 0.25,
+            step_penalty_weight: 0.0,
+            goal_tolerance: 0.3,
+            goal_z_tolerance: 0.5,
+            viz_publish_hz: 2.0,
+            viz_region_m: 4.0,
+            viz_sweep_regions: 0,
+            worker_threads: 1,
+        }
+    }
+
+    #[test]
+    fn a_goal_directly_above_the_start_is_not_reached() {
+        let mut planner = Planner::new(1);
+        let outcome = replan(
+            &mut planner,
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 3.0),
+            &test_config(),
+        );
+        assert_eq!(outcome, Replan::Blocked);
+    }
+
+    #[test]
+    fn a_goal_within_tolerance_is_reached_without_a_path() {
+        let mut planner = Planner::new(1);
+        let outcome = replan(
+            &mut planner,
+            (0.0, 0.0, 0.0),
+            (0.1, 0.0, 0.0),
+            &test_config(),
+        );
+        assert_eq!(outcome, Replan::Reached);
     }
 
     fn stamped(stamp: Time) -> Header {

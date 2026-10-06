@@ -76,6 +76,9 @@ pub struct Config {
     /// Ground-plane distance from goal at which the planner stops replanning.
     #[validate(range(exclusive_min = 0.0))]
     pub goal_tolerance: f32,
+    /// Vertical distance from goal within which the planner counts arrival.
+    #[validate(range(exclusive_min = 0.0))]
+    pub goal_z_tolerance: f32,
     /// Rate cap for the surface_map / nodes / node_edges viz artifacts. 0
     /// disables them entirely. The path output is unthrottled.
     #[validate(range(min = 0.0))]

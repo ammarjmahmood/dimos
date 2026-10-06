@@ -53,6 +53,7 @@ class MLSPlannerNativeConfig(NativeModuleConfig):
     step_threshold_m: float = 0.16
     step_penalty_weight: float = 4.0
     goal_tolerance: float = 0.3
+    goal_z_tolerance: float = 0.5
     viz_publish_hz: float = 2.0
     # The surface and edge viz publish by square cells of this edge, only the
     # changed ones each tick, plus this many unchanged ones round robin.
