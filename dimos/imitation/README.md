@@ -1,11 +1,14 @@
 # Imitation Learning
 
+See [Collection profiles](/dimos/imitation/collection/README.md) for the recording contract,
+shared feature class and executable custom-robot examples.
+
 Collect demonstrations, build training datasets, and run trained policies in
-DimOS. Teleoperation records episodes to a session DB, and DataPrep converts
-that DB into a LeRobot or HDF5 dataset for imitation learning.
+DimOS. Teleoperation records episodes, and DataPrep converts SQLite or MCAP
+recordings into a LeRobot or HDF5 dataset for imitation learning.
 
 ```
-teleop (WebXR) ─▶ CollectionRecorder ─▶ session_<robot>_<ts>.db ─▶ dimos dataprep ─▶ dataset
+teleop (WebXR) -> CollectionRecorder -> recording directory -> DataPrep -> dataset
 ```
 
 After training, use the production
@@ -52,66 +55,66 @@ prints one line per transition:
 
 ### Where the recording goes
 
-```
-~/.local/state/dimos/recordings/session_<robot>_<YYYYMMDD_HHMMSS>.db
-```
+The recorder creates a new session directory under
+`~/.local/state/dimos/recordings/`. It contains `schema.json` and one raw
+payload: `recording.mcap` by default, or `recording.db` for SQLite.
 
-A new timestamped file per run (nothing is overwritten). It records three
-streams: `color_image`, `coordinator_joint_state`, and `status` (the episode
-start/save/discard markers).
+The saved schema describes feature projections, episode markers, alignment and
+quality rules. Its stream names are the actual recorded topics. No Python
+message classes or absolute recording paths are stored in it. The profile
+supplies the typed inputs; multiple features can project different fields from
+one recorded stream.
 
-The exact path is printed when the recorder starts — note it for the next step.
+The exact directory is printed when the recorder starts. Existing directories
+are errors, so a new capture cannot silently replace a previous session.
 
 ---
 
 ## 2. Build a dataset
 
-DataPrep is an offline batch step that reads a session DB and writes a dataset.
-The obs/action stream mapping is nested, so it comes from a JSON config — start
-from [`dataprep/example_config.json`](dataprep/example_config.json) and edit the
-`source`/`output` to taste.
+Use the schema saved beside the payload to prepare a collection. This preserves
+its topic names and joint ordering rather than guessing them from the robot name.
+The input directory in this example must contain a completed recording:
 
-```bash
-# LeRobot v3.0 (default)
-dimos dataprep build \
-  --source ~/.local/state/dimos/recordings/session_xarm7_20260622_120000.db \
-  --config dimos/imitation/dataprep/example_config.json
+```python skip
+from pathlib import Path
 
-# HDF5 instead
-dimos dataprep build -s <session.db> -c <config.json> -f hdf5
+from dimos.imitation.collection.recording import RecordingSchema
+from dimos.imitation.dataprep.lerobot import run_lerobot_dataprep
+from dimos.imitation.dataprep.schema import OutputConfig
+
+recording = Path("data/recordings/session")
+schema = RecordingSchema.read(recording)
+config = schema.dataprep_config(recording, OutputConfig(path=Path("data/datasets/session")))
+run_lerobot_dataprep(config)
 ```
 
-`--source` / `--output` / `--format` override whatever the config specifies, so
-you can reuse one config across runs and just swap `--source`. The dataset is
-written to the config's `output.path` (the example uses `data/datasets/session`)
-unless you pass `--output`.
+For HDF5, select `OutputConfig(format="hdf5", path=...)` and call the host
+`run_dataprep(config)`. LeRobot build and inspection use the isolated runtime.
 
-Inspect the result (features, shapes, dtypes, episode/frame counts):
+The low-level `dimos dataprep` command remains available for explicit SQLite or
+MCAP configs. Generate a config from the saved schema before passing it to
+`--config`; `schema.json` itself is a recording contract, not a `DataPrepConfig`.
+The old CLI is removed only when its `dimos imitation` replacement is registered.
 
-```bash
-dimos dataprep inspect data/datasets/session       # LeRobot dir
-dimos dataprep inspect data/datasets/session.hdf5  # HDF5 file
-```
-
-Each dataset gets a `dimos_meta.json` sidecar recording exactly how it was built
-(source, sync, episodes).
+See the [offline dataset guide](/dimos/imitation/dataprep/README.md) and
+[isolated LeRobot exporter](/dimos/imitation/dataprep/lerobot.md) for validation,
+inspection and output provenance. Discarded and unfinished episodes are excluded.
 
 ---
 
 ## 3. Config reference
 
-See [`dataprep/example_config.json`](dataprep/example_config.json) for a full,
-working example. The fields that matter:
-
-- **`source`** — the session `.db`.
-- **`observation` / `action`** — map a dataset feature name to a recorded
-  `{stream, field}`. Action defaults to the *next* frame's joint state (see
-  `action_shift`), giving a next-state behavioral-cloning target.
-- **`sync`** — resample everything onto one timeline: `anchor` stream,
-  `rate_hz`, nearest-match `tolerance_ms`, and `action_shift` (1 = next-state BC,
-  0 = action == state). `fps` is derived from `rate_hz` unless set explicitly.
-- **`output`** — `format` (`lerobot` | `hdf5`), `path`, and `metadata`
-  (`robot`, `default_task_label`, …).
+- **`source`**: the recorded `.db` or `.mcap` file.
+- **`observation` / `action`**: distinct feature names mapped to explicit
+  `stream`, `field`, `dtype`, `shape`, `names`, and `source_kind` schemas.
+  JointState vectors follow the configured joint-name order.
+- **`sync`**: output-feature `anchor`, fixed `rate_hz`, and nearest-snapshot
+  `tolerance_ms`. There is no implicit next-frame action shift.
+- **`quality`**: `strict` validation by default, or `fill` with per-frame fill
+  provenance. Existing fill behavior has no snapshot-age limit.
+- **`output`**: `format` (`lerobot` or `hdf5`), `path`, and `metadata`.
+  A sidecar records feature schemas, alignment settings and quality reports.
 
 ---
 
@@ -120,7 +123,9 @@ working example. The fields that matter:
 - **Sim vs real camera** — under `--simulation` the MuJoCo camera supplies
   `color_image`; on real hardware a RealSense does. The blueprint picks the
   right one automatically.
-- **"action" is the measured next joint state**, not a recorded command. For
-  true commanded actions you'd record `joint_command` and map `action` to it.
+- **Action semantics are explicit**: the example config uses measured joint-state
+  snapshots. To train on accepted targets, record their command stream and use
+  `source_kind="joint_position_updates"`; this reconstructs sparse targets
+  causally, including accepted history before episode start.
 - **Old vs new sessions** — recordings made before the `coordinator_joint_state`
   rename use the old stream name; point a matching config at them, or re-record.
