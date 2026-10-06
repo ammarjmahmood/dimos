@@ -23,7 +23,7 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.simulation.sensors.mid360.pattern import POINT_RATE, Mid360Pattern
+from dimos.simulation.sensors.mid360.pattern import Mid360Pattern
 from dimos.utils.data import get_data
 
 
@@ -31,7 +31,7 @@ class Raycaster(Protocol):
     def cast(
         self, origin: NDArray[np.float64], directions: NDArray[np.float64], max_range: float
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Distance per world-frame unit direction (negative on a miss) and the hit surface normals."""
+        """Distance and hit normal per world-frame unit direction. Distance is negative on a miss."""
         ...
 
 
@@ -58,8 +58,10 @@ class OcclusionMap:
 
     @classmethod
     def load(cls, path: str | Path) -> OcclusionMap:
-        z = np.load(path)
-        return cls(z["probability"], float(z["az_edges"][0]), float(z["el_edges"][0]))
+        archive = np.load(path)
+        return cls(
+            archive["probability"], float(archive["az_edges"][0]), float(archive["el_edges"][0])
+        )
 
     def lookup(self, directions: NDArray[np.float64]) -> NDArray[np.float32]:
         az = np.degrees(np.arctan2(directions[:, 1], directions[:, 0]))
@@ -69,14 +71,6 @@ class OcclusionMap:
         j = np.clip((az - self.az0).astype(int), 0, cols - 1)
         p: NDArray[np.float32] = self.probability[i, j]
         return p
-
-
-@dataclass
-class Scan:
-    """One batch of returns in the sensor frame of the pose it was cast from."""
-
-    points: NDArray[np.float32]
-    times: NDArray[np.float64]
 
 
 @dataclass
@@ -109,13 +103,11 @@ class SimMid360:
         origin: NDArray[np.float64],
         world_from_sensor: NDArray[np.float64],
         n: int,
-        t_end: float,
-    ) -> Scan:
-        """The next n points of the pattern, all cast from one sensor pose ending at t_end."""
+    ) -> NDArray[np.float32]:
+        """The next n points of the pattern cast from one sensor pose, as sensor-frame returns."""
         rm = self.returns
         dirs = self.pattern.directions(self._k, n)
         self._k += n
-        times = t_end - (n - 1 - np.arange(n)) / POINT_RATE
         world_dirs = dirs @ world_from_sensor.T
         dist, normals = self.raycaster.cast(origin, world_dirs, rm.max_range)
         keep = dist > rm.blind_range
@@ -128,5 +120,6 @@ class SimMid360:
             np.hypot(rm.noise_floor_m, rm.noise_per_m * dist)
             / np.maximum(cos_inc, 0.05) ** rm.incidence_exponent
         )
-        rng_m = dist[keep] + self._rng.standard_normal(int(keep.sum())) * sigma[keep]
-        return Scan((dirs[keep] * rng_m[:, None]).astype(np.float32), times[keep])
+        ranges = dist[keep] + self._rng.standard_normal(int(keep.sum())) * sigma[keep]
+        points: NDArray[np.float32] = (dirs[keep] * ranges[:, None]).astype(np.float32)
+        return points

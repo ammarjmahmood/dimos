@@ -14,9 +14,8 @@
 
 """Livox Mid-360 scan pattern.
 
-Two rotors, a fast azimuth one near 181.08 Hz and a slow elevation one at 9.9 Hz.
-Points go out at 200 kHz round-robin over four channels. Each channel's direction is
-a 2D Fourier series in the two rotor phases.
+Two rotors, a fast azimuth one and a slow elevation one, feeding four channels round-robin.
+Each channel's direction is a 2D Fourier series in the two rotor phases.
 """
 
 from __future__ import annotations
@@ -32,10 +31,15 @@ CHANNELS = 4
 
 class Mid360Pattern:
     def __init__(
-        self, f1: float, f2: float, order_fast: int, order_slow: int, coefs: NDArray[np.float64]
+        self,
+        freq_fast: float,
+        freq_slow: float,
+        order_fast: int,
+        order_slow: int,
+        coefs: NDArray[np.float64],
     ) -> None:
-        self.f1 = f1
-        self.f2 = f2
+        self.freq_fast = freq_fast
+        self.freq_slow = freq_slow
         self.order_fast = order_fast
         self.order_slow = order_slow
         pairs = [
@@ -63,13 +67,13 @@ class Mid360Pattern:
 
     @classmethod
     def load(cls, path: str | Path) -> Mid360Pattern:
-        z = np.load(path)
+        archive = np.load(path)
         return cls(
-            f1=float(z["f1"]),
-            f2=float(z["f2"]),
-            order_fast=int(z["m1"]),
-            order_slow=int(z["m2"]),
-            coefs=np.asarray(z["coefs"], dtype=np.float64),
+            freq_fast=float(archive["f1"]),
+            freq_slow=float(archive["f2"]),
+            order_fast=int(archive["m1"]),
+            order_slow=int(archive["m2"]),
+            coefs=np.asarray(archive["coefs"], dtype=np.float64),
         )
 
     def directions(self, k0: int, n: int) -> NDArray[np.float64]:
@@ -77,8 +81,8 @@ class Mid360Pattern:
         g0 = k0 // CHANNELS
         groups = np.arange(g0, (k0 + n - 1) // CHANNELS + 1)
         t = groups / (POINT_RATE / CHANNELS)
-        fast = np.exp(2j * np.pi * self.f1 * t)
-        slow = np.exp(2j * np.pi * self.f2 * t)
+        fast = np.exp(2j * np.pi * self.freq_fast * t)
+        slow = np.exp(2j * np.pi * self.freq_slow * t)
         ones = np.ones(len(groups))
         fast_pow = np.cumprod(np.column_stack([ones, *[fast] * self.order_fast]), axis=1)
         slow_pos = np.cumprod(np.column_stack([ones, *[slow] * self.order_slow]), axis=1)

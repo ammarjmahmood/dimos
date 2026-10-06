@@ -38,7 +38,7 @@ class Proprioception:
 
 
 class Go2Policy(Protocol):
-    """A 50 Hz joint-position policy driving the Go2's PD motors.
+    """A joint-position policy driving the Go2's PD motors.
 
     The stand gains hold the default pose while the robot is not walking.
     """
@@ -92,14 +92,14 @@ class OnnxGo2Policy:
         options.inter_op_num_threads = 1
         self._session = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
         self._input = self._session.get_inputs()[0].name
-        self._last_action = np.zeros(12)
+        self._last_action = np.zeros(len(self.joint_names))
 
     @classmethod
     def load(cls) -> OnnxGo2Policy:
         return cls(get_data("go2_sim") / "go2_policy" / "policy.onnx")
 
     def reset(self) -> None:
-        self._last_action = np.zeros(12)
+        self._last_action = np.zeros(len(self.joint_names))
 
     def act(self, obs: Proprioception, command: NDArray[np.float64]) -> NDArray[np.float64]:
         raw = np.concatenate(

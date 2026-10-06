@@ -19,16 +19,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import time
+from typing import Literal
 
 from dimos_lcm.std_msgs import String as LCMString
 
 from dimos.types.timestamped import Timestamped
 
+Part = Literal["trunk", "lidar", "leg", "foot"]
+Kind = Literal["floor", "wall", "ceiling", "clutter"]
+
 
 @dataclass(frozen=True, order=True)
 class Contact:
-    part: str
-    kind: str
+    part: Part
+    kind: Kind
 
 
 class Contacts(Timestamped):

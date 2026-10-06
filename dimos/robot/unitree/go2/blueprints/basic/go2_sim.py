@@ -12,17 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The legged Go2 with its Mid-360 in a generated office, driven from the keyboard.
-
-No robot, no PointLio: the sim world publishes PointLio's output contract from ground
-truth. WASD in the pygame window drives it, rerun shows the clouds, the tf tree and the
-scene. ``dimos run go2-sim``.
-"""
+"""The legged Go2 with its Mid-360 in a generated office, driven from the keyboard."""
 
 from __future__ import annotations
 
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
@@ -53,6 +48,7 @@ def _scene_lines(scene: LineSegments3D) -> Archetype:
 
 
 def _rerun_blueprint() -> Blueprint:
+    # rerun is heavy, loaded only in the viewer's worker
     import rerun as rr
     import rerun.blueprint as rrb
 
@@ -68,7 +64,7 @@ def _rerun_blueprint() -> Blueprint:
     )
 
 
-_rerun_config = {
+_rerun_config: dict[str, Any] = {
     "blueprint": _rerun_blueprint,
     "tf_axes": 0.3,
     "static": {"world/robot_body": _robot_body},
@@ -83,4 +79,6 @@ go2_sim = autoconnect(
     KeyboardTeleop.blueprint(linear_speed=0.5, angular_speed=0.8).remappings(
         [(KeyboardTeleop, "cmd_vel", "tele_cmd_vel")]
     ),
+    # gossip off until zenoh fixes its pending-connection bug: with it on, native modules
+    # spawned together never link, which the motion stack composed on this blueprint needs
 ).global_config(transport="zenoh", zenoh_gossip=False, n_workers=6, robot_model="unitree_go2")

@@ -22,6 +22,9 @@ from dimos.simulation.sensors.mid360.lidar import OcclusionMap, SimMid360
 from dimos.simulation.sensors.mid360.pattern import Mid360Pattern
 from dimos.utils.data import get_data
 
+ORIGIN = np.zeros(3)
+UPRIGHT = np.eye(3)
+
 
 @pytest.fixture(scope="module")
 def pattern() -> Mid360Pattern:
@@ -40,6 +43,28 @@ class Sphere:
         return np.full(len(directions), self.radius), -directions
 
 
+class Grazing:
+    """Every ray hits at the same incidence angle, at 3 m."""
+
+    def __init__(self, incidence_deg: float) -> None:
+        self.cos_incidence = np.cos(np.radians(incidence_deg))
+
+    def cast(
+        self, origin: NDArray[np.float64], directions: NDArray[np.float64], max_range: float
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        sideways = np.cross(directions, [0.0, 0.0, 1.0])
+        sideways /= np.linalg.norm(sideways, axis=1, keepdims=True)
+        tilt = np.sqrt(1.0 - self.cos_incidence**2)
+        return np.full(len(directions), 3.0), -directions * self.cos_incidence + sideways * tilt
+
+
+class Void:
+    def cast(
+        self, origin: NDArray[np.float64], directions: NDArray[np.float64], max_range: float
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        return np.full(len(directions), -1.0), -directions
+
+
 def test_pattern_covers_the_measured_elevation_band(pattern: Mid360Pattern) -> None:
     d = pattern.directions(0, 200_000)
     assert np.allclose(np.linalg.norm(d, axis=1), 1.0)
@@ -54,33 +79,45 @@ def test_pattern_is_independent_of_batching(pattern: Mid360Pattern) -> None:
     assert np.allclose(whole, parts)
 
 
+def test_pattern_rejects_a_coefficient_count_that_does_not_match_its_orders() -> None:
+    with pytest.raises(ValueError, match="coefficients"):
+        Mid360Pattern(181.0, 9.9, 1, 1, np.zeros((4, 3)))
+
+
 def test_returns_follow_range_with_millimeter_noise(pattern: Mid360Pattern) -> None:
-    lidar = SimMid360(Sphere(3.0), pattern, seed=1)
-    scan = lidar.cast(np.zeros(3), np.eye(3), 20_000, 0.1)
-    r = np.linalg.norm(scan.points, axis=1)
+    points = SimMid360(Sphere(3.0), pattern, seed=1).cast(ORIGIN, UPRIGHT, 20_000)
+    r = np.linalg.norm(points, axis=1)
     assert len(r) == 20_000
     assert abs(float(np.median(r)) - 3.0) < 0.001
     assert 0.003 < float(np.std(r)) < 0.008
 
 
-def test_point_times_end_at_the_batch_end(pattern: Mid360Pattern) -> None:
-    scan = SimMid360(Sphere(3.0), pattern, seed=1).cast(np.zeros(3), np.eye(3), 400, 0.1)
-    assert scan.times[-1] == pytest.approx(0.1)
-    assert scan.times[0] == pytest.approx(0.1 - 399 / 200_000)
+def test_misses_produce_no_points(pattern: Mid360Pattern) -> None:
+    assert len(SimMid360(Void(), pattern, seed=1).cast(ORIGIN, UPRIGHT, 5_000)) == 0
 
 
 def test_blind_zone_drops_near_returns(pattern: Mid360Pattern) -> None:
-    lidar = SimMid360(Sphere(0.1), pattern, seed=1)
-    assert len(lidar.cast(np.zeros(3), np.eye(3), 5_000, 0.1).points) == 0
+    assert len(SimMid360(Sphere(0.1), pattern, seed=1).cast(ORIGIN, UPRIGHT, 5_000)) == 0
 
 
-def test_occlusion_map_blocks_rays(pattern: Mid360Pattern) -> None:
-    blocked = OcclusionMap(np.ones((64, 360), np.float32), -180.0, -8.0)
-    lidar = SimMid360(Sphere(3.0), pattern, seed=1, occlusion=blocked)
-    assert len(lidar.cast(np.zeros(3), np.eye(3), 5_000, 0.1).points) == 0
+def test_grazing_incidence_drops_returns_by_the_measured_table(pattern: Mid360Pattern) -> None:
+    kept = len(SimMid360(Grazing(82.5), pattern, seed=1).cast(ORIGIN, UPRIGHT, 20_000))
+    assert 0.45 < kept / 20_000 < 0.55
+    assert len(SimMid360(Grazing(90.0), pattern, seed=1).cast(ORIGIN, UPRIGHT, 5_000)) == 0
+
+
+def test_occlusion_map_blocks_the_directions_it_marks(pattern: Mid360Pattern) -> None:
+    probability = np.zeros((64, 360), np.float32)
+    probability[:, :180] = 1.0
+    blocked_right = OcclusionMap(probability, -180.0, -8.0)
+    points = SimMid360(Sphere(3.0), pattern, seed=1, occlusion=blocked_right).cast(
+        ORIGIN, UPRIGHT, 20_000
+    )
+    assert 5_000 < len(points) < 15_000
+    assert np.all(points[:, 1] > 0)
 
 
 def test_same_seed_same_scan(pattern: Mid360Pattern) -> None:
-    a = SimMid360(Sphere(3.0), pattern, seed=7).cast(np.zeros(3), np.eye(3), 4_000, 0.1)
-    b = SimMid360(Sphere(3.0), pattern, seed=7).cast(np.zeros(3), np.eye(3), 4_000, 0.1)
-    assert np.array_equal(a.points, b.points)
+    a = SimMid360(Sphere(3.0), pattern, seed=7).cast(ORIGIN, UPRIGHT, 4_000)
+    b = SimMid360(Sphere(3.0), pattern, seed=7).cast(ORIGIN, UPRIGHT, 4_000)
+    assert np.array_equal(a, b)

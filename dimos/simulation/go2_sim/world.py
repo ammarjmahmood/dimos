@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The simulated world: a generated scene, the legged Go2 and its Mid-360, stepped at the policy rate.
+"""The simulated world: a generated scene, the legged Go2 and its Mid-360.
 
-Physics alone decides motion, contacts, falls and getting stuck. The module stands in
-for the Go2 driver and PointLio: it takes cmd_vel and publishes PointLio's output
-contract from ground truth, a 10 Hz lidar frame in the sensor frame deskewed to the
-frame-end pose, odometry and tf for odom -> mid360_link. It runs paced to the wall
-clock so the real modules around it run unmodified.
+Stands in for the Go2 driver and PointLio, publishing PointLio's output contract from
+ground truth.
 """
 
 from __future__ import annotations
@@ -50,16 +47,13 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.LineSegments3D import LineSegments3D
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.sim_msgs.Contacts import Contact, Contacts
+from dimos.msgs.sim_msgs.Contacts import Contact, Contacts, Part
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.navigation.sim_eval.scenes import FAMILIES, Scene, generate
-from dimos.robot.unitree.go2.go2_mid360_static_transforms import (
-    CAMERA_XYZ,
-    MID360_PITCH_DOWN,
-    MID360_XYZ,
-)
+from dimos.protocol.tf.static_tf_publisher import frames_to_edge_transforms
+from dimos.robot.unitree.go2.go2_mid360_static_transforms import FRAMES
 from dimos.simulation.go2_legged.policy import Go2Policy, OnnxGo2Policy
 from dimos.simulation.go2_legged.robot import CONTROL_DT, LeggedGo2, apply_fitted_physics, go2_spec
+from dimos.simulation.scenes.procedural import FAMILIES, Scene, generate
 from dimos.simulation.sensors.mid360.lidar import SimMid360
 from dimos.simulation.sensors.mid360.pattern import POINT_RATE
 from dimos.simulation.sensors.mujoco_raycaster import MujocoRaycaster
@@ -69,9 +63,8 @@ logger = setup_logger()
 
 FRAME_DT = 0.1
 TICKS_PER_FRAME = round(FRAME_DT / CONTROL_DT)
-MOUNT_XYZ = np.add(CAMERA_XYZ, MID360_XYZ)
-MOUNT_R = Rotation.from_euler("y", MID360_PITCH_DOWN).as_matrix()
-LIDAR_HALF = (0.0325, 0.0325, 0.03)
+LIDAR_HALF_EXTENTS = (0.0325, 0.0325, 0.03)
+COLLISION_GROUP = 3
 SCENE_PUBLISH_DT = 2.0
 COMMAND_TIMEOUT = 0.2
 STILL = np.zeros(3)
@@ -95,9 +88,19 @@ BOX_EDGES = np.array(
 )
 
 
+def _mount() -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """base_link -> mid360_link as a translation and rotation matrix, from the rig's frame tree."""
+    edges = {t.child_frame_id: t for t in frames_to_edge_transforms(FRAMES)}
+    matrix = edges["front_camera"].to_matrix() @ edges["mid360_link"].to_matrix()
+    return matrix[:3, 3].copy(), matrix[:3, :3].copy()
+
+
+MOUNT_XYZ, MOUNT_R = _mount()
+
+
 @dataclass
 class LidarFrame:
-    """One 10 Hz frame: sensor-frame points at the frame-end pose, like PointLio's output."""
+    """One frame: sensor-frame points at the frame-end pose, like PointLio's output."""
 
     t: float
     points: NDArray[np.float32]
@@ -105,23 +108,51 @@ class LidarFrame:
     rotation: NDArray[np.float64]
 
 
+class GroundTruthLio:
+    """PointLio's deskew with the true motion: substep returns in, one frame-end cloud out."""
+
+    def __init__(self) -> None:
+        self._world: list[NDArray[np.float64]] = []
+
+    def add(
+        self,
+        points: NDArray[np.float32],
+        position: NDArray[np.float64],
+        rotation: NDArray[np.float64],
+    ) -> None:
+        """Returns cast from one sensor pose, placed in the world with that pose."""
+        self._world.append(position + points.astype(np.float64) @ rotation.T)
+
+    def frame(
+        self, t: float, position: NDArray[np.float64], rotation: NDArray[np.float64]
+    ) -> LidarFrame:
+        """Everything added since the last frame, re-expressed at the frame-end pose."""
+        world = np.concatenate(self._world) if self._world else np.zeros((0, 3))
+        self._world = []
+        points = ((world - position) @ rotation).astype(np.float32)
+        return LidarFrame(t, points, position, rotation)
+
+    def clear(self) -> None:
+        self._world = []
+
+
 def build_model(scene: Scene) -> mujoco.MjModel:
     """The scene's boxes, the Go2 and the Mid-360 housing as a contact box, in one model."""
     spec = go2_spec()
-    for i, b in enumerate(scene.boxes):
-        g = spec.worldbody.add_geom()
-        g.type = mujoco.mjtGeom.mjGEOM_BOX
-        g.name = f"{b.kind}_{i}"
-        g.pos = b.center
-        g.size = b.half
+    for i, box in enumerate(scene.boxes):
+        geom = spec.worldbody.add_geom()
+        geom.type = mujoco.mjtGeom.mjGEOM_BOX
+        geom.name = f"{box.kind}_{i}"
+        geom.pos = box.center
+        geom.size = box.half
     lidar = spec.body("base").add_geom()
     lidar.name = "mid360"
     lidar.type = mujoco.mjtGeom.mjGEOM_BOX
-    lidar.size = LIDAR_HALF
+    lidar.size = LIDAR_HALF_EXTENTS
     lidar.pos = MOUNT_XYZ
     q = Rotation.from_matrix(MOUNT_R).as_quat()
     lidar.quat = (q[3], q[0], q[1], q[2])
-    lidar.group = 3
+    lidar.group = COLLISION_GROUP
     model = spec.compile()
     apply_fitted_physics(model)
     return model
@@ -129,13 +160,13 @@ def build_model(scene: Scene) -> mujoco.MjModel:
 
 def scene_edges(scene: Scene) -> NDArray[np.float64]:
     """The 12 edges of every box, as (N, 2, 3) segments."""
-    centers = np.array([b.center for b in scene.boxes])[:, None, None, :]
-    halves = np.array([b.half for b in scene.boxes])[:, None, None, :]
+    centers = np.array([box.center for box in scene.boxes])[:, None, None, :]
+    halves = np.array([box.half for box in scene.boxes])[:, None, None, :]
     edges: NDArray[np.float64] = (centers + BOX_EDGES[None] * halves).reshape(-1, 2, 3)
     return edges
 
 
-class SimWorld:
+class Go2Sim:
     """The compiled scene with the Go2 and its Mid-360, ticked from a velocity command."""
 
     def __init__(self, scene: Scene, seed: int, policy: Go2Policy) -> None:
@@ -144,14 +175,14 @@ class SimWorld:
         self.data = mujoco.MjData(self.model)
         self.robot = LeggedGo2(self.model, self.data, policy)
         self.lidar = SimMid360.go2(MujocoRaycaster(self.model, self.data), seed)
+        self.lio = GroundTruthLio()
         self.t = 0.0
         self._tick = 0
-        self._frame_world: list[NDArray[np.float64]] = []
         self._points_per_step = int(POINT_RATE * self.model.opt.timestep)
         geom = mujoco.mjtObj.mjOBJ_GEOM
         self._kind = {
-            mujoco.mj_name2id(self.model, geom, f"{b.kind}_{i}"): b.kind
-            for i, b in enumerate(scene.boxes)
+            mujoco.mj_name2id(self.model, geom, f"{box.kind}_{i}"): box.kind
+            for i, box in enumerate(scene.boxes)
         }
         self._lidar_geom = mujoco.mj_name2id(self.model, geom, "mid360")
 
@@ -159,11 +190,11 @@ class SimWorld:
         self.robot.reset(x, y, z_feet, yaw)
         self.t = 0.0
         self._tick = 0
-        self._frame_world = []
+        self.lio.clear()
 
     def sensor_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        p, rot = self.robot.base_pose()
-        return p + rot @ MOUNT_XYZ, rot @ MOUNT_R
+        position, rotation = self.robot.base_pose()
+        return position + rotation @ MOUNT_XYZ, rotation @ MOUNT_R
 
     def base_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         return self.robot.base_pose()
@@ -180,7 +211,7 @@ class SimWorld:
                     found.add(Contact(self._part(robot_geom), kind))
         return sorted(found)
 
-    def _part(self, geom: int) -> str:
+    def _part(self, geom: int) -> Part:
         if geom == self._lidar_geom:
             return "lidar"
         if geom in self.robot.feet:
@@ -191,29 +222,25 @@ class SimWorld:
 
     def tick(self, command: NDArray[np.float64]) -> LidarFrame | None:
         """Advance one policy tick. Returns the lidar frame that completed on this tick, if any."""
-        dt = self.model.opt.timestep
 
-        def cast(i: int) -> None:
-            pos, rot = self.sensor_pose()
-            scan = self.lidar.cast(pos, rot, self._points_per_step, self.t + (i + 1) * dt)
-            self._frame_world.append(pos + scan.points.astype(np.float64) @ rot.T)
+        def cast(_: int) -> None:
+            position, rotation = self.sensor_pose()
+            self.lio.add(
+                self.lidar.cast(position, rotation, self._points_per_step), position, rotation
+            )
 
         self.robot.tick(command, cast)
         self._tick += 1
         self.t = self._tick * CONTROL_DT
         if self._tick % TICKS_PER_FRAME:
             return None
-        pos, rot = self.sensor_pose()
-        world = np.concatenate(self._frame_world) if self._frame_world else np.zeros((0, 3))
-        self._frame_world = []
-        return LidarFrame(self.t, ((world - pos) @ rot).astype(np.float32), pos, rot)
+        return self.lio.frame(self.t, *self.sensor_pose())
 
 
 class SimGo2WorldConfig(ModuleConfig):
     family: str = "office"
     seed: int = 1
     frame_id: str = "odom"
-    base_frame_id: str = "base_link"
     sensor_frame_id: str = "mid360_link"
     real_time_factor: float = Field(default=1.0, gt=0.0)
     mujoco_viewer: bool = False
@@ -304,33 +331,36 @@ class SimGo2World(Module):
         command, received = self._command
         return command if time.monotonic() - received < COMMAND_TIMEOUT else STILL
 
-    def _load(self, family: str, seed: int) -> SimWorld:
+    def _load(self, family: str, seed: int) -> Go2Sim:
         scene = generate(family, seed)
-        world = SimWorld(scene, seed, self._policy)
-        world.reset(*scene.start, 0.0)
+        sim = Go2Sim(scene, seed, self._policy)
+        sim.reset(*scene.start, 0.0)
         logger.info(
             "Sim world ready", scene=scene.name, goals={g.name: g.position for g in scene.goals}
         )
-        return world
+        blocked = [c for c in sim.contacts() if c.kind != "floor"]
+        if blocked:
+            logger.warning("Robot starts inside scene geometry", scene=scene.name, contacts=blocked)
+        return sim
 
-    def _open_viewer(self, world: SimWorld) -> mujoco.viewer.Handle | None:
+    def _open_viewer(self, sim: Go2Sim) -> mujoco.viewer.Handle | None:
         if not self.config.mujoco_viewer:
             return None
         viewer = mujoco.viewer.launch_passive(
-            world.model, world.data, show_left_ui=False, show_right_ui=False
+            sim.model, sim.data, show_left_ui=False, show_right_ui=False
         )
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-        viewer.cam.trackbodyid = world.robot.trunk
+        viewer.cam.trackbodyid = sim.robot.trunk
         viewer.cam.distance = 3.0
         viewer.cam.elevation = -25
         viewer.cam.azimuth = 135
         return viewer
 
     def _run(self) -> None:
-        world = self._load(self.config.family, self.config.seed)
+        sim = self._load(self.config.family, self.config.seed)
         # open3d loads on the first cloud, about a second
         PointCloud2.from_numpy(np.zeros((0, 3), np.float32), frame_id=self.config.sensor_frame_id)
-        viewer = self._open_viewer(world)
+        viewer = self._open_viewer(sim)
         t0 = time.time()
         last_contacts: list[Contact] | None = None
         next_scene_publish = 0.0
@@ -342,27 +372,27 @@ class SimGo2World(Module):
             else:
                 if isinstance(request, _LoadScene):
                     try:
-                        world = self._load(request.family, request.seed)
+                        sim = self._load(request.family, request.seed)
                     except Exception:
                         logger.exception("Scene load failed, keeping the current scene")
                         continue
                     if viewer is not None:
                         viewer.close()
-                    viewer = self._open_viewer(world)
+                    viewer = self._open_viewer(sim)
                 elif isinstance(request, _Reset):
-                    world.reset(*world.scene.start, 0.0)
+                    sim.reset(*sim.scene.start, 0.0)
                 else:
-                    world.reset(request.x, request.y, world.scene.start[2], request.yaw)
+                    sim.reset(request.x, request.y, sim.scene.start[2], request.yaw)
                 self._command = (STILL, 0.0)
                 t0 = time.time()
                 last_contacts = None
                 next_scene_publish = 0.0
-            frame = world.tick(self._current_command())
+            frame = sim.tick(self._current_command())
             if viewer is not None:
                 viewer.sync()
-            stamp = t0 + world.t / self.config.real_time_factor
-            self._publish_poses(world, stamp)
-            contacts = world.contacts()
+            stamp = t0 + sim.t / self.config.real_time_factor
+            self._publish_poses(sim, stamp)
+            contacts = sim.contacts()
             if contacts != last_contacts:
                 self.contacts.publish(Contacts(contacts, ts=stamp))
                 last_contacts = contacts
@@ -372,13 +402,13 @@ class SimGo2World(Module):
                         frame.points, frame_id=self.config.sensor_frame_id, timestamp=stamp
                     )
                 )
-            if world.t >= next_scene_publish:
+            if sim.t >= next_scene_publish:
                 self.scene.publish(
                     LineSegments3D(
-                        ts=stamp, frame_id=self.config.frame_id, segments=scene_edges(world.scene)
+                        ts=stamp, frame_id=self.config.frame_id, segments=scene_edges(sim.scene)
                     )
                 )
-                next_scene_publish = world.t + SCENE_PUBLISH_DT
+                next_scene_publish = sim.t + SCENE_PUBLISH_DT
             delay = stamp - time.time()
             if delay > 0:
                 self._stop_event.wait(delay)
@@ -388,10 +418,10 @@ class SimGo2World(Module):
         if viewer is not None:
             viewer.close()
 
-    def _publish_poses(self, world: SimWorld, stamp: float) -> None:
-        pos, rot = world.sensor_pose()
-        q = Rotation.from_matrix(rot).as_quat()
-        sensor = Pose(*map(float, pos), *map(float, q))
+    def _publish_poses(self, sim: Go2Sim, stamp: float) -> None:
+        position, rotation = sim.sensor_pose()
+        q = Rotation.from_matrix(rotation).as_quat()
+        sensor = Pose(*map(float, position), *map(float, q))
         self.odometry.publish(
             Odometry(
                 ts=stamp,
@@ -411,11 +441,11 @@ class SimGo2World(Module):
                 )
             )
         )
-        base_pos, base_rot = world.base_pose()
-        base_q = Rotation.from_matrix(base_rot).as_quat()
+        base_position, base_rotation = sim.base_pose()
+        base_q = Rotation.from_matrix(base_rotation).as_quat()
         self.ground_truth.publish(
             PoseStamped(
-                *map(float, base_pos),
+                *map(float, base_position),
                 *map(float, base_q),
                 ts=stamp,
                 frame_id=self.config.frame_id,

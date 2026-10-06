@@ -22,14 +22,15 @@ import mujoco
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.simulation.go2_legged.policy import Go2Policy, Proprioception
+from dimos.simulation.go2_legged.policy import LEGS, Go2Policy, Proprioception
 from dimos.utils.data import get_data
 
 CONTROL_DT = 0.02
 COMMAND_SLEW = np.array([0.05, 0.04, 0.10])
 STAND_AFTER_TICKS = 10
-FOOT_GEOMS = ("FL", "FR", "RL", "RR")
 LEG_DOFS = slice(6, 18)
+BASE_QUAT = slice(3, 7)
+BASE_ANGULAR_VELOCITY = slice(3, 6)
 
 FITTED_PHYSICS = {
     "armature": 0.00712,
@@ -51,6 +52,7 @@ def go2_spec() -> mujoco.MjSpec:
 
 
 def apply_fitted_physics(model: mujoco.MjModel) -> None:
+    # the fit was made on the compiled model without mj_setConst, so this must not call it
     p = FITTED_PHYSICS
     model.dof_armature[LEG_DOFS] = p["armature"]
     model.dof_damping[LEG_DOFS] = p["damping"]
@@ -59,7 +61,7 @@ def apply_fitted_physics(model: mujoco.MjModel) -> None:
     model.body_mass[trunk] *= p["trunk_mass_scale"]
     model.body_inertia[trunk] *= p["trunk_inertia_scale"]
     model.body_ipos[trunk][0] += p["trunk_com_x"]
-    for leg in FOOT_GEOMS:
+    for leg in LEGS:
         for part in ("thigh", "calf"):
             body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{leg}_{part}")
             model.body_mass[body] *= p["leg_mass_scale"]
@@ -87,19 +89,19 @@ class LeggedGo2:
         self.data = data
         self.policy = policy
         self.trunk = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base")
-        self.feet = tuple(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, n) for n in FOOT_GEOMS)
+        self.feet = tuple(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, leg) for leg in LEGS)
         self.substeps = max(1, round(CONTROL_DT / model.opt.timestep))
         joints = [
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in policy.joint_names
         ]
-        self._qpos = np.array([model.jnt_qposadr[j] for j in joints])
-        self._qvel = np.array([model.jnt_dofadr[j] for j in joints])
+        self._qpos_adr = np.array([model.jnt_qposadr[j] for j in joints])
+        self._dof_adr = np.array([model.jnt_dofadr[j] for j in joints])
         actuator_of = {int(model.actuator_trnid[a, 0]): a for a in range(model.nu)}
-        self._ctrl = np.array([actuator_of[j] for j in joints])
-        self._torque_limit = model.actuator_ctrlrange[self._ctrl, 1]
+        self._actuator_ids = np.array([actuator_of[j] for j in joints])
+        self._torque_limit = model.actuator_ctrlrange[self._actuator_ids, 1]
         self._home = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home")
         self._command = np.zeros(3)
-        self._applied = np.zeros(12)
+        self._applied = np.zeros(len(joints))
         self._target = policy.default_pose.copy()
         self._idle_ticks = STAND_AFTER_TICKS
         self.standing = True
@@ -109,15 +111,15 @@ class LeggedGo2:
         m, d = self.model, self.data
         mujoco.mj_resetDataKeyframe(m, d, self._home)
         d.qpos[0:2] = [x, y]
-        d.qpos[3:7] = [np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)]
-        d.qpos[self._qpos] = self.policy.default_pose
+        d.qpos[BASE_QUAT] = [np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)]
+        d.qpos[self._qpos_adr] = self.policy.default_pose
         d.qvel[:] = 0.0
         mujoco.mj_forward(m, d)
         lowest = min(float(d.geom_xpos[g][2] - m.geom_size[g][0]) for g in self.feet)
         d.qpos[2] += z_feet - lowest
         mujoco.mj_forward(m, d)
         self._command = np.zeros(3)
-        self._applied = np.zeros(12)
+        self._applied = np.zeros(len(self._applied))
         self._target = self.policy.default_pose.copy()
         self._idle_ticks = STAND_AFTER_TICKS
         self.standing = True
@@ -126,7 +128,7 @@ class LeggedGo2:
     def tick(
         self, command: NDArray[np.float64], on_substep: Callable[[int], None] | None = None
     ) -> None:
-        """Advance one policy tick toward a (vx, vy, vyaw) command, calling on_substep after each physics step.
+        """Advance one policy tick toward a velocity command.
 
         A command held at zero stands the robot in its default pose until the next command.
         """
@@ -149,10 +151,10 @@ class LeggedGo2:
         dt = self.model.opt.timestep
         alpha = dt / (FITTED_ACTUATOR_TAU + dt)
         for i in range(self.substeps):
-            tau = kp * (self._target - d.qpos[self._qpos]) - kd * d.qvel[self._qvel]
+            tau = kp * (self._target - d.qpos[self._qpos_adr]) - kd * d.qvel[self._dof_adr]
             tau = np.clip(tau, -self._torque_limit, self._torque_limit)
             self._applied += alpha * (tau - self._applied)
-            d.ctrl[self._ctrl] = self._applied
+            d.ctrl[self._actuator_ids] = self._applied
             mujoco.mj_step(self.model, d)
             if on_substep is not None:
                 on_substep(i)
@@ -160,17 +162,17 @@ class LeggedGo2:
     def _observe(self) -> Proprioception:
         d = self.data
         return Proprioception(
-            angular_velocity=d.qvel[3:6].copy(),
-            gravity=projected_gravity(d.qpos[3:7]),
-            joint_position=d.qpos[self._qpos].copy(),
-            joint_velocity=d.qvel[self._qvel].copy(),
+            angular_velocity=d.qvel[BASE_ANGULAR_VELOCITY].copy(),
+            gravity=projected_gravity(d.qpos[BASE_QUAT]),
+            joint_position=d.qpos[self._qpos_adr].copy(),
+            joint_velocity=d.qvel[self._dof_adr].copy(),
         )
 
     def base_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         return self.data.xpos[self.trunk].copy(), self.data.xmat[self.trunk].reshape(3, 3).copy()
 
     def yaw(self) -> float:
-        return yaw_of(self.data.qpos[3:7])
+        return yaw_of(self.data.qpos[BASE_QUAT])
 
     def upright(self) -> float:
         """z of the trunk's up axis, 1 when level."""
