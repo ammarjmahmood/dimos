@@ -17,8 +17,11 @@ test_all_blueprints_generation.py), and `resolved` applies the defaults."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import copy
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -236,6 +239,7 @@ def test_resolved_applies_defaults() -> None:
         "key": "robot_ip",
         "scope": "global",
         "kind": "text",
+        "docs": None,
     }
     assert basic["modes"]["sim"] == {"set": {"simulation": "mujoco"}, "args": []}
     assert basic["tags"] == ["drive", "sim"]
@@ -341,3 +345,56 @@ def test_vendor_dir() -> None:
     assert robots.vendor_dir("dimos/robot/manipulators/xarm") is None
     assert robots.vendor_dir("dimos/robot/drone") is None
     assert robots.vendor_dir("dimos/hardware/sensors") is None
+
+
+class _Docs(BaseHTTPRequestHandler):
+    """/page has #found; /no-head refuses HEAD; anything else is a 404."""
+
+    def do_HEAD(self) -> None:
+        self.send_response(405 if self.path == "/no-head" else 200 if self.path == "/page" else 404)
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        if self.path not in ("/page", "/no-head"):
+            self.send_error(404)
+            return
+        body = b"<h2 id=found>Found</h2>"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def docs_server() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Docs)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_link_problems(docs_server: str) -> None:
+    doc = sample()
+    doc["args"]["robot_ip"]["docs"] = f"{docs_server}/page#found"
+    doc["args"]["head"] = {"global": "x", "label": "x", "docs": f"{docs_server}/no-head"}
+    assert robots.link_problems(doc, timeout=5, attempts=1) == []
+    doc["args"]["missing"] = {"global": "y", "label": "y", "docs": f"{docs_server}/gone"}
+    doc["args"]["anchor"] = {"global": "z", "label": "z", "docs": f"{docs_server}/page#renamed"}
+    found = robots.link_problems(doc, timeout=5, attempts=1)
+    assert len(found) == 2
+    assert any("args.missing.docs" in p and "HTTP 404" in p for p in found)
+    assert any("args.anchor.docs" in p and "no #renamed" in p for p in found)
+
+
+def test_link_problems_retries_a_host_that_doesnt_answer() -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Docs)
+    port = server.server_address[1]
+    server.server_close()  # nothing listens there now
+    doc = sample()
+    doc["args"]["robot_ip"]["docs"] = f"http://127.0.0.1:{port}/page"
+    found = robots.link_problems(doc, timeout=2, attempts=2, backoff=0)
+    assert len(found) == 1 and "doesn't resolve" in found[0]

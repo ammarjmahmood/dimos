@@ -314,7 +314,7 @@ class RobotArg(ApiModel):
     """An essential arg: a GlobalConfig field (`--<key> value` before `run`) or a module's config field
     (`--<key> value` after the blueprint name)."""
 
-    id: str = Field(description="Its id in robots.json's `args`", examples=["robot_ip", "spot_ip"])
+    id: str = Field(description="Its id in robots.json's `args`", examples=["go2_ip", "spot_ip"])
     key: str = Field(
         description="The field, as dimos's options name it",
         examples=["robot_ip", "spothighlevel.ip"],
@@ -344,6 +344,11 @@ class RobotArg(ApiModel):
         default=None,
         description="recording: the streams it must have, each a list of acceptable names",
         examples=[[["go2_lidar", "lidar"], ["color_image"]]],
+    )
+    docs: str | None = Field(
+        default=None,
+        description="A page on how to find this value (null: none)",
+        examples=["https://docs.dimensional.org/platforms/quadruped/go2/setup/"],
     )
 
 

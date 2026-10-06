@@ -67,11 +67,19 @@
     }
   },
   "args": {
-    "robot_ip": {
+    "go2_ip": {
       "global": "robot_ip",
       "label": "Robot IP",
       "placeholder": "192.168.12.1",
-      "required": true
+      "required": true,
+      "docs": "https://docs.dimensional.org/platforms/quadruped/go2/setup/#first-time-setup-connecting-to-wifi-finding-robot-ip"
+    },
+    "g1_ip": {
+      "global": "robot_ip",
+      "label": "Robot IP",
+      "placeholder": "192.168.123.164",
+      "required": true,
+      "docs": "https://docs.dimensional.org/platforms/humanoid/g1/#1-get-ssh-access"
     },
     "go2_recording": {
       "global": "replay_db",
@@ -96,7 +104,8 @@
       "global": "robot_ips",
       "label": "Robot IPs",
       "placeholder": "192.168.12.1,192.168.12.2",
-      "required": true
+      "required": true,
+      "docs": "https://docs.dimensional.org/platforms/quadruped/go2/setup/#first-time-setup-connecting-to-wifi-finding-robot-ip"
     },
     "spot_ip": {
       "module": "spothighlevel",
@@ -180,7 +189,7 @@
         "modes": {
           "robot": {
             "args": [
-              "robot_ip"
+              "go2_ip"
             ]
           },
           "replay": {
@@ -259,7 +268,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           },
@@ -316,7 +325,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -345,7 +354,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           },
@@ -361,7 +370,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -376,7 +385,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -412,7 +421,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -428,7 +437,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -473,7 +482,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -489,7 +498,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -542,7 +551,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           },
@@ -558,7 +567,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -623,7 +632,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -638,7 +647,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -694,7 +703,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -710,7 +719,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -726,7 +735,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -742,7 +751,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -757,7 +766,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -772,7 +781,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -804,7 +813,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -821,7 +830,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "go2_ip"
               ]
             }
           }
@@ -861,7 +870,7 @@
         "modes": {
           "robot": {
             "args": [
-              "robot_ip"
+              "g1_ip"
             ]
           }
         }
@@ -980,7 +989,7 @@
           "modes": {
             "robot": {
               "args": [
-                "robot_ip"
+                "g1_ip"
               ]
             },
             "sim": {

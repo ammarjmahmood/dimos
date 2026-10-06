@@ -26,7 +26,8 @@ all_blueprints.py current checks it too (`problems`), so the two can't drift:
       config field of a module in that blueprint;
   (e) it matches robots.schema.json, and its tags, groups and starter ranks are consistent;
   (f) each robot's `type` (dog, wheeled, humanoid, arm, drone, or null: not a robot) and `manufacturer` agree with
-      where its code lives (`kind_problems`).
+      where its code lives (`kind_problems`);
+  (g) every arg's `docs` link resolves, its #anchor too (`link_problems`, which goes online).
 
 dimOS Desktop reads it per tag through dimos.yaml's `robots:` (no server needed), or resolved from the dimos server's
 `GET /dimos/robots` (`resolved`).
@@ -38,7 +39,12 @@ import copy
 import difflib
 import json
 from pathlib import Path
+import re
+import time
 from typing import Any
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from dimos.constants import DIMOS_PROJECT_ROOT
 
@@ -367,10 +373,80 @@ def module_arg_problems(doc: dict[str, Any]) -> list[str]:
     return problems
 
 
+# some docs hosts refuse a plain urllib client
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/130.0.0.0 Safari/537.36"
+)
+
+
+def doc_links(doc: dict[str, Any]) -> dict[str, list[str]]:
+    """Each `docs` link in robots.json -> where it is (`args.<id>`)."""
+    found: dict[str, list[str]] = {}
+    for arg_id, arg in doc["args"].items():
+        if "docs" in arg:
+            found.setdefault(arg["docs"], []).append(f"args.{arg_id}")
+    return found
+
+
+def _fetch(url: str, timeout: float) -> tuple[int | None, str, str]:
+    """(HTTP status after redirects, or None when it didn't answer; the body of a GET, or ""; the error)."""
+    needs_body = bool(urllib.parse.urlsplit(url).fragment)
+    for method in ("GET",) if needs_body else ("HEAD", "GET"):
+        request = urllib.request.Request(
+            url, method=method, headers={"User-Agent": BROWSER_USER_AGENT}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8", "replace") if method == "GET" else ""
+                return response.status, body, ""
+        except urllib.error.HTTPError as error:
+            if method == "HEAD":
+                continue  # a host that refuses HEAD may still answer GET
+            return error.code, "", f"HTTP {error.code}"
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            return None, "", str(getattr(error, "reason", error))
+    return None, "", "no answer"
+
+
+def _has_anchor(html: str, anchor: str) -> bool:
+    quoted = re.escape(anchor)
+    return (
+        re.search(rf"""\b(?:id|name)=(?:"{quoted}"|'{quoted}'|{quoted}(?=[\s>]))""", html)
+        is not None
+    )
+
+
+def link_problems(
+    doc: dict[str, Any], timeout: float = 15.0, attempts: int = 3, backoff: float = 2.0
+) -> list[str]:
+    """(g) `docs` links that don't answer 2xx/3xx (following redirects), or whose #anchor isn't on the page. A host
+    that doesn't answer, answers 5xx or 429 is asked again (`attempts` in all); a 4xx is final."""
+    problems = []
+    for url, wheres in sorted(doc_links(doc).items()):
+        status, body, error = None, "", ""
+        for attempt in range(attempts):
+            status, body, error = _fetch(url, timeout)
+            if status is not None and (status < 500 and status != 429):
+                break
+            if attempt + 1 < attempts:
+                time.sleep(backoff * 2**attempt)
+        where = ", ".join(f"robots.json {w}.docs" for w in wheres)
+        anchor = urllib.parse.unquote(urllib.parse.urlsplit(url).fragment)
+        if status is None or status >= 400:
+            problems.append(f"{where}: {url} doesn't resolve ({error}): fix the link or remove it")
+        elif anchor and not _has_anchor(body, anchor):
+            problems.append(
+                f"{where}: {url} loads, but has no #{anchor} on it (a renamed heading?): fix the anchor"
+            )
+    return problems
+
+
 def problems(
     doc: dict[str, Any], registry: dict[str, str], root: Path = DIMOS_PROJECT_ROOT
 ) -> list[str]:
-    """Everything wrong with robots.json, except module args (`module_arg_problems` imports blueprints)."""
+    """Everything wrong with robots.json, except module args (`module_arg_problems` imports blueprints) and docs links
+    (`link_problems` goes online)."""
     found = schema_problems(doc)
     if found:
         return found  # the other checks assume its shape
@@ -384,7 +460,7 @@ def problems(
 
 def _resolved_arg(arg_id: str, arg: dict[str, Any]) -> dict[str, Any]:
     """An arg with its `id`, `key` (the GlobalConfig field, `--key value` before `run`, or `<module>.<field>`, after
-    the blueprint name) and `scope`."""
+    the blueprint name), `scope` and `docs` (None without one)."""
     if "global" in arg:
         key, scope = arg["global"], "global"
     else:
@@ -395,6 +471,7 @@ def _resolved_arg(arg_id: str, arg: dict[str, Any]) -> dict[str, Any]:
         "scope": scope,
         "kind": "text",
         "required": False,
+        "docs": None,
         **copy.deepcopy(arg),
     }
 

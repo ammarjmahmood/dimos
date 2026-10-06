@@ -379,6 +379,11 @@
               "type": "string"
             }
           }
+        },
+        "docs": {
+          "description": "A page on how to find this value (where a robot's IP comes from); the Launcher links it beside the field. test_all_blueprints_generation.py checks it resolves.",
+          "type": "string",
+          "pattern": "^https://"
         }
       }
     }

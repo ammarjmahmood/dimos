@@ -3494,6 +3494,21 @@
             "$ref": "#/components/schemas/JsonValue",
             "description": "The value it starts with"
           },
+          "docs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A page on how to find this value (null: none)",
+            "examples": [
+              "https://docs.dimensional.org/platforms/quadruped/go2/setup/"
+            ],
+            "title": "Docs"
+          },
           "field": {
             "anyOf": [
               {
@@ -3524,7 +3539,7 @@
           "id": {
             "description": "Its id in robots.json's `args`",
             "examples": [
-              "robot_ip",
+              "go2_ip",
               "spot_ip"
             ],
             "title": "Id",

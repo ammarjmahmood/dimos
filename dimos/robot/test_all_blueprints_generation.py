@@ -104,6 +104,13 @@ def test_robots_json_is_current() -> None:
         )
 
 
+def test_robots_json_docs_links_resolve() -> None:
+    """Every `docs` link in robots.json (a page on how to find an arg's value) loads, its #anchor too."""
+    found = robots.link_problems(robots.load())
+    if found:
+        pytest.fail("dimos/robot/robots.json has broken docs links:\n  - " + "\n  - ".join(found))
+
+
 def _get_base_class_names(node: ast.ClassDef) -> list[str]:
     """Extract base class names from a ClassDef, handling Name, Attribute, and Subscript."""
     names: list[str] = []
