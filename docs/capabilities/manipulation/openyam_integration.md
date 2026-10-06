@@ -120,6 +120,19 @@ app.PickAndPlaceModule.place_at(0.35, -0.25, 0.20, planning_group="right_manipul
 The camera pose in `blueprints/grasp.py` (`DUAL_OPENYAM_CAMERA_TRANSFORM`) is
 the mount on the benchmark rig; re-measure it when the camera moves.
 
+To keep the data a run produces for policy training, record the joint states,
+the position commands the hardware accepted, and the camera images:
+
+```bash
+dimos --record --record-topics coordinator_joint_state,applied_joint_position_command,color_image,depth_image \
+  run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
+  --realsensecamera.serial-number <SERIAL>
+```
+
+The recording lands under `recordings/<run-id>/`. `applied_joint_position_command`
+carries only the targets the hardware accepted, at the control rate, so it is
+the executed trajectory; `coordinator_joint_state` includes the two grippers.
+
 ## Safety
 
 - Keep the workspace clear and the emergency stop reachable during first
