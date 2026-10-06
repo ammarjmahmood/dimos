@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Literal
 import typer
 
 if TYPE_CHECKING:
-    from dimos.imitation.dataprep.core import DataPrepConfig
+    from dimos.imitation.dataprep.schema import DataPrepConfig
 
 
 def _load_config(
@@ -42,7 +42,7 @@ def _load_config(
     output_format: Literal["lerobot", "hdf5"] | None,
 ) -> DataPrepConfig:
     """Build a DataPrepConfig from an optional JSON file + flag overrides."""
-    from dimos.imitation.dataprep.core import DataPrepConfig, OutputConfig
+    from dimos.imitation.dataprep.schema import DataPrepConfig, OutputConfig
 
     if config_path is not None:
         cfg = DataPrepConfig.model_validate_json(Path(config_path).read_text())
@@ -82,7 +82,12 @@ def build(
         raise typer.Exit(2)
 
     try:
-        path = run_dataprep(cfg)
+        if cfg.output.format == "lerobot":
+            from dimos.imitation.dataprep.lerobot import run_lerobot_dataprep
+
+            path = run_lerobot_dataprep(cfg)
+        else:
+            path = run_dataprep(cfg)
     except Exception as e:
         # CLI boundary: any failure becomes a clean message + non-zero exit
         # instead of a traceback. run_dataprep raises specific errors internally.
@@ -102,7 +107,16 @@ def inspect(dataset: Path | None, output_format: Literal["lerobot", "hdf5"] | No
         raise typer.Exit(2)
 
     try:
-        info = inspect_dataset(dataset, output_format)
+        if output_format is None:
+            info = inspect_dataset(dataset)
+        elif output_format == "lerobot":
+            from dimos.imitation.dataprep.lerobot import inspect_lerobot_dataset
+
+            info = inspect_lerobot_dataset(dataset)
+        else:
+            from dimos.imitation.dataprep.formats.hdf5.reader import inspect as inspect_hdf5
+
+            info = inspect_hdf5(dataset)
     except Exception as e:
         # CLI boundary: surface failures as a message + non-zero exit, not a traceback.
         typer.echo(f"dataprep inspect failed: {e}", err=True)
