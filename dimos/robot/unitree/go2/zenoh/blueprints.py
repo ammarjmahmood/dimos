@@ -37,6 +37,7 @@ failure can be bisected by dropping down a level:
   by :class:`LocalMapRelocalization`, which seeds the raycaster and the planner with it.
 """
 
+from functools import partial
 import os
 from typing import Any
 
@@ -45,13 +46,15 @@ from dimos.core.global_config import global_config
 from dimos.hardware.sensors.lidar.pointlio.module import PointLio
 from dimos.hardware.sensors.lidar.pointlio.pointlio_blueprints import mid360_for_pointlio
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
+from dimos.mapping.ray_tracing.viz import MAP_REGIONS_ENTITY, render_map_region
 from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
-from dimos.navigation.global_planner.viz import nav_static, nav_visual_override
+from dimos.navigation.global_planner.viz import HEIGHT_RANGE, nav_static, nav_visual_override
 from dimos.navigation.local_planner.native import LocalPlannerNative
 from dimos.navigation.local_planner.viz import motion_visual_override
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.trajectory_follower.basic.module import BasicPathFollower
 from dimos.navigation.trajectory_follower.fancy.native import TrajectoryFollowerNative
+from dimos.navigation.twist_smoother.module import TwistSmoother
 from dimos.protocol.service.zenohservice import ZenohConfig
 from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.robot.unitree.go2.dds.module import GO2DDS
@@ -66,7 +69,6 @@ from dimos.robot.unitree.go2.zenoh.zenohconnection import GO2Zenoh
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 from dimos.visualization.rerun.websocket_server import RerunWebSocketServer
 from dimos.visualization.vis_module import vis_module
-from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
 
 # Raise above 0 (2.0 works) to draw what the planner searched over: surface, nodes and
 # cost-colored edges. Drives both its publishing and the rerun overrides.
@@ -116,6 +118,7 @@ def _rerun_blueprint() -> Any:
                     "world/pointlio_map": rrb.EntityBehavior(visible=False),
                     "world/lidar": rrb.EntityBehavior(visible=False),
                     "world/nodes": rrb.EntityBehavior(visible=False),
+                    "world/node_edges": rrb.EntityBehavior(visible=False),
                 },
             ),
             column_shares=[1, 2],
@@ -317,7 +320,16 @@ go2_dds_motion_pointlio = autoconnect(
     RayTracingVoxelMap.blueprint(**ray_tracing_config.model_dump(exclude_unset=True)),
     _mls_planner_motion.remappings([(MLSPlannerNative, "path", "planner_path")]),
     LocalPlannerNative.blueprint(body_dilate_m=MOTION_BODY_DILATE_M),
-    TrajectoryFollowerNative.blueprint(),
+    # the follower's 10 Hz steps go through the smoother on their way to MovementManager
+    TrajectoryFollowerNative.blueprint().remappings(
+        [(TrajectoryFollowerNative, "nav_cmd_vel", "nav_cmd_vel_raw")]
+    ),
+    TwistSmoother.blueprint().remappings(
+        [
+            (TwistSmoother, "cmd_vel_in", "nav_cmd_vel_raw"),
+            (TwistSmoother, "cmd_vel_out", "nav_cmd_vel"),
+        ]
+    ),
     mid360_for_pointlio(lidar_ip="192.168.123.157", host_ip="192.168.123.5"),
     PointLio.blueprint(),
 ).global_config(
@@ -325,16 +337,14 @@ go2_dds_motion_pointlio = autoconnect(
     zenoh_connect="tcp/127.0.0.1:7447",
     # the router is a native process; the peers keep dialing until it is up
     zenoh_connect_timeout=15.0,
-    n_workers=11,
+    n_workers=12,
     robot_model="unitree_go2",
 )
 
 # No loaded_map republish: the channel is never-drop. Headless on the robot, so the viewer
 # modules are dropped and go2-viewer on another machine is the screen.
 go2_dds_motion_pointlio_relocalization = autoconnect(
-    go2_dds_motion_pointlio.disabled_modules(
-        RerunBridgeModule, WebsocketVisModule, RerunWebSocketServer
-    ),
+    go2_dds_motion_pointlio.disabled_modules(RerunBridgeModule, RerunWebSocketServer),
     relocalization(republish_loaded_map=0.0),
 ).global_config(n_workers=9)
 
@@ -345,12 +355,23 @@ go2_dds_motion_pointlio_relocalization = autoconnect(
 # The router is named, not scouted: behind wifi multicast scouting finds nothing
 # (docs/usage/transports/zenoh.md). --robot-ip still adds its endpoint alongside.
 GO2_ROUTER = os.environ.get("DIMOS_GO2_ROUTER", "tcp/go22:7447")
+# Ceiling cut for map_regions in odom: the origin is the lidar at start, ~0.5m above the floor.
+MAP_CEILING_M = 1.5
 
 go2_viewer = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config={
-            **_rerun_config(),
+            **_rerun_config(
+                {
+                    MAP_REGIONS_ENTITY: partial(
+                        render_map_region,
+                        voxel_size=voxel_size,
+                        height_range=HEIGHT_RANGE,
+                        max_z=MAP_CEILING_M,
+                    )
+                }
+            ),
             "topics": [
                 "tf",
                 "odometry",
