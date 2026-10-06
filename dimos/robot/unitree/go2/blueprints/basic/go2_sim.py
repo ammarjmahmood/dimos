@@ -1,0 +1,86 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The legged Go2 with its Mid-360 in a generated office, driven from the keyboard.
+
+No robot, no PointLio: the sim world publishes PointLio's output contract from ground
+truth. WASD in the pygame window drives it, rerun shows the clouds, the tf tree and the
+scene. ``dimos run go2-sim``.
+"""
+
+from __future__ import annotations
+
+from types import ModuleType
+from typing import TYPE_CHECKING
+
+from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.global_config import global_config
+from dimos.navigation.global_planner.viz import robot_body_box
+from dimos.navigation.movement_manager.movement_manager import MovementManager
+from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
+from dimos.robot.unitree.go2.go2_mid360_static_transforms import Go2Mid360StaticTf
+from dimos.robot.unitree.keyboard_teleop import KeyboardTeleop
+from dimos.simulation.go2_sim.world import SimGo2World
+from dimos.visualization.vis_module import vis_module
+
+if TYPE_CHECKING:
+    from rerun._baseclasses import Archetype
+    from rerun.blueprint import Blueprint
+
+    from dimos.msgs.nav_msgs.LineSegments3D import LineSegments3D
+
+
+def _robot_body(rr: ModuleType) -> list[Archetype]:
+    return [
+        robot_body_box(ROBOT_LENGTH, ROBOT_WIDTH, ROBOT_HEIGHT),
+        rr.Transform3D(parent_frame="tf#/base_link"),
+    ]
+
+
+def _scene_lines(scene: LineSegments3D) -> Archetype:
+    return scene.to_rerun(radii=0.01)
+
+
+def _rerun_blueprint() -> Blueprint:
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    return rrb.Blueprint(
+        rrb.Spatial3DView(
+            origin="world",
+            name="3D",
+            background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
+            line_grid=rrb.LineGrid3D(plane=rr.components.Plane3D.XY.with_distance(0.5)),
+        ),
+        rrb.TimePanel(state="hidden"),
+        rrb.SelectionPanel(state="hidden"),
+    )
+
+
+_rerun_config = {
+    "blueprint": _rerun_blueprint,
+    "tf_axes": 0.3,
+    "static": {"world/robot_body": _robot_body},
+    "visual_override": {"world/scene": _scene_lines},
+}
+
+go2_sim = autoconnect(
+    vis_module(viewer_backend=global_config.viewer, rerun_config=_rerun_config),
+    SimGo2World.blueprint(),
+    Go2Mid360StaticTf.blueprint(),
+    MovementManager.blueprint(),
+    KeyboardTeleop.blueprint(linear_speed=0.5, angular_speed=0.8).remappings(
+        [(KeyboardTeleop, "cmd_vel", "tele_cmd_vel")]
+    ),
+).global_config(transport="zenoh", zenoh_gossip=False, n_workers=6, robot_model="unitree_go2")

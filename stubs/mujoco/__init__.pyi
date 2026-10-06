@@ -102,6 +102,10 @@ class mjtObj:
     mjOBJ_SITE: int
     mjOBJ_TENDON: int
 
+class mjtCamera:
+    mjCAMERA_FREE: int
+    mjCAMERA_TRACKING: int
+
 class mjtGeom:
     mjGEOM_PLANE: int
     mjGEOM_SPHERE: int
