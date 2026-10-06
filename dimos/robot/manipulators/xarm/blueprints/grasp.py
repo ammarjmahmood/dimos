@@ -28,6 +28,7 @@ coordinator, pick-and-place, scene registration -- is the same stack either way.
 from __future__ import annotations
 
 from dimos.control.coordinator import TaskConfig
+from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.global_config import global_config
 from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
@@ -117,6 +118,7 @@ if SIMULATED:
     # of the 12 cm pedestal data/xarm7 uses. Inheriting that offset would put the
     # planning model 12 cm above the arm MuJoCo simulates.
     _model = make_xarm7_sim_robot_config(
+        include_gripper_state=True,
         base_pose=PoseStamped(frame_id="world"),
         # MuJoCo publishes the camera directly in world.
         tf_extra_links=[],
@@ -215,6 +217,8 @@ _REMAPPINGS = [
 _XARM_GRASP_MODULES = (
     ManipulationModule.blueprint(
         model=_model,
+        # drive_joint is measured model state, not a trajectory command joint.
+        trajectory_tasks={JOINT_TRAJECTORY_TASK_NAME: list(_model.planning_groups[0].joint_names)},
         static_transforms=[] if SIMULATED else [XARM_WRIST_CAMERA_TRANSFORM],
         planning_timeout=10.0,
         visualization={"backend": "viser"},

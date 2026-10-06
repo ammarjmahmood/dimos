@@ -28,7 +28,7 @@ pytest.importorskip("roboplan.core")
 
 from dimos.core.stream import Out, Transport
 from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
-from dimos.manipulation.planning.spec.config import RobotModelConfig
+from dimos.manipulation.planning.spec.config import JointStateTransform, RobotModelConfig
 from dimos.manipulation.pointcloud.robot_pointcloud_filter_module import RobotPointCloudFilterModule
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -52,7 +52,15 @@ _URDF = """<robot name="test" version="1.0">
 def make_module(tmp_path, monkeypatch):
     modules = []
 
-    def make(*, xml=_URDF, joint_names=("slide",), planar=False, tf_extra_links=(), **overrides):
+    def make(
+        *,
+        xml=_URDF,
+        joint_names=("slide",),
+        planar=False,
+        tf_extra_links=(),
+        state_transforms=None,
+        **overrides,
+    ):
         model_path = tmp_path / f"robot-{len(modules)}.urdf"
         model_path.write_text(xml)
         model = RobotModel.from_file(model_path)
@@ -67,6 +75,7 @@ def make_module(tmp_path, monkeypatch):
         config = RobotModelConfig(
             model=model,
             joint_names=list(joint_names),
+            joint_state_transforms=state_transforms or {},
             base_link=base_link,
             base_pose=PoseStamped(frame_id="world", position=[1, 0, 0]),
             tf_extra_links=list(tf_extra_links),
@@ -523,3 +532,53 @@ async def test_closed_filter_cannot_publish_a_pending_capture(make_module, mocke
     await module._handle_pointcloud(_cloud([[0.2, 0, 0]]))
 
     publish.assert_not_called()
+
+
+@pytest.fixture
+def measured_gripper_module(make_module):
+    return make_module(
+        state_transforms={
+            "slide": JointStateTransform(
+                source="arm/gripper", scale=-1, offset=0.85, source_bounds=(0, 0.85)
+            )
+        }
+    )
+
+
+def test_delayed_capture_uses_converted_measured_gripper_state(measured_gripper_module):
+    module = measured_gripper_module
+    module._on_joint_state(JointState(ts=1, name=["arm/gripper"], position=[0.85]))
+    module._on_joint_state(JointState(ts=2, name=["arm/gripper"], position=[0.35]))
+    _tf(module, stamp=1)
+    _tf(module, stamp=2)
+
+    first = _filter(module, _cloud([[0.1, 0, 0], [0.6, 0, 0]], stamp=1))
+    second = _filter(module, _cloud([[0.1, 0, 0], [0.6, 0, 0]], stamp=2))
+
+    assert first is not None and second is not None
+    assert (first.ts, second.ts) == (1, 2)
+    np.testing.assert_allclose(first.points_f32(), [[0.6, 0, 0]])
+    np.testing.assert_allclose(second.points_f32(), [[0.1, 0, 0]])
+
+
+@pytest.mark.parametrize(
+    "names,positions,stamp",
+    [
+        ([], [], 1),
+        (["arm/gripper"], [850], 1),
+        (["arm/gripper"], [-0.01], 1),
+        (["arm/gripper"], [float("nan")], 1),
+        (["arm/gripper"], [0], float("nan")),
+        (["slide"], [0], 1),
+        (["arm/gripper", "slide"], [0, 0], 1),
+        (["arm/gripper"], [0], 0.8),
+    ],
+)
+def test_missing_invalid_or_stale_gripper_measurement_drops_capture(
+    measured_gripper_module, names, positions, stamp
+):
+    module = measured_gripper_module
+    module._on_joint_state(JointState(ts=stamp, name=names, position=positions))
+    _tf(module)
+
+    assert _filter(module, _cloud([[0.2, 0, 0]])) is None

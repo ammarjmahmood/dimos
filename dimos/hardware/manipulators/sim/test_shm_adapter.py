@@ -28,6 +28,7 @@ from dimos.control.hardware_interface import ConnectedHardware
 import dimos.hardware.manipulators.sim.adapter as adapter_mod
 from dimos.hardware.manipulators.sim.adapter import ShmMujocoAdapter
 from dimos.hardware.manipulators.spec import ControlMode, ManipulatorAdapter
+from dimos.robot.manipulators.xarm.config import make_xarm7_sim_robot_config
 from dimos.simulation.engines import mujoco_shm
 from dimos.simulation.engines.mujoco_shm import ManipShmWriter
 from dimos.simulation.engines.mujoco_sim_module import _WholeBodySimHooks
@@ -38,6 +39,18 @@ ARM_DOF = 7
 GRIPPER_RANGE = (0.0, 0.85)
 GRIPPER_CTRL_RANGE = (0.0, 255.0)
 GRIPPER_CLOSED, GRIPPER_OPEN = GRIPPER_RANGE
+
+
+@pytest.mark.parametrize("raw", [0.0, 0.33, 0.85])
+def test_model_conversion_recovers_raw_sim_measurement(
+    adapter_with_gripper, writer_with_gripper, raw
+):
+    writer_with_gripper.write_gripper_state(raw)
+    measured = adapter_with_gripper.read_joint_positions()[-1]
+    config = make_xarm7_sim_robot_config(include_gripper_state=True)
+
+    assert measured == pytest.approx(0.85 - raw)
+    assert config.joint_state_transforms["drive_joint"].position(measured) == pytest.approx(raw)
 
 
 def start_heartbeat(writer: ManipShmWriter) -> tuple[threading.Event, threading.Thread]:

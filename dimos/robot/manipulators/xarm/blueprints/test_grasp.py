@@ -18,6 +18,7 @@ import importlib
 
 import pytest
 
+from dimos.control.tasks.trajectory_task.trajectory_task import JOINT_TRAJECTORY_TASK_NAME
 from dimos.core.global_config import global_config
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.pointcloud.robot_pointcloud_filter_module import RobotPointCloudFilterModule
@@ -37,6 +38,13 @@ def test_grasp_filters_captures_before_fusion_with_the_planners_model(monkeypatc
             mapping = atoms[RayTracingVoxelMap]
 
             assert filtering.kwargs["model"] is planning.kwargs["model"]
+            model = filtering.kwargs["model"]
+            assert ("drive_joint" in model.joint_names) == bool(simulation)
+            assert bool(model.joint_state_transforms) == bool(simulation)
+            assert planning.kwargs["trajectory_tasks"][JOINT_TRAJECTORY_TASK_NAME] == list(
+                model.planning_groups[0].joint_names
+            )
+            assert "drive_joint" not in model.planning_groups[0].joint_names
             assert blueprint.remapping_map[(mapping.name, "lidar")] == "filtered_pointcloud"
             assert blueprint.remapping_map[(planning.name, "voxel_map")] == "global_map"
             assert {stream.name for stream in planning.streams}.isdisjoint(
