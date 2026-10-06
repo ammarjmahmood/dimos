@@ -33,7 +33,7 @@ from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.control.coordinator import ControlCoordinator
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import IO, In, Out
+from dimos.core.stream import IO, In
 from dimos.manipulation.execution_manager import PlanExecutionManager
 from dimos.manipulation.manipulation_spec import (
     UNCONFIRMED_STOP,
@@ -218,8 +218,6 @@ class ManipulationModule(Module):
     # Input: occupied cells of a mapped workspace, in the planning frame. Each
     # message is a complete map, so it replaces the obstacle rather than adding.
     voxel_map: In[PointCloud2]
-    pointcloud: In[PointCloud2]
-    filtered_pointcloud: Out[PointCloud2]
     objects: In[list[DetObject]]
     tf: IO[TFMessage]
 
@@ -271,8 +269,6 @@ class ManipulationModule(Module):
             if self.coordinator_joint_state is not None:
                 self.coordinator_joint_state.subscribe(self._on_joint_state)
                 logger.info("Subscribed to coordinator_joint_state port")
-            if self.pointcloud is not None and self.pointcloud.transport is not None:
-                self.process_observable(self.pointcloud.pure_observable(), self._handle_pointcloud)
             logger.info("ManipulationModule started")
         except BaseException:
             self._started = False
@@ -1287,17 +1283,6 @@ class ManipulationModule(Module):
             mesh_path=mesh_path,
         )
         return self._world_monitor.update_obstacle(obstacle)
-
-    async def _handle_pointcloud(self, cloud: PointCloud2) -> None:
-        """Dispatch capture processing without blocking the stream event loop."""
-        if self._world_monitor is not None:
-            await asyncio.to_thread(
-                self._world_monitor.publish_filtered_pointcloud,
-                cloud,
-                self.tfbuffer,
-                self.filtered_pointcloud.publish,
-                world_frame=self.config.world_frame,
-            )
 
     async def handle_voxel_map(self, cloud: PointCloud2) -> None:
         """Replace the mapped workspace, held as one octree obstacle.
