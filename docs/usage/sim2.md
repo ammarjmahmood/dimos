@@ -93,11 +93,13 @@ Use `unitree-g1-groot-wbc` for the original ideal lidar. Both accept the same
 `mid360_link` asset site, including its inverted G1 mounting orientation; it
 does not crop the scan's vertical field of view.
 
-`Mid360` retains PimSim's official Livox four-channel angular sequence. Its
-800,000 samples repeat every four seconds at the nominal 200,000 rays/s.
+`Mid360` uses a continuous four-channel, two-rotor Fourier firing pattern.
+Passive G1 hardware measurements exposed the opposite sweep direction in
+the previous Livox reference table; that table and its artificial four-second
+repetition have been replaced, not retained as another sensor mode.
 The default is 20,000 emitted rays per 100 ms scan, with scene/robot motion
 reconstructed in 200 Hz bins. The attributed data ships separately as the
-approximately 3 MB `mid360_pattern` data archive. Optional `model_kwargs`
+small `mid360_pattern` data archive. Optional `model_kwargs`
 such as `{"downsample": 4}` retain every fourth complete four-laser group.
 
 The existing lidar worker exposes these streams, without an additional worker:
@@ -123,12 +125,15 @@ episodes. `g1_lidar.sensor_status()` reports captured/dropped scans, ray and
 return counts, last capture time and history availability. Restart the stack
 after updating: the internal shared-memory layout changed.
 
-One Mid360 combines the retained angular sequence with Andrew's #4441
+One Mid360 combines Andrew's #4441 Fourier coefficients with his
 range/incidence-dependent noise and grazing-angle dropout response. Set
 `model_kwargs={"noise": False, "dropout": False}` for geometry diagnostics;
 this does not select a different scanner. Noise is seeded per scan, so a
-missed scan does not shift later samples. The Fourier-fitted sequence has
-not replaced the official reference without calibration evidence.
+missed scan does not shift later samples. Two rotor rates were fitted on one
+G1 capture and validated on a separate recording, with the shape coefficients
+unchanged. See the [hardware comparison](/experiments/mid360/README.md)
+for method, angular residuals and limitations. This is not a claim that every
+Mid360 has identical calibration.
 
 Self occlusion uses this robot's geometry, not a Go2 blindspot map. The G1
 explicitly excludes its `head_link` mesh, which seals the optical window and

@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PimSim's official four-channel Livox sequence, with explicit acquisition times."""
+"""Continuous four-channel Mid360 firing and approximate range response.
+
+Fourier geometry adapted from Andrew's PR #4441. Hardware comparison and
+calibration provenance: experiments/mid360/README.md.
+"""
 
 from dataclasses import dataclass
 from functools import lru_cache
@@ -25,14 +29,64 @@ from dimos.sim2.sensors.spec import TimedRays
 from dimos.utils.data import get_data
 
 
+class _FiringPattern:
+    def __init__(
+        self,
+        fast: float,
+        slow: float,
+        order_fast: int,
+        order_slow: int,
+        coefs: NDArray[np.float64],
+    ) -> None:
+        pairs = [
+            (m, q)
+            for m in range(order_fast + 1)
+            for q in range(-order_slow, order_slow + 1)
+            if not (m == 0 and q < 0)
+        ]
+        columns = sum(1 if pair == (0, 0) else 2 for pair in pairs)
+        if coefs.shape != (4, columns, 3) or not np.isfinite(coefs).all():
+            raise ValueError("Mid360 coefficients must match four channels and harmonic orders")
+        self.fast, self.slow = fast, slow
+        self.order_fast, self.order_slow = order_fast, order_slow
+        self.m = np.array([m for m, _ in pairs])
+        self.q = np.array([q + order_slow for _, q in pairs])
+        self.folded = np.empty((len(pairs), 12), dtype=np.complex128)
+        column = 0
+        for index, pair in enumerate(pairs):
+            self.folded[index] = coefs[:, column].ravel()
+            column += 1
+            if pair != (0, 0):
+                self.folded[index] -= 1j * coefs[:, column].ravel()
+                column += 1
+
+    def directions(self, indices: NDArray[np.int64], rate: int) -> NDArray[np.float64]:
+        groups, inverse = np.unique(indices // 4, return_inverse=True)
+        times = groups * (4.0 / rate)
+        fast = np.exp(2j * np.pi * self.fast * times)
+        slow = np.exp(2j * np.pi * self.slow * times)
+        ones = np.ones(len(groups))
+        # Two exponentials per group; build harmonics by multiplication.
+        fast_pow = np.cumprod(np.column_stack([ones, *[fast] * self.order_fast]), axis=1)
+        slow_pos = np.cumprod(np.column_stack([ones, *[slow] * self.order_slow]), axis=1)
+        slow_pow = np.concatenate([np.conj(slow_pos[:, :0:-1]), slow_pos], axis=1)
+        harmonic = fast_pow[:, self.m] * slow_pow[:, self.q]
+        vectors = (harmonic @ self.folded).real.reshape(-1, 4, 3)
+        result: NDArray[np.float64] = vectors[inverse, indices % 4]
+        result /= np.linalg.norm(result, axis=1, keepdims=True)
+        return result
+
+
 @lru_cache(maxsize=1)
-def _pattern() -> NDArray[np.uint16]:
-    with np.load(get_data("mid360_pattern") / "mid360_pattern.npz", allow_pickle=False) as archive:
-        angles = np.asarray(archive["angles"], dtype=np.uint16)
-    if angles.shape != (800_000, 2):
-        raise ValueError("the official Mid360 sequence must contain 800,000 angular pairs")
-    angles.setflags(write=False)
-    return angles
+def _pattern() -> _FiringPattern:
+    with np.load(get_data("mid360_pattern/fourier.npz"), allow_pickle=False) as archive:
+        return _FiringPattern(
+            float(archive["f1"]),
+            float(archive["f2"]),
+            int(archive["m1"]),
+            int(archive["m2"]),
+            np.asarray(archive["coefs"], dtype=np.float64),
+        )
 
 
 @dataclass(frozen=True)
@@ -63,19 +117,17 @@ class Mid360:
             raise ValueError("Mid360 requires a positive motion rate and ordered range limits")
 
     def scan(self, start: float, duration: float) -> TimedRays:
+        if not math.isfinite(start) or start < 0:
+            raise ValueError("Mid360 scan start must be finite and nonnegative")
+        if not math.isfinite(duration):
+            raise ValueError("Mid360 scan duration must contain complete four-laser groups")
         count = round(duration * self.point_rate_hz)
         if duration <= 0 or not math.isclose(count, duration * self.point_rate_hz) or count % 4:
             raise ValueError("Mid360 scan duration must contain complete four-laser groups")
         offsets = (np.arange(0, count, 4 * self.downsample)[:, None] + np.arange(4)).ravel()
-        indices = (round(start * self.point_rate_hz) + offsets) % len(_pattern())
-        angles = _pattern()[indices].astype(np.float64) / 100.0
-        azimuth = np.deg2rad(angles[:, 0])
-        elevation = np.deg2rad(90.0 - angles[:, 1])
-        horizontal = np.cos(elevation)
+        indices = round(start * self.point_rate_hz) + offsets
         return TimedRays(
-            directions=np.column_stack(
-                (horizontal * np.cos(azimuth), horizontal * np.sin(azimuth), np.sin(elevation))
-            ),
+            directions=_pattern().directions(indices, self.point_rate_hz),
             offsets=offsets.astype(np.float64) / self.point_rate_hz,
             lines=(indices % 4).astype(np.uint8),
         )

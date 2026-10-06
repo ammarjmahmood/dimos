@@ -15,7 +15,7 @@
 import numpy as np
 import pytest
 
-from dimos.sim2.sensors.lidar.models.mid360 import Mid360
+from dimos.sim2.sensors.lidar.models.mid360 import Mid360, _FiringPattern
 
 
 def test_return_noise_is_seeded_per_scan_and_rejects_grazing_misses():
@@ -35,18 +35,33 @@ def test_noise_free_diagnostics_keep_the_same_valid_ranges():
     assert model.measure(np.array([-1.0, 0.2, 10]), np.ones(3), 0).tolist() == [-1, 0.2, 10]
 
 
+def test_fourier_evaluation_matches_real_sine_cosine_series_across_channels():
+    coefs = np.random.default_rng(7).normal(size=(4, 9, 3))
+    pattern = _FiringPattern(3.25, 1.1, 1, 1, coefs)
+    indices = np.array([0, 1, 2, 3, 41, 802, 800_003], dtype=np.int64)
+    expected = []
+    for index in indices:
+        fast, slow = 2 * np.pi * (index // 4 * 4 / 200_000) * np.array([3.25, 1.1])
+        phases = np.array([slow, fast - slow, fast, fast + slow])
+        basis = np.r_[1, np.column_stack((np.cos(phases), np.sin(phases))).ravel()]
+        vector = basis @ coefs[index % 4]
+        expected.append(vector / np.linalg.norm(vector))
+    np.testing.assert_allclose(pattern.directions(indices, 200_000), expected, atol=1e-12)
+
+
 @pytest.fixture
 def pattern(mocker):
-    angles = np.tile(
-        np.array([[0, 9000], [9000, 9000], [18000, 9000], [27000, 9000]], dtype=np.uint16),
-        (200_000, 1),
+    coefs = np.zeros((4, 3, 3))
+    coefs[:, 1] = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+    coefs[:, 2] = [[0, 1, 0], [-1, 0, 0], [0, -1, 0], [1, 0, 0]]
+    mocker.patch(
+        "dimos.sim2.sensors.lidar.models.mid360._pattern",
+        return_value=_FiringPattern(2.3, 0, 1, 0, coefs),
     )
-    angles[20_000:40_000, 1] = 4500
-    mocker.patch("dimos.sim2.sensors.lidar.models.mid360._pattern", return_value=angles)
     return Mid360()
 
 
-def test_scan_preserves_official_phase_channels_and_capture_times(pattern):
+def test_scan_preserves_channels_timing_and_continuous_absolute_phase(pattern):
     first = pattern.scan(0, 0.1)
     second = pattern.scan(0.1, 0.1)
     assert len(first.offsets) == 20_000
@@ -55,8 +70,14 @@ def test_scan_preserves_official_phase_channels_and_capture_times(pattern):
     np.testing.assert_allclose(
         first.directions[:4], [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]], atol=1e-12
     )
-    assert second.directions[:, 2] == pytest.approx(np.sqrt(0.5))
-    np.testing.assert_array_equal(pattern.scan(4, 0.1).directions, first.directions)
+    np.testing.assert_allclose(
+        second.directions[0], [np.cos(2 * np.pi * 0.23), np.sin(2 * np.pi * 0.23), 0], atol=1e-12
+    )
+    np.testing.assert_allclose(
+        pattern.scan(0, 0.2).directions, np.concatenate([first.directions, second.directions])
+    )
+    assert not np.allclose(pattern.scan(4, 0.1).directions, first.directions)
+    np.testing.assert_allclose(np.linalg.norm(first.directions, axis=1), 1)
 
 
 def test_downsampling_keeps_four_lasers_and_original_time_offsets(pattern):
@@ -65,12 +86,21 @@ def test_downsampling_keeps_four_lasers_and_original_time_offsets(pattern):
     assert rays.lines[:8].tolist() == [0, 1, 2, 3, 0, 1, 2, 3]
     assert rays.offsets[4] == 32 / 200_000
     assert rays.offsets[-1] > 0.099
+    np.testing.assert_allclose(
+        rays.directions, pattern.scan(0, 0.1).directions.reshape(-1, 4, 3)[::8].reshape(-1, 3)
+    )
 
 
-@pytest.mark.parametrize("duration", [0, -0.1, 0.100001, 0.000005])
+@pytest.mark.parametrize("duration", [0, -0.1, 0.100001, 0.000005, float("nan")])
 def test_scan_rejects_partial_channel_groups(pattern, duration):
     with pytest.raises(ValueError, match="four-laser"):
         pattern.scan(0, duration)
+
+
+@pytest.mark.parametrize("start", [-1, float("inf"), float("nan")])
+def test_scan_rejects_invalid_start(pattern, start):
+    with pytest.raises(ValueError, match="start"):
+        pattern.scan(start, 0.1)
 
 
 @pytest.mark.parametrize(

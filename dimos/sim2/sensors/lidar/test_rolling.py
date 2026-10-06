@@ -23,7 +23,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.sim2.ipc.abi import FrameField, FrameLayout, make_channel_descriptor
 from dimos.sim2.ipc.channel import FrameMetadata, RobotChannel
 from dimos.sim2.runtime import STATE
-from dimos.sim2.sensors.lidar.models.mid360 import Mid360
+from dimos.sim2.sensors.lidar.models.mid360 import Mid360, _FiringPattern
 from dimos.sim2.sensors.lidar.module import LidarModule
 from dimos.sim2.sensors.reader import WorldReader
 from dimos.sim2.sensors.spec import Imu, Lidar
@@ -99,9 +99,11 @@ def history(tmp_path):
 @pytest.fixture
 def scanner(history, mocker):
     reader, _, _ = history
+    coefs = np.zeros((4, 1, 3))
+    coefs[:, 0, 0] = 1
     mocker.patch(
         "dimos.sim2.sensors.lidar.models.mid360._pattern",
-        return_value=np.tile(np.array([[0, 9000]], dtype=np.uint16), (800_000, 1)),
+        return_value=_FiringPattern(0, 0, 0, 0, coefs),
     )
     module = LidarModule(
         robot_id="g1",
