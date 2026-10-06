@@ -249,6 +249,7 @@ class RawRobotBridge(Module):
     def start(self) -> None:
         super().start()
         cfg = self.config
+        self._stop.clear()  # a restarted bridge drives again
         self._topics = RawTopics(cfg.endpoint, cfg.prefix, listen=True)
         q = cfg.jpeg_quality
         self.color_image.subscribe(lambda img: self._put("camera/jpeg", jpeg_bytes(img, q), img.ts))
