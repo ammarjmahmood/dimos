@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Measure the actual G1 Point-LIO blueprint; truth is read only by this probe."""
+"""Measure a Point-LIO blueprint; truth is read only by this probe."""
 
 import argparse
 from collections import deque
@@ -40,9 +40,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seconds", type=float, default=15)
     parser.add_argument("--move", action="store_true")
+    parser.add_argument("--robot", choices=("g1", "go2"), default="g1")
     args = parser.parse_args()
     global_config.update(simulation="mujoco", viewer="none", transport="zenoh")
-    blueprint = get_blueprint_by_name("unitree-g1-groot-mid360-pointlio")
+    name = (
+        "unitree-g1-groot-mid360-pointlio"
+        if args.robot == "g1"
+        else "unitree-go2-freewalk-pointlio"
+    )
+    blueprint = get_blueprint_by_name(name)
     blueprint = replace(
         blueprint,
         blueprints=tuple(
@@ -85,7 +91,7 @@ def main() -> None:
         coordinator = ModuleCoordinator.build(blueprint, parsed_config=parsed)
         startup = time.monotonic() - before
         sim = coordinator.get_instance(SimulationModule)
-        lidar = coordinator.get_instance("g1_lidar")
+        lidar = coordinator.get_instance(f"{args.robot}_lidar")
         deadline = time.monotonic() + 20
         while not estimates:
             if time.monotonic() > deadline:
@@ -152,7 +158,7 @@ def main() -> None:
         assert evidence["imu_hz"] > 150 and evidence["lidar_hz"] > 7
         assert max(errors) < 0.25, "Point-LIO diverged from independently observed motion"
         if args.move:
-            assert evidence["truth_displacement_m"] > 0.1, "G1 did not move"
+            assert evidence["truth_displacement_m"] > 0.1, "robot did not move"
     finally:
         if coordinator is not None:
             command.broadcast(None, Twist())
