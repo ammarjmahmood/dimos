@@ -54,7 +54,6 @@ from dimos.navigation.local_planner.viz import motion_visual_override
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.navigation.trajectory_follower.basic.module import BasicPathFollower
 from dimos.navigation.trajectory_follower.fancy.native import TrajectoryFollowerNative
-from dimos.navigation.twist_smoother.module import TwistSmoother
 from dimos.protocol.service.zenohservice import ZenohConfig
 from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.robot.unitree.go2.dds.module import GO2DDS
@@ -320,16 +319,7 @@ go2_dds_mid360 = autoconnect(
     RayTracingVoxelMap.blueprint(**ray_tracing_config.model_dump(exclude_unset=True)),
     _mls_planner_motion.remappings([(MLSPlannerNative, "path", "planner_path")]),
     LocalPlannerNative.blueprint(body_dilate_m=MOTION_BODY_DILATE_M),
-    # the follower's 10 Hz steps go through the smoother on their way to MovementManager
-    TrajectoryFollowerNative.blueprint().remappings(
-        [(TrajectoryFollowerNative, "nav_cmd_vel", "nav_cmd_vel_raw")]
-    ),
-    TwistSmoother.blueprint().remappings(
-        [
-            (TwistSmoother, "cmd_vel_in", "nav_cmd_vel_raw"),
-            (TwistSmoother, "cmd_vel_out", "nav_cmd_vel"),
-        ]
-    ),
+    TrajectoryFollowerNative.blueprint(),
     mid360_for_pointlio(lidar_ip="192.168.123.157", host_ip="192.168.123.5"),
     PointLio.blueprint(),
 ).global_config(
@@ -338,7 +328,7 @@ go2_dds_mid360 = autoconnect(
     # no link wait: the router is GO2DDS, which only starts after every peer has
     # deployed, so waiting always times out; zenoh keeps dialing in the background
     zenoh_connect_timeout=0.0,
-    n_workers=12,
+    n_workers=11,
     robot_model="unitree_go2",
 )
 
