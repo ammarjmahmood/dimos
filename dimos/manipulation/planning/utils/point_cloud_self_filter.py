@@ -28,11 +28,9 @@ from pydantic import Field
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.protocol.tf.tf import TF
 from dimos.robot.assets.model import RobotModel
 from dimos.types.timestamped import TimestampedBufferCollection
 from dimos.utils.logging_config import setup_logger
@@ -71,22 +69,12 @@ class PointCloudSelfFilter(Module):
 
     @rpc
     def start(self) -> None:
+        _ = self.tfbuffer
         super().start()
-        self._tf = TF(self.tf)
-
-    @rpc
-    def stop(self) -> None:
-        super().stop()
 
     async def handle_pointcloud(self, cloud: PointCloud2) -> None:
         """Filter the latest capture without starving TF transport callbacks."""
         await asyncio.to_thread(self._on_pointcloud, cloud)
-
-    def filter_cloud(self, cloud: PointCloud2) -> PointCloud2 | None:
-        """Filter one aligned capture without changing its frame or point fields."""
-        # One native filter owns mutable scratch; serialize filtering and publication.
-        with self._filter_lock:
-            return self._filter_capture(cloud)
 
     async def handle_coordinator_joint_state(self, state: JointState) -> None:
         await asyncio.to_thread(self.add_joint_state, state)
@@ -101,39 +89,39 @@ class PointCloudSelfFilter(Module):
                 if latest is not None:
                     self._states.prune_old(latest.ts - self.config.state_history_s)
 
-    def _filter_capture(self, cloud: PointCloud2) -> PointCloud2 | None:
-        if not np.isfinite(cloud.ts) or (
-            self._last_capture is not None and cloud.ts < self._last_capture
-        ):
-            logger.warning("Dropping cloud: invalid or out-of-order capture timestamp")
-            return None
-        base_from_sensor = self._lookup(self._base_link, cloud.frame_id, cloud.ts)
-        q = self._capture_configuration(cloud.ts)
-        if base_from_sensor is None or q is None:
-            logger.warning("Dropping cloud: capture-time robot state or TF unavailable")
-            return None
-        points = cloud.points_f32()
-        if not np.isfinite(points).all():
-            return None
-        # This Scene is rooted at the URDF base, so its world is the base frame.
-        transform = base_from_sensor.to_matrix()
-        base_points = np.asarray(points @ transform[:3, :3].T + transform[:3, 3], dtype=np.float64)
-        keep = ~np.asarray(self._body_filter.computeMask(q, base_points), dtype=bool)
-        filtered = PointCloud2(frame_id=cloud.frame_id, ts=cloud.ts, seq=cloud.seq)
-        for name, values in cloud.pointcloud_tensor.point.items():
-            filtered.pointcloud_tensor.point[name] = values[keep]
-        self._last_capture = cloud.ts
-        return filtered
-
-    def _lookup(self, parent_frame: str, child_frame: str, stamp: float) -> Transform | None:
-        config = self.config
-        return self.tfbuffer.get(
-            parent_frame,
-            child_frame,
-            time_point=stamp,
-            time_tolerance=config.tf_tolerance_s,
-            forward_tolerance=config.tf_forward_tolerance_s,
-        )
+    def filter_cloud(self, cloud: PointCloud2) -> PointCloud2 | None:
+        """Filter one aligned capture without changing its frame or point fields."""
+        with self._filter_lock:
+            if not np.isfinite(cloud.ts) or (
+                self._last_capture is not None and cloud.ts < self._last_capture
+            ):
+                logger.warning("Dropping cloud: invalid or out-of-order capture timestamp")
+                return None
+            base_from_sensor = self.tfbuffer.get(
+                self._base_link,
+                cloud.frame_id,
+                time_point=cloud.ts,
+                time_tolerance=self.config.tf_tolerance_s,
+                forward_tolerance=self.config.tf_forward_tolerance_s,
+            )
+            q = self._capture_configuration(cloud.ts)
+            if base_from_sensor is None or q is None:
+                logger.warning("Dropping cloud: capture-time robot state or TF unavailable")
+                return None
+            points = cloud.points_f32()
+            if not np.isfinite(points).all():
+                return None
+            # This Scene is rooted at the URDF base, so its world is the base frame.
+            transform = base_from_sensor.to_matrix()
+            base_points = np.asarray(
+                points @ transform[:3, :3].T + transform[:3, 3], dtype=np.float64
+            )
+            keep = ~np.asarray(self._body_filter.computeMask(q, base_points), dtype=bool)
+            filtered = PointCloud2(frame_id=cloud.frame_id, ts=cloud.ts, seq=cloud.seq)
+            for name, values in cloud.pointcloud_tensor.point.items():
+                filtered.pointcloud_tensor.point[name] = values[keep]
+            self._last_capture = cloud.ts
+            return filtered
 
     def _on_pointcloud(self, cloud: PointCloud2) -> None:
         with self._filter_lock:
@@ -168,7 +156,13 @@ class PointCloudSelfFilter(Module):
                 # Multi-DOF joints have no scalar JointState representation.
                 # Recover their configuration from capture-time relative TF.
                 joint = self._joints[name]
-                parent_from_child = self._lookup(joint.parent_link, joint.child_link, stamp)
+                parent_from_child = self.tfbuffer.get(
+                    joint.parent_link,
+                    joint.child_link,
+                    time_point=stamp,
+                    time_tolerance=self.config.tf_tolerance_s,
+                    forward_tolerance=self.config.tf_forward_tolerance_s,
+                )
                 if parent_from_child is None:
                     return None
                 origin = np.asarray(
