@@ -19,8 +19,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import hashlib
+import itertools
 import json
-import math
 from typing import Literal
 
 import numpy as np
@@ -29,6 +29,7 @@ from numpy.typing import ArrayLike, NDArray
 from dimos.msgs.sim_msgs.Contacts import Kind
 
 Vec3 = tuple[float, float, float]
+Rect = tuple[float, float, float, float]
 Family = Literal["office"]
 
 SLAB_THICKNESS = 0.15
@@ -39,6 +40,9 @@ DOOR_WIDTH = (0.8, 1.2)
 TABLE_TOP_THICKNESS = 0.04
 TABLE_LEG = 0.04
 START_CLEARANCE = 1.0
+DOOR_CLEARANCE = 0.8
+DOOR_SIDE_MARGIN = 0.3
+MIN_ROOM_WIDTH = 3.0
 PLACEMENT_TRIES = 50
 
 
@@ -131,11 +135,18 @@ def _wall_with_doors(
             scene.add((door_start, at, lintel), (door_start + door_width, at + t, top), "wall")
 
 
-def _clear_of_start(x0: float, y0: float, x1: float, y1: float, start: Vec3) -> bool:
-    """Whether a footprint keeps START_CLEARANCE from the start point."""
-    dx = max(x0 - start[0], 0.0, start[0] - x1)
-    dy = max(y0 - start[1], 0.0, start[1] - y1)
-    return math.hypot(dx, dy) >= START_CLEARANCE
+def _door_zone(axis: int, at: float, start: float, width: float) -> Rect:
+    """The passage through a door: the opening plus DOOR_CLEARANCE on both sides of the wall."""
+    lo, hi = start - DOOR_SIDE_MARGIN, start + width + DOOR_SIDE_MARGIN
+    near, far = at - DOOR_CLEARANCE, at + WALL_THICKNESS + DOOR_CLEARANCE
+    return (near, lo, far, hi) if axis == 0 else (lo, near, hi, far)
+
+
+def _clear(x0: float, y0: float, x1: float, y1: float, keep_clear: list[Rect]) -> bool:
+    """Whether a footprint overlaps none of the zones."""
+    return not any(
+        x0 < kx1 and x1 > kx0 and y0 < ky1 and y1 > ky0 for kx0, ky0, kx1, ky1 in keep_clear
+    )
 
 
 def _clutter(
@@ -147,13 +158,13 @@ def _clutter(
     y1: float,
     z: float,
     n: int,
-    start: Vec3,
+    keep_clear: list[Rect],
 ) -> None:
     for _ in range(n):
         for _ in range(PLACEMENT_TRIES):
             hx, hy = _uniform(rng, 0.15, 0.5), _uniform(rng, 0.15, 0.5)
             cx, cy = _uniform(rng, x0 + hx, x1 - hx), _uniform(rng, y0 + hy, y1 - hy)
-            if _clear_of_start(cx - hx, cy - hy, cx + hx, cy + hy, start):
+            if _clear(cx - hx, cy - hy, cx + hx, cy + hy, keep_clear):
                 scene.add(
                     (cx - hx, cy - hy, z),
                     (cx + hx, cy + hy, z + _uniform(rng, 0.2, 1.0)),
@@ -170,13 +181,13 @@ def _table(
     x1: float,
     y1: float,
     z: float,
-    start: Vec3,
+    keep_clear: list[Rect],
 ) -> None:
     """A table on four legs, with its top anywhere from below to well above the robot's height."""
     lx, ly = _uniform(rng, 1.0, 1.8), _uniform(rng, 0.6, 0.9)
     for _ in range(PLACEMENT_TRIES):
         tx, ty = _uniform(rng, x0, x1 - lx), _uniform(rng, y0, y1 - ly)
-        if _clear_of_start(tx, ty, tx + lx, ty + ly, start):
+        if _clear(tx, ty, tx + lx, ty + ly, keep_clear):
             break
     else:
         return
@@ -190,7 +201,7 @@ def _table(
 
 
 def office(seed: int) -> Scene:
-    """One floor of rooms joined by doorways, with clutter and tables kept clear of the start."""
+    """One floor of rooms joined by doorways, with clutter and tables kept out of the start and the doorways."""
     rng = np.random.default_rng(seed)
     width, length = float(_uniform(rng, 12, 18)), float(_uniform(rng, 9, 13))
     z0 = float(_uniform(rng, 0.0, 0.08))
@@ -200,24 +211,34 @@ def office(seed: int) -> Scene:
     _walls(scene, 0, 0, width, length, z0, top)
     _ceiling(scene, 0, 0, width, length, top)
     wy = _uniform(rng, 0.4, 0.6) * length
-    xs = sorted(_uniform(rng, 0.25, 0.75) * width for _ in range(int(rng.integers(1, 3))))
+    splits = int(rng.integers(1, 3))
+    for _ in range(PLACEMENT_TRIES):
+        xs = sorted(_uniform(rng, 0.25, 0.75) * width for _ in range(splits))
+        if all(b - a >= MIN_ROOM_WIDTH for a, b in itertools.pairwise(xs)):
+            break
+    scene.start = (1.0, 1.0, z0)
+    sx, sy, _ = scene.start
+    keep_clear = [
+        (sx - START_CLEARANCE, sy - START_CLEARANCE, sx + START_CLEARANCE, sy + START_CLEARANCE)
+    ]
     doors_mid = []
     for a, b in zip([0.0, *xs], [*xs, width], strict=True):
         door_width = _uniform(rng, *DOOR_WIDTH)
         if b - a > door_width + 1.0:
             doors_mid.append((_uniform(rng, a + 0.4, b - door_width - 0.4), door_width))
     _wall_with_doors(scene, 1, wy, 0, width, z0, top, doors_mid)
+    keep_clear += [_door_zone(1, wy, *door) for door in doors_mid]
     for x in xs:
         for a, b in ((0.0, wy), (wy + WALL_THICKNESS, length)):
             door_width = _uniform(rng, *DOOR_WIDTH)
             door = (_uniform(rng, a + 0.3, b - door_width - 0.3), door_width)
             _wall_with_doors(scene, 0, x, a, b, z0, top, [door])
-    scene.start = (1.0, 1.0, z0)
+            keep_clear.append(_door_zone(0, x, *door))
     clutter = int(rng.integers(8, 16))
-    _clutter(scene, rng, 0.2, 0.2, width - 0.2, length - 0.2, z0, clutter, scene.start)
+    _clutter(scene, rng, 0.2, 0.2, width - 0.2, length - 0.2, z0, clutter, keep_clear)
     tables = int(rng.integers(1, 4))
     for _ in range(tables):
-        _table(scene, rng, 0.3, 0.3, width - 0.3, length - 0.3, z0, scene.start)
+        _table(scene, rng, 0.3, 0.3, width - 0.3, length - 0.3, z0, keep_clear)
     scene.params.update({"rooms": 2 * (len(xs) + 1), "clutter": clutter, "tables": tables})
     return scene
 

@@ -20,8 +20,10 @@ import pytest
 
 from dimos.msgs.sim_msgs.Contacts import Contact
 from dimos.simulation.go2_legged.policy import OnnxGo2Policy
+from dimos.simulation.go2_legged.robot import CONTROL_DT
 from dimos.simulation.go2_sim.world import (
     FRAME_DT,
+    MOUNT_R,
     TICKS_PER_FRAME,
     Go2Sim,
     LidarFrame,
@@ -100,6 +102,30 @@ def test_contacts_name_the_scene_kind_and_the_robot_part(sim: Go2Sim) -> None:
     for _ in range(25):
         sim.tick(STILL)
     assert Contact("foot", "clutter") in sim.contacts()
+
+
+def test_sensor_velocity_matches_the_motion(sim: Go2Sim) -> None:
+    for _ in range(75):
+        sim.tick(FORWARD)
+    before, _ = sim.sensor_pose()
+    linear = np.zeros(3)
+    for _ in range(10):
+        sim.tick(FORWARD)
+        linear += sim.sensor_velocity()[0] / 10
+    after, _ = sim.sensor_pose()
+    assert linear == pytest.approx((after - before) / (10 * CONTROL_DT), abs=0.1)
+    assert linear[0] > 0.1
+    turn = np.array([0.0, 0.0, 0.8])
+    for _ in range(50):
+        sim.tick(turn)
+    yaw_before = sim.robot.yaw()
+    rate = 0.0
+    for _ in range(10):
+        sim.tick(turn)
+        rate += (MOUNT_R @ sim.sensor_velocity()[1])[2] / 10
+    yaw_delta = (sim.robot.yaw() - yaw_before + np.pi) % (2 * np.pi) - np.pi
+    assert rate == pytest.approx(yaw_delta / (10 * CONTROL_DT), abs=0.1)
+    assert rate > 0.05
 
 
 def test_sensor_sits_on_the_mount_above_the_base(sim: Go2Sim) -> None:

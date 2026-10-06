@@ -199,6 +199,12 @@ class Go2Sim:
     def base_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         return self.robot.base_pose()
 
+    def sensor_velocity(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Linear velocity in the odom frame and angular velocity in the sensor frame, as PointLio reports."""
+        linear, angular = self.robot.base_velocity()
+        _, rotation = self.robot.base_pose()
+        return linear + rotation @ np.cross(angular, MOUNT_XYZ), MOUNT_R.T @ angular
+
     def contacts(self) -> list[Contact]:
         """Every (robot part, scene kind) pair in contact right now, sorted."""
         m, d = self.model, self.data
@@ -372,6 +378,7 @@ class SimGo2World(Module):
 
     def _publish_poses(self, sim: Go2Sim, stamp: float) -> None:
         position, rotation = sim.sensor_pose()
+        linear, angular = sim.sensor_velocity()
         q = Rotation.from_matrix(rotation).as_quat()
         sensor = Pose(*map(float, position), *map(float, q))
         self.odometry.publish(
@@ -380,6 +387,7 @@ class SimGo2World(Module):
                 frame_id=ODOM_FRAME_ID,
                 child_frame_id=SENSOR_FRAME_ID,
                 pose=sensor,
+                twist=Twist(Vector3(linear.tolist()), Vector3(angular.tolist())),
             )
         )
         self.tf.publish(

@@ -29,6 +29,7 @@ CONTROL_DT = 0.02
 COMMAND_SLEW = np.array([0.05, 0.04, 0.10])
 LEG_DOFS = slice(6, 18)
 BASE_QUAT = slice(3, 7)
+BASE_LINEAR_VELOCITY = slice(0, 3)
 BASE_ANGULAR_VELOCITY = slice(3, 6)
 
 FITTED_PHYSICS = {
@@ -150,6 +151,12 @@ class LeggedGo2:
 
     def base_pose(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         return self.data.xpos[self.trunk].copy(), self.data.xmat[self.trunk].reshape(3, 3).copy()
+
+    def base_velocity(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Linear velocity in the world frame and angular velocity in the base frame."""
+        return self.data.qvel[BASE_LINEAR_VELOCITY].copy(), self.data.qvel[
+            BASE_ANGULAR_VELOCITY
+        ].copy()
 
     def yaw(self) -> float:
         return yaw_of(self.data.qpos[BASE_QUAT])
