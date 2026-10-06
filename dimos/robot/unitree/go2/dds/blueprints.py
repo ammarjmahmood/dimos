@@ -188,7 +188,7 @@ GO2_ROUTER = os.environ.get("DIMOS_GO2_ROUTER", "tcp/go22:7447")
 # Ceiling cut for map_regions in odom: the origin is the lidar at start, ~0.5m above the floor.
 MAP_CEILING_M = 1.5
 
-go2_nav_viewer = autoconnect(
+go2_dds_nav_viewer = autoconnect(
     vis_module(
         viewer_backend=global_config.viewer,
         rerun_config={
