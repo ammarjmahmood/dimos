@@ -110,8 +110,10 @@ def simulation(
                 if sensor.depth:
                     ports += ("depth_image", "depth_camera_info")
             elif isinstance(sensor, Lidar):
+                if sensor.imu is not None:
+                    kwargs["rate_hz"] = max(sensor.rate_hz, sensor.imu.rate_hz)
                 blueprint = LidarModule.blueprint(**kwargs, root_body=config.root_body)
-                ports = ("pointcloud", "raw_pointcloud")
+                ports = ("pointcloud", "raw_pointcloud", "imu_raw")
             elif isinstance(sensor, Imu):
                 # IMU is sampled with the joint observation in the physics owner.
                 continue

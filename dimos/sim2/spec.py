@@ -22,7 +22,7 @@ import math
 from pathlib import Path
 from typing import Literal
 
-from dimos.sim2.sensors.spec import Imu, Mount as Mount, Sensor
+from dimos.sim2.sensors.spec import Imu, Lidar, Mount as Mount, Sensor
 
 
 class ControlInterface(str, Enum):
@@ -90,7 +90,7 @@ class RobotConfig:
         for label, names in (
             ("joint", [j.name for j in self.joints]),
             ("actuator", [j.actuator for j in self.joints]),
-            ("sensor", [s.name for s in self.sensors]),
+            ("sensor", [s.name for s in self.mounted_sensors]),
         ):
             if len(set(names)) != len(names) or any(not name for name in names):
                 raise ValueError(f"robot {label} names must be nonempty and unique")
@@ -99,8 +99,21 @@ class RobotConfig:
             raise ValueError("whole-body control requires exactly one coherent control IMU")
         if self.control == ControlInterface.MANIPULATOR and imus:
             raise ValueError("standalone IMU streaming is not implemented in this migration")
-        if any(not math.isfinite(s.rate_hz) or s.rate_hz <= 0 for s in self.sensors):
+        if any(not math.isfinite(s.rate_hz) or s.rate_hz <= 0 for s in self.mounted_sensors):
             raise ValueError("sensor rates must be finite and positive")
+
+    @property
+    def mounted_sensors(self) -> tuple[Sensor, ...]:
+        """Physical mounts, including IMUs supplied as part of a lidar device."""
+        return tuple(
+            child
+            for sensor in self.sensors
+            for child in (
+                (sensor, sensor.imu)
+                if isinstance(sensor, Lidar) and sensor.imu is not None
+                else (sensor,)
+            )
+        )
 
     def with_sensor(self, sensor: Sensor) -> RobotConfig:
         sensors = tuple(s for s in self.sensors if s.name != sensor.name)

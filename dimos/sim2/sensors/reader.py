@@ -44,12 +44,16 @@ class WorldReader:
         frame = self.channel.read_observation()
         if frame is None or frame.metadata.sequence == self.sequence:
             return False
-        mujoco.mj_setState(self.model, self.data, frame.values["state"], STATE)
-        mujoco.mj_forward(self.model, self.data)
+        self.restore(frame)
         self.sequence = frame.metadata.sequence
-        self.timestamp = float(frame.values["wall_time"][0])
         self.episode = frame.metadata.episode_id
         return True
+
+    def restore(self, frame: ChannelFrame) -> None:
+        """Restore an exact observation, including MuJoCo's mounted IMU readings."""
+        mujoco.mj_setState(self.model, self.data, frame.values["state"], STATE)
+        mujoco.mj_forward(self.model, self.data)
+        self.timestamp = float(frame.values["wall_time"][0])
 
     def history(self, start: float, end: float) -> bool:
         """Pin a complete interval from this episode; never invent missing motion."""

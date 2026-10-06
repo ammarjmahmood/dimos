@@ -37,16 +37,23 @@ def _pattern() -> NDArray[np.uint16]:
 
 @dataclass(frozen=True)
 class Mid360:
-    """Rolling, noise-free geometry. Downsampling retains complete four-laser groups."""
+    """One rolling device model; return coefficients from Andrew's PR #4441.
+
+    Noise/dropout are approximations, not a calibrated reflectivity model.
+    Disable them for geometry-only diagnostics without changing acquisition.
+    """
 
     point_rate_hz: int = 200_000
     motion_sample_rate_hz: float = 200.0
     downsample: int = 1
-    min_range: float = 0.1
+    min_range: float = 0.16
     max_range: float = 40.0
+    noise: bool = True
+    dropout: bool = True
+    seed: int = 0
 
     def __post_init__(self) -> None:
-        if self.point_rate_hz <= 0 or self.downsample < 1:
+        if self.point_rate_hz <= 0 or self.downsample < 1 or self.seed < 0:
             raise ValueError("Mid360 point rate and downsample must be positive")
         if not all(
             math.isfinite(v) for v in (self.motion_sample_rate_hz, self.min_range, self.max_range)
@@ -72,3 +79,25 @@ class Mid360:
             offsets=offsets.astype(np.float64) / self.point_rate_hz,
             lines=(indices % 4).astype(np.uint8),
         )
+
+    def measure(
+        self, ranges: NDArray[np.float64], cos_incidence: NDArray[np.float64], start: float
+    ) -> NDArray[np.float64]:
+        # Key each scan independently: skipping a late scan cannot shift later noise.
+        rng = np.random.default_rng([self.seed, round(start * self.point_rate_hz)])
+        cosine = np.clip(np.abs(cos_incidence), 0.0, 1.0)
+        keep = (ranges >= self.min_range) & (ranges <= self.max_range)
+        if self.dropout:
+            probability = np.interp(
+                np.rad2deg(np.arccos(cosine)),
+                (0, 78, 79.5, 82.5, 85, 88, 90),
+                (1, 1, 0.76, 0.5, 0.22, 0.08, 0),
+            )
+            keep &= rng.random(len(ranges)) < probability
+        result = ranges.copy()
+        if self.noise:
+            sigma = np.hypot(0.0034, 0.00073 * ranges) / np.maximum(cosine, 0.05) ** 0.78
+            result += rng.standard_normal(len(ranges)) * sigma
+        keep &= (result >= self.min_range) & (result <= self.max_range)
+        result[~keep] = -1
+        return result

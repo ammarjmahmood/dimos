@@ -22,10 +22,27 @@ from scipy.spatial.transform import Rotation
 
 from dimos.robot.unitree.g1.sim2 import G1_GROOT
 from dimos.sim2.sensors.lidar.module import LidarModule
+from dimos.sim2.sensors.lidar.raycast import Raycaster
 from dimos.sim2.sensors.reader import WorldReader
 from dimos.sim2.sensors.spec import Lidar
 
 pytestmark = pytest.mark.mujoco
+
+
+@pytest.mark.parametrize("self_occlusion,expected", [(False, 4.9), (True, 0.9)])
+def test_self_occlusion_uses_mount_geometry_without_hiding_other_robots(self_occlusion, expected):
+    model = mujoco.MjModel.from_xml_string("""
+        <mujoco><worldbody>
+          <body name="robot"><geom type="box" pos="1 0 0" size="0.1 1 1"/></body>
+          <body name="other"><geom type="box" pos="5 0 0" size="0.1 1 1"/></body>
+        </worldbody></mujoco>
+    """)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    query = Raycaster(model, model.body("robot").id, self_occlusion=self_occlusion)
+    ranges, normals = query.hits(data, np.zeros(3), np.array([[1.0, 0, 0]]), 10.0)
+    assert ranges.tolist() == pytest.approx([expected])
+    assert normals[0] == pytest.approx([-1, 0, 0])
 
 
 @pytest.fixture

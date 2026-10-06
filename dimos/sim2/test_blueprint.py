@@ -22,7 +22,7 @@ from dimos.control.coordinator import ControlCoordinator, ControlCoordinatorConf
 from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.manipulators.xarm.sim2 import XARM7
-from dimos.robot.unitree.g1.sim2 import G1_GROOT
+from dimos.robot.unitree.g1.sim2 import G1_GROOT, G1_GROOT_MID360
 from dimos.sim2.blueprint import simulation
 from dimos.sim2.control.adapters import ManipulatorAdapter, WholeBodyAdapter
 from dimos.sim2.module import SimulationModuleConfig
@@ -85,7 +85,12 @@ class HorizontalRays:
 
 
 @pytest.mark.parametrize(
-    "robot,adapter", [(G1_GROOT, WholeBodyAdapter), (XARM7, ManipulatorAdapter)]
+    "robot,adapter",
+    [
+        (G1_GROOT, WholeBodyAdapter),
+        (G1_GROOT_MID360, WholeBodyAdapter),
+        (XARM7, ManipulatorAdapter),
+    ],
 )
 def test_worker_config_and_coordinator_adapter_reconstruct_the_same_robot(tmp_path, robot, adapter):
     devices = simulation(

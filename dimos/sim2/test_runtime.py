@@ -14,6 +14,7 @@
 
 """Focused emulator contracts with real MuJoCo models and shared-memory devices."""
 
+from dataclasses import replace
 from uuid import uuid4
 
 import mujoco
@@ -29,6 +30,7 @@ from dimos.sim2.scene import scene_path
 from dimos.sim2.sensors.camera.renderers.mujoco import MujocoCamera
 from dimos.sim2.sensors.lidar.raycast import Raycaster
 from dimos.sim2.sensors.reader import WorldReader
+from dimos.sim2.sensors.spec import Imu, Lidar
 from dimos.sim2.spec import RobotInstance, WorldConfig
 
 pytestmark = pytest.mark.mujoco
@@ -38,11 +40,12 @@ pytestmark = pytest.mark.mujoco
 def runtime():
     worlds = []
 
-    def create(robot, robot_id, scene, xyz):
+    def create(robot, robot_id, scene, xyz, timestep=0.005):
         world = SimulationRuntime(
             WorldConfig(
                 scene_path(None, scene),
                 {robot_id: RobotInstance(robot, xyz=xyz)},
+                timestep=timestep,
             ),
             uuid4().hex,
         )
@@ -142,6 +145,19 @@ def test_timed_lidar_enables_bounded_history_without_changing_motor_channels(run
     world.reset()
     latest = world.snapshots.read_observation()
     assert latest.metadata.episode_id == world.snapshots.episode_id == world.episode
+
+
+def test_history_cadence_contains_every_requested_lidar_imu_tick(runtime):
+    lidar = next(s for s in G1_GROOT_MID360.sensors if isinstance(s, Lidar))
+    robot = G1_GROOT_MID360.with_sensor(
+        replace(lidar, imu=Imu("lidar_imu", "mid360_link", rate_hz=150))
+    )
+    world = runtime(robot, "g1", "logistics.xml", (0, 0, 0.793), timestep=1 / 600)
+    for _ in range(12):
+        world.step()
+    ticks = {f.metadata.physics_tick for f in world.snapshots.read_observations()}
+    assert {0, 4, 8, 12} <= ticks
+    assert world.robots["g1"].channel.descriptor.observation_slots == 2
 
 
 def test_arm_deactivate_is_idempotent(runtime, device):

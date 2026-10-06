@@ -66,4 +66,14 @@ G1_GROOT = RobotConfig(
 )
 
 # Retain the authored inverted mount and the full vertical field of view.
-G1_GROOT_MID360 = G1_GROOT.with_sensor(Lidar("lidar", "mid360_link", Mid360))
+G1_GROOT_MID360 = G1_GROOT.with_sensor(
+    Lidar(
+        "lidar",
+        "mid360_link",
+        Mid360,
+        self_occlusion=True,
+        # The authored head mesh seals the laser window; other links still occlude.
+        excluded_meshes=("head_link",),
+        imu=Imu("lidar_imu", "mid360_link"),
+    )
+)

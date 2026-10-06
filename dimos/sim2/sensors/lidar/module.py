@@ -27,11 +27,12 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.sim2.sensors.lidar.raycast import Raycaster
 from dimos.sim2.sensors.module import SensorModule, SensorModuleConfig
-from dimos.sim2.sensors.spec import Lidar, RayPattern, TimedRayPattern
+from dimos.sim2.sensors.spec import Lidar, RangeResponse, RayPattern, TimedRayPattern
 
 
 class LidarModuleConfig(SensorModuleConfig):
@@ -43,29 +44,53 @@ class LidarModule(SensorModule):
     config: LidarModuleConfig
     pointcloud: Out[PointCloud2]
     raw_pointcloud: Out[PointCloud2]
+    imu_raw: Out[Imu]
     tf: Out[TFMessage]
 
     def open(self) -> None:
+        # Initialize PointCloud2's lazy Open3D dependency before high-rate acquisition.
+        PointCloud2()
         robot = self.config.robot_id
         self._site = self.reader.model.site(f"{robot}/{self.config.sensor.model_name}").id
         self._frame = f"{robot}/{self.config.sensor.name}"
         self._model = self.config.sensor.model(**self.config.sensor.model_kwargs)
         self._rays = self._model.directions() if isinstance(self._model, RayPattern) else None
+        if isinstance(self._model, TimedRayPattern):
+            # Load the pattern before any IMU publication, not halfway through a scan.
+            self._model.scan(0.0, 1 / self.config.sensor.rate_hz)
         self._episode = -1
         self._last_scan = 0
+        self._last_imu_sequence = -1
+        self._last_imu_time: float | None = None
+        self._clock_origin = 0.0
+        if self.config.sensor.imu is not None:
+            name = f"{robot}/sensor/{self.config.sensor.imu.name}"
+            self._gyro = self.reader.model.sensor(f"{name}/gyro").id
+            self._accel = self.reader.model.sensor(f"{name}/accel").id
         self._scan_status: dict[str, Any] = {
             "fidelity": "rolling" if isinstance(self._model, TimedRayPattern) else "instantaneous",
             "scans": 0,
             "dropped_scans": 0,
             "history_pending": False,
+            "imu_samples": 0,
+            "dropped_imu_samples": 0,
         }
         self._raycaster = Raycaster(
             self.reader.model,
             self.reader.model.body(f"{robot}/{self.config.root_body}").id,
+            self_occlusion=self.config.sensor.self_occlusion,
+            excluded_meshes=tuple(f"{robot}/{mesh}" for mesh in self.config.sensor.excluded_meshes),
         )
 
     def capture(self) -> None:
         if isinstance(self._model, TimedRayPattern):
+            if self._episode != self.reader.episode:
+                self._episode = self.reader.episode
+                self._clock_origin = self.reader.timestamp - float(self.reader.data.time)
+                self._last_scan = 0
+                self._last_imu_sequence = -1
+                self._last_imu_time = None
+            self._capture_imu()
             self._capture_rolling(self._model)
             return
         assert self._rays is not None
@@ -91,6 +116,8 @@ class LidarModule(SensorModule):
         origin: NDArray[np.float64],
         rotation: NDArray[np.float64],
     ) -> None:
+        if not self.config.sensor.truth_outputs:
+            return
         frame = "world"
         if self.config.sensor.output_frame == "sensor":
             points = (points - origin) @ rotation
@@ -115,12 +142,46 @@ class LidarModule(SensorModule):
             )
         )
 
+    def _capture_imu(self) -> None:
+        imu = self.config.sensor.imu
+        if imu is None:
+            return
+        frames = [
+            frame
+            for frame in self.reader.channel.read_observations()
+            if frame.metadata.episode_id == self._episode
+            and self._last_imu_sequence < frame.metadata.sequence <= self.reader.sequence
+        ]
+        for frame in frames:
+            t = frame.metadata.sim_time
+            if not math.isclose(t * imu.rate_hz, round(t * imu.rate_hz), abs_tol=1e-7):
+                continue
+            self.reader.restore(frame)
+            if self.reader.channel.episode_id != self._episode:
+                return
+            self.imu_raw.publish(
+                Imu(
+                    angular_velocity=Vector3(*self.reader.data.sensor(self._gyro).data),
+                    linear_acceleration=Vector3(*self.reader.data.sensor(self._accel).data),
+                    orientation_covariance=[-1.0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    frame_id=f"{self.config.robot_id}/{imu.name}",
+                    ts=self._clock_origin + t,
+                )
+            )
+            with self._error_lock:
+                self._scan_status["imu_samples"] += 1
+                if self._last_imu_time is not None:
+                    self._scan_status["dropped_imu_samples"] += max(
+                        0, round((t - self._last_imu_time) * imu.rate_hz) - 1
+                    )
+            self._last_imu_time = t
+        if frames:
+            self._last_imu_sequence = frames[-1].metadata.sequence
+            self.reader.restore(frames[-1])
+
     def _capture_rolling(self, pattern: TimedRayPattern) -> None:
         rate = self.config.sensor.rate_hz
         index = math.floor((float(self.reader.data.time) + 1e-9) * rate)
-        if self._episode != self.reader.episode:
-            self._episode = self.reader.episode
-            self._last_scan = 0
         if index <= self._last_scan:
             return
         end, duration = index / rate, 1 / rate
@@ -134,6 +195,8 @@ class LidarModule(SensorModule):
         bins = np.floor(rays.offsets * pattern.motion_sample_rate_hz).astype(np.int64)
         distances = np.full(len(rays.offsets), -1.0)
         world_points = np.empty_like(rays.directions)
+        world_rays = np.empty_like(rays.directions)
+        cos_incidence = np.zeros(len(rays.offsets))
         mapping_visible = np.ones(len(rays.offsets), dtype=bool)
         elevation = self.config.sensor.maximum_world_elevation
         for motion_bin in np.unique(bins):
@@ -142,12 +205,21 @@ class LidarModule(SensorModule):
             origin = self.reader.data.site_xpos[self._site]
             rotation = self.reader.data.site_xmat[self._site].reshape(3, 3)
             directions = rays.directions[indices] @ rotation.T
-            ranges = self._raycaster.ranges(self.reader.data, origin, directions, pattern.max_range)
+            ranges, normals = self._raycaster.hits(
+                self.reader.data, origin, directions, pattern.max_range
+            )
+            cos_incidence[indices] = np.einsum("ij,ij->i", directions, normals)
             distances[indices] = ranges
+            world_rays[indices] = directions
             world_points[indices] = origin + directions * ranges[:, None]
             if elevation is not None:
                 mapping_visible[indices] = directions[:, 2] <= np.sin(np.deg2rad(elevation)) + 1e-12
+        if isinstance(pattern, RangeResponse):
+            measured = pattern.measure(distances, cos_incidence, start)
+            world_points += world_rays * (measured - distances)[:, None]
+            distances = measured
         self.reader.restore_at(end)
+        self.reader.timestamp = self._clock_origin + end
         if self.reader.channel.episode_id != self._episode:
             return
         hit = (distances >= pattern.min_range) & (distances <= pattern.max_range)
@@ -178,6 +250,16 @@ class LidarModule(SensorModule):
                 scan_start=start,
                 scan_end=end,
                 episode=self._episode,
+                # Privileged diagnostic only; never connected to estimator inputs.
+                truth_pose={
+                    "timestamp": self.reader.timestamp,
+                    "position": self.reader.data.site_xpos[self._site].tolist(),
+                    "orientation": Rotation.from_matrix(
+                        self.reader.data.site_xmat[self._site].reshape(3, 3)
+                    )
+                    .as_quat()
+                    .tolist(),
+                },
             )
         self._last_scan = index
 

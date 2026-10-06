@@ -62,6 +62,15 @@ class TimedRayPattern(Protocol):
     def scan(self, start: float, duration: float) -> TimedRays: ...
 
 
+@runtime_checkable
+class RangeResponse(Protocol):
+    def measure(
+        self, ranges: NDArray[np.float64], cos_incidence: NDArray[np.float64], start: float
+    ) -> NDArray[np.float64]:
+        """Apply return noise/dropout, preserving ray indices and negative misses."""
+        ...
+
+
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class Camera:
     name: str
@@ -83,6 +92,17 @@ class Camera:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class Imu:
+    name: str
+    site: str | Mount
+    rate_hz: float = 200.0
+
+    @property
+    def model_name(self) -> str:
+        return self.site if isinstance(self.site, str) else f"sensor/{self.name}"
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class Lidar:
     name: str
     site: str | Mount
@@ -93,17 +113,19 @@ class Lidar:
     maximum_world_elevation: float | None = None
     # Sensor-frame clouds retain the ray origin for ray-tracing mappers.
     output_frame: Literal["world", "sensor"] = "world"
+    self_occlusion: bool = False
+    # Explicit optical housing exclusions in this robot's mesh namespace.
+    excluded_meshes: tuple[str, ...] = ()
+    # A device IMU is independent of the robot's coherent control IMU.
+    imu: Imu | None = None
+    # Disable both corrected cloud and truth TF when testing an estimator.
+    truth_outputs: bool = True
 
-    @property
-    def model_name(self) -> str:
-        return self.site if isinstance(self.site, str) else f"sensor/{self.name}"
-
-
-@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class Imu:
-    name: str
-    site: str | Mount
-    rate_hz: float = 200.0
+    def __post_init__(self) -> None:
+        if self.imu is not None and not isinstance(
+            self.model(**self.model_kwargs), TimedRayPattern
+        ):
+            raise ValueError("a lidar IMU requires timed acquisition")
 
     @property
     def model_name(self) -> str:

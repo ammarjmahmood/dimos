@@ -57,7 +57,7 @@ def load_scene(config: WorldConfig, description: SceneDescription | None = None)
             root.mocap = True
         for key in list(robot.keys):
             robot.delete(key)
-        for sensor in instance.config.sensors:
+        for sensor in instance.config.mounted_sensors:
             attachment = sensor.camera if isinstance(sensor, Camera) else sensor.site
             if isinstance(attachment, Mount):
                 body = robot.body(attachment.link)

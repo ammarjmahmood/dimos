@@ -20,15 +20,30 @@ from numpy.typing import NDArray
 
 
 class Raycaster:
-    def __init__(self, model: mujoco.MjModel, robot_root: int) -> None:
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        robot_root: int,
+        *,
+        self_occlusion: bool = False,
+        excluded_meshes: tuple[str, ...] = (),
+    ) -> None:
         self.model = model
+        excluded = {model.mesh(name).id for name in excluded_meshes}
         # Each sensor owns this model copy. Hiding self does not alter physics.
         model.geom_group[:] = 0
         for geom, body in enumerate(model.geom_bodyid):
             ancestor = int(body)
             while ancestor and ancestor != robot_root:
                 ancestor = int(model.body_parentid[ancestor])
-            if ancestor == robot_root:
+            if (
+                (ancestor == robot_root and not self_occlusion)
+                or model.geom_rgba[geom, 3] == 0
+                or (
+                    model.geom_type[geom] == mujoco.mjtGeom.mjGEOM_MESH
+                    and int(model.geom_dataid[geom]) in excluded
+                )
+            ):
                 model.geom_group[geom] = 5
         self.groups = np.ones(6, dtype=np.uint8)
         self.groups[5] = 0
@@ -52,10 +67,20 @@ class Raycaster:
         directions: NDArray[np.float64],
         max_range: float,
     ) -> NDArray[np.float64]:
-        """One range per ray; misses stay negative so timing/line indices remain aligned."""
+        return self.hits(data, origin, directions, max_range)[0]
+
+    def hits(
+        self,
+        data: mujoco.MjData,
+        origin: NDArray[np.float64],
+        directions: NDArray[np.float64],
+        max_range: float,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Ranges and world normals, aligned with input rays; misses remain negative."""
         rays = np.ascontiguousarray(directions, dtype=np.float64)
         distances = np.full(len(rays), -1.0)
         ids = np.full(len(rays), -1, dtype=np.int32)
+        normals = np.zeros_like(rays)
         mujoco.mj_multiRay(
             self.model,
             data,
@@ -66,8 +91,8 @@ class Raycaster:
             -1,
             ids,
             distances,
-            None,
+            normals.ravel(),
             len(rays),
             max_range,
         )
-        return distances
+        return distances, normals

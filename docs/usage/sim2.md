@@ -100,13 +100,17 @@ reconstructed in 200 Hz bins. The attributed data ships separately as the
 approximately 3 MB `mid360_pattern` data archive. Optional `model_kwargs`
 such as `{"downsample": 4}` retain every fourth complete four-laser group.
 
-The existing lidar worker exposes two `PointCloud2` streams:
+The existing lidar worker exposes these streams, without an additional worker:
 
 - `pointcloud`: truth-corrected returns for the existing mapper, in the
   configured world or scan-end sensor frame.
 - `raw_pointcloud`: uncorrected acquisition-time sensor-frame returns, with
   `offset_time` in nanoseconds from the scan-start message timestamp and
   `line` identifying the laser channel. Misses are omitted, not fabricated.
+- `imu_raw`: the device's optional IMU, with angular velocity in rad/s and
+  specific force in m/s^2. No truth orientation is supplied. Both raw streams
+  use the same acquisition clock, not callback arrival time. The G1 policy's
+  existing control IMU remains separate.
 
 Read raw data through the typed stream; the generic RPC `peek_stream` path
 pickles point clouds and currently discards their extra per-point fields.
@@ -119,9 +123,64 @@ episodes. `g1_lidar.sensor_status()` reports captured/dropped scans, ray and
 return counts, last capture time and history availability. Restart the stack
 after updating: the internal shared-memory layout changed.
 
-This model is noise-free geometry, not calibrated reflectivity or dropout
-simulation. It does not add a colocated Mid360 IMU or connect Point-LIO. The
-existing mapper still consumes corrected clouds and simulator odometry.
+One Mid360 combines the retained angular sequence with Andrew's #4441
+range/incidence-dependent noise and grazing-angle dropout response. Set
+`model_kwargs={"noise": False, "dropout": False}` for geometry diagnostics;
+this does not select a different scanner. Noise is seeded per scan, so a
+missed scan does not shift later samples. The Fourier-fitted sequence has
+not replaced the official reference without calibration evidence.
+
+Self occlusion uses this robot's geometry, not a Go2 blindspot map. The G1
+explicitly excludes its `head_link` mesh, which seals the optical window and
+otherwise blocks every ray within 2-7 cm. Other robot links still occlude.
+This also omits head-shell occlusion: separating the optical window in the
+asset is required before claiming physically complete mounting fidelity.
+Reflectivity, material response and IMU noise/bias are not calibrated here.
+
+To run the **existing native Point-LIO estimator** on the same sensor:
+
+```bash
+uv run dimos --simulation mujoco --transport zenoh --viewer rerun run unitree-g1-groot-mid360-pointlio
+```
+
+This composition connects `raw_pointcloud -> lidar_raw` and `imu_raw` to
+Point-LIO. Its corrected `lidar`, `odometry` and `tf` feed the existing
+ray-tracing mapper and A* navigation. The device's truth-corrected cloud and
+truth TF are disabled; robot truth odometry is separately named and not
+connected to navigation. There is no truth fallback. The simulated lidar IMU
+is colocated, so the blueprint explicitly configures zero translation and
+identity rotation extrinsics rather than the hardware driver's offset.
+
+The estimated map uses Point-LIO's local `odom` frame, not the authored scene
+origin. The viewer uses the existing hardware odometry visualization. Reset
+or teleport requires restarting this estimator run: upstream Point-LIO does
+not expose filter reset yet. Native binaries build through the existing
+NativeModule mechanism (Cargo/Rust is required on a cold installation).
+
+`g1_lidar.sensor_status()` includes IMU sample/gap counts and a clearly named
+`truth_pose` diagnostic. Only the measurement probe reads that truth; it is
+not a sensor stream or an estimator input. Run
+`python -m dimos.sim2.demo_pointlio --move --seconds 15` for a headless
+end-to-end acquisition and estimator comparison with walking and turning.
+
+Verified October 6 on the included logistics scene, headless with GR00T,
+RGB-D, actual native Point-LIO and ray-tracing mapping active:
+
+| 15-second moving run | Native sim2 | Robosuite sim2 |
+|---|---:|---:|
+| Real-time factor | 1.0002 | 1.0001 |
+| Raw scans / IMU samples per second | 10.00 / 199.97 | 9.98 / 199.89 |
+| Captured scan / IMU drops | 0 / 0 | 0 / 0 |
+| Maximum observed IMU interval | 5 ms | 5 ms |
+| Position error RMS / maximum | 5.7 / 8.8 mm | 4.2 / 11.0 mm |
+| Maximum orientation error | 0.125 degrees | 0.102 degrees |
+| Last full-rate scan capture | 17.5 ms | 16.6 ms |
+
+The probe aligns the first estimated sensor pose once, then compares scan-end
+poses within 25 ms. Both walked about 1.2 m and turned. These are short
+integration checks, not long-run drift, hardware calibration, click-navigation
+or all-scene performance guarantees. The initial lazy Open3D load is completed
+before acquisition so it cannot create a gap midway through IMU streaming.
 
 An October 6 native G1 check with walking, RGB-D and mapping active measured
 0.9998 real-time factor, about 9.8 scans/s and 14 ms for the last full-rate
@@ -450,7 +509,7 @@ RGB-D, ideal instantaneous lidar, reset-frame invalidation, fixed-base
 relocation, and independent two-robot channels/mounts.
 
 The initial whole-body family requires one coherent control IMU. Standalone
-IMU modules, timed MID360/Point-LIO input, splat rendering, automatic planner
+IMU modules, splat rendering, automatic planner
 scene obstacles, arbitrary live scene switching, full task generation/DR, and
 the ten-minute latency/30-Hz-camera acceptance benchmark remain outside this
 checkpoint. M20 and its coordinator extension remain a separate experiment.

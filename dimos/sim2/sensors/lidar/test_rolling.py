@@ -26,7 +26,7 @@ from dimos.sim2.runtime import STATE
 from dimos.sim2.sensors.lidar.models.mid360 import Mid360
 from dimos.sim2.sensors.lidar.module import LidarModule
 from dimos.sim2.sensors.reader import WorldReader
-from dimos.sim2.sensors.spec import Lidar
+from dimos.sim2.sensors.spec import Imu, Lidar
 from dimos.sim2.spec import ControlInterface
 
 pytestmark = pytest.mark.mujoco
@@ -36,13 +36,16 @@ pytestmark = pytest.mark.mujoco
 def history(tmp_path):
     model = mujoco.MjModel.from_xml_string("""
     <mujoco><option timestep="0.005"/><worldbody>
-      <body name="g1/pelvis"><freejoint/><geom size="0.1"/>
+      <body name="g1/pelvis" gravcomp="1"><freejoint/><geom size="0.1"/>
         <site name="g1/mid360_link"/>
       </body>
       <body name="wall" mocap="true" pos="5 0 0">
         <geom type="box" size="0.1 10 10"/>
       </body>
-    </worldbody></mujoco>
+    </worldbody><sensor>
+      <gyro name="g1/sensor/lidar_imu/gyro" site="g1/mid360_link"/>
+      <accelerometer name="g1/sensor/lidar_imu/accel" site="g1/mid360_link"/>
+    </sensor></mujoco>
     """)
     data = mujoco.MjData(model)
     nstate = mujoco.mj_stateSize(model, STATE)
@@ -72,16 +75,17 @@ def history(tmp_path):
         writer.set_lifecycle("ready")
         reader = WorldReader({"model": str(path), "snapshot": desc.to_dict()})
 
-        def publish(t, x=0, wall_x=5, episode=1, quat=(1, 0, 0, 0)):
+        def publish(t, x=0, wall_x=5, episode=1, quat=(1, 0, 0, 0), omega=0, wall_jitter=0):
             data.time = t
             data.qpos[:3] = (x, 0, 0)
             data.qpos[3:7] = quat
+            data.qvel[5] = omega
             data.mocap_pos[0] = (wall_x, 0, 0)
             state = np.empty(nstate)
             mujoco.mj_getState(model, data, state, STATE)
             writer.set_episode(episode)
             writer.publish_observation(
-                {"state": state, "wall_time": [1000 + t]},
+                {"state": state, "wall_time": [1000 + t + wall_jitter]},
                 FrameMetadata(0, episode, round(t / 0.005), 0, t),
             )
 
@@ -103,7 +107,12 @@ def scanner(history, mocker):
         robot_id="g1",
         root_body="pelvis",
         instance_name=f"rolling-{uuid4().hex}",
-        sensor=Lidar("lidar", "mid360_link", Mid360, model_kwargs={"downsample": 1000}),
+        sensor=Lidar(
+            "lidar",
+            "mid360_link",
+            Mid360,
+            model_kwargs={"downsample": 1000, "noise": False, "dropout": False},
+        ),
     )
     module.reader = reader
     raw = mocker.patch.object(module.raw_pointcloud, "publish")
@@ -126,6 +135,44 @@ def test_bounded_history_retains_order_after_wrap(history):
     assert frames[0].metadata.sim_time == pytest.approx(37 * 0.005)
     assert frames[-1].metadata.sim_time == pytest.approx(99 * 0.005)
     assert writer.read_observation().metadata.sequence == 100
+
+
+def test_lidar_imu_preserves_acquisition_clock_units_and_backlog(history, scanner, mocker):
+    reader, _, publish = history
+    module, raw, _ = scanner
+    module.config.sensor = replace(module.config.sensor, imu=Imu("lidar_imu", "mid360_link"))
+    module.open()
+    imu_output = mocker.patch.object(module.imu_raw, "publish")
+    publish(0, omega=0.2, quat=(0, 1, 0, 0))
+    assert reader.update()
+    module.capture()
+    for tick in range(1, 21):
+        publish(tick * 0.005, omega=0.2, quat=(0, 1, 0, 0), wall_jitter=0.02)
+    assert reader.update()
+    module.capture()
+    samples = [call.args[0] for call in imu_output.call_args_list]
+    assert len(samples) == 21
+    assert np.diff([sample.ts for sample in samples]) == pytest.approx(np.full(20, 0.005))
+    assert samples[-1].linear_acceleration.to_tuple() == pytest.approx((0, 0, -9.81))
+    assert samples[-1].angular_velocity.to_tuple() == pytest.approx((0, 0, 0.2))
+    assert samples[-1].orientation_covariance[0] == -1
+    assert samples[-1].frame_id == "g1/lidar_imu"
+    assert raw.call_args.args[0].ts == samples[0].ts
+    assert module.sensor_status()["dropped_imu_samples"] == 0
+
+
+def test_estimator_device_does_not_publish_corrected_cloud_or_truth_tf(history, scanner, mocker):
+    reader, _, publish = history
+    module, raw, corrected = scanner
+    module.config.sensor = replace(module.config.sensor, truth_outputs=False)
+    truth_tf = mocker.patch.object(module.tf, "publish")
+    for tick in range(21):
+        publish(tick * 0.005)
+    assert reader.update()
+    module.capture()
+    raw.assert_called_once()
+    corrected.assert_not_called()
+    truth_tf.assert_not_called()
 
 
 def test_history_interpolates_freejoint_rotation_and_moving_scene(history):

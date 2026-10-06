@@ -18,6 +18,23 @@ import pytest
 from dimos.sim2.sensors.lidar.models.mid360 import Mid360
 
 
+def test_return_noise_is_seeded_per_scan_and_rejects_grazing_misses():
+    model = Mid360(seed=7)
+    ranges = np.full(1000, 10.0)
+    normal = np.ones(1000)
+    noisy = model.measure(ranges, normal, 0.2)
+    assert np.std(noisy - ranges) > 0.003
+    np.testing.assert_array_equal(noisy, model.measure(ranges, normal, 0.2))
+    assert not np.array_equal(noisy, model.measure(ranges, normal, 0.3))
+    assert np.all(model.measure(ranges, np.zeros(1000), 0.2) == -1)
+    assert model.measure(np.array([-1.0, 0.1, 41.0]), np.ones(3), 0).tolist() == [-1, -1, -1]
+
+
+def test_noise_free_diagnostics_keep_the_same_valid_ranges():
+    model = Mid360(noise=False, dropout=False)
+    assert model.measure(np.array([-1.0, 0.2, 10]), np.ones(3), 0).tolist() == [-1, 0.2, 10]
+
+
 @pytest.fixture
 def pattern(mocker):
     angles = np.tile(
