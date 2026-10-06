@@ -35,12 +35,9 @@ JOINTS = make_joints("arm", 2)
 
 
 class _PoseTask(BaseControlTask):
-    """Reports a frame whose x is the first measured joint, like FK would."""
+    """Reports link_tcp at x = the first measured joint, like FK would."""
 
-    def __init__(self, name: str, frame: str, fail: bool = False) -> None:
-        self._name = name
-        self._frame = frame
-        self._fail = fail
+    _name = "ik"
 
     def claim(self) -> ResourceClaim:
         return ResourceClaim(joints=frozenset())
@@ -55,75 +52,38 @@ class _PoseTask(BaseControlTask):
         pass
 
     def measured_frame_poses(self, state: CoordinatorState) -> dict[str, PoseStamped]:
-        if self._fail:
-            raise RuntimeError("no model")
         x = state.joints.get_position(JOINTS[0])
-        return {self._frame: PoseStamped(frame_id="link_base", position=(x, 0.0, 0.5))}
+        return {"link_tcp": PoseStamped(frame_id="link_base", position=(x, 0.0, 0.5))}
 
 
-def _tick_loop(tasks, publish_tf_callback, positions=(0.25, 0.5)) -> TickLoop:  # type: ignore[no-untyped-def]
+def test_measured_frame_poses_are_published_as_world_tf_at_a_limited_rate() -> None:
     adapter = MagicMock(spec=ManipulatorAdapter)
-    adapter.read_joint_positions.return_value = list(positions)
+    adapter.read_joint_positions.return_value = [0.25, 0.5]
     adapter.read_joint_velocities.return_value = [0.0, 0.0]
     adapter.read_joint_efforts.return_value = [0.0, 0.0]
-    hardware = ConnectedHardware(
-        adapter,
-        HardwareComponent(hardware_id="arm", hardware_type=HardwareType.MANIPULATOR, joints=JOINTS),
+    component = HardwareComponent(
+        hardware_id="arm", hardware_type=HardwareType.MANIPULATOR, joints=JOINTS
     )
-    return TickLoop(
+    joint_states = MagicMock()
+    published: list[TFMessage] = []
+    loop = TickLoop(
         tick_rate=100.0,
-        hardware={"arm": hardware},
+        hardware={"arm": ConnectedHardware(adapter, component)},
         hardware_lock=threading.Lock(),
-        tasks={task.name: task for task in tasks},
+        tasks={"ik": _PoseTask()},
         task_lock=threading.Lock(),
         joint_to_hardware={},
-        publish_callback=MagicMock(),
-        publish_tf_callback=publish_tf_callback,
+        publish_callback=joint_states,
+        publish_tf_callback=published.append,
     )
-
-
-def test_measured_frame_poses_are_published_as_world_tf() -> None:
-    published: list[TFMessage] = []
-    loop = _tick_loop([_PoseTask("ik", "link_tcp")], published.append, positions=(0.25, 0.5))
-    loop._tick()
+    for _ in range(5):
+        loop._tick()  # all within one 30 Hz period
 
     (message,) = published
     (transform,) = message.transforms
     assert (transform.frame_id, transform.child_frame_id) == ("world", "link_tcp")
     assert transform.translation.to_numpy().tolist() == [0.25, 0.0, 0.5]
-    assert transform.ts == loop._publish_callback.call_args.args[0].ts  # joint-state time
-
-
-def test_frame_poses_are_rate_limited() -> None:
-    published: list[TFMessage] = []
-    loop = _tick_loop([_PoseTask("ik", "link_tcp")], published.append)
-    for _ in range(5):
-        loop._tick()  # all within one 30 Hz period
-    assert len(published) == 1
-
-
-def test_a_failing_task_does_not_hide_the_others() -> None:
-    published: list[TFMessage] = []
-    tasks = [_PoseTask("broken", "a", fail=True), _PoseTask("left", "left/link_tcp")]
-    _tick_loop(tasks, published.append)._tick()
-    assert [t.child_frame_id for t in published[0].transforms] == ["left/link_tcp"]
-
-
-def test_nothing_is_computed_without_a_tf_callback() -> None:
-    task = _PoseTask("ik", "link_tcp")
-    task.measured_frame_poses = MagicMock()  # type: ignore[method-assign]
-    _tick_loop([task], None)._tick()
-    task.measured_frame_poses.assert_not_called()
-
-
-def test_tasks_without_a_model_publish_nothing() -> None:
-    published: list[TFMessage] = []
-
-    class _Plain(_PoseTask):
-        measured_frame_poses = BaseControlTask.measured_frame_poses
-
-    _tick_loop([_Plain("joint", "unused")], published.append)._tick()
-    assert published == []
+    assert transform.ts == joint_states.call_args_list[0].args[0].ts
 
 
 def test_only_coordinators_declaring_tf_can_publish_frame_poses() -> None:

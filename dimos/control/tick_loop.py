@@ -464,10 +464,7 @@ class TickLoop:
             tasks = list(self._tasks.values())
         poses: dict[str, PoseStamped] = {}
         for task in tasks:
-            try:
-                poses.update(task.measured_frame_poses(state))
-            except Exception as e:
-                logger.warning(f"Frame poses from task {task.name} failed: {e}")
+            poses.update(task.measured_frame_poses(state))
         if not poses or self._publish_tf_callback is None:
             return
         ts = state.joints.timestamp
