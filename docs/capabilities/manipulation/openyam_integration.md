@@ -132,6 +132,27 @@ app.PickAndPlaceModule.place_at(0.35, -0.25, 0.20, planning_group="right_manipul
 The camera pose in `blueprints/grasp.py` (`DUAL_OPENYAM_CAMERA_TRANSFORM`) is
 the mount on the benchmark rig; re-measure it when the camera moves.
 
+### Driving it from humancli
+
+`dual-openyam-grasp-agent` adds an MCP server and an LLM agent over the same
+stack, with a system prompt that names both arms as `left_manipulator` and
+`right_manipulator`. The agent needs `OPENAI_API_KEY` in the environment or in
+the `.env` of the directory `dimos run` starts in. `--graspgen` works here too.
+
+```bash
+# terminal 1, robot
+dimos run dual-openyam-grasp-agent --left-can-port follower_l --right-can-port follower_r \
+  --realsensecamera.serial-number <SERIAL>
+
+# terminal 2, same machine
+dimos humancli
+```
+
+Then talk to it: "scan for a soup can, a mustard bottle and a banana", "pick up
+the soup can with the right hand", "put it in the bin", "right arm go init".
+The agent passes the arm as `planning_group` on every motion skill and asks
+once when the arm is not stated.
+
 To keep the data a run produces for policy training, record the joint states,
 the position commands the hardware accepted, and the camera images:
 
