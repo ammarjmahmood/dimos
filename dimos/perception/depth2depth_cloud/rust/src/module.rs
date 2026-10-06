@@ -15,15 +15,17 @@
 //! `depth2depth_cloud`: a camera-frame point cloud from one colour camera, Depth
 //! Anything calibrated per pixel to the recent lidar scans (see the depth2depth crate).
 //!
-//! Images arrive faster than the model runs, so a worker thread runs it on the newest frame
-//! whose transform is known while a second thread calibrates the previous frame on the CPU.
+//! A task picks the newest frame whose transform is known, waking when a frame or a transform
+//! arrives. A model thread runs Depth Anything on it while a calibration thread calibrates the
+//! previous frame on the CPU. Each stage holds only the newest frame waiting for it, so a stage
+//! that falls behind drops stale frames (counted in the timing log) instead of queueing them.
 //! Frames and lidar scans wait up to `max_tf_lag_s` for their pose. Scans are kept for
 //! `lidar_history_s` in the world frame, so the anchors include ground the lidar saw a moment
 //! ago and the camera sees now.
 
 use std::collections::VecDeque;
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use depth2depth::{
@@ -34,13 +36,13 @@ use dimos_module::{native_config, warn_throttled, Input, Module, Output, Tf};
 use lcm_msgs::sensor_msgs::{CameraInfo, CompressedImage, PointCloud2, PointField};
 use lcm_msgs::std_msgs::{Header, Time};
 use nalgebra::{Isometry3, Point3};
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tracing::info;
 
 use crate::undistort::{Lens, UndistortMap};
 
 const TIMING_REPORT_EVERY: Duration = Duration::from_secs(5);
-/// How often the worker looks again for a frame whose transform has arrived.
-const TF_POLL: Duration = Duration::from_millis(20);
 /// Scans up to this far after a frame still anchor it...
 const SCAN_LEAD_S: f64 = 0.5;
 /// ...and history is kept this far past `lidar_history_s`, since frames run behind the newest scan.
@@ -136,18 +138,80 @@ pub struct Depth2DepthCloud {
     config: Config,
 
     shared: Arc<Shared>,
-    wake: Option<SyncSender<()>>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    tasks: Vec<JoinHandle<()>>,
+    to_model: Arc<Latest<Picked>>,
+    model_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 /// What the handlers hand the worker.
 #[derive(Default)]
 struct Shared {
     frames: Mutex<VecDeque<CompressedImage>>,
+    frame_arrived: Notify,
     camera_info: Mutex<Option<CameraInfo>>,
     /// Scans waiting for their transform to the world frame.
     pending: Mutex<VecDeque<PointCloud2>>,
+    scan_arrived: Notify,
     history: Mutex<VecDeque<Scan>>,
+}
+
+/// One item handed between stages: a newer one replaces one still waiting (and counts it as dropped),
+/// so a stage that falls behind always takes the newest.
+struct Latest<T> {
+    slot: Mutex<(Option<T>, bool)>,
+    filled: Condvar,
+    dropped: AtomicUsize,
+}
+
+impl<T> Default for Latest<T> {
+    fn default() -> Self {
+        Self {
+            slot: Mutex::new((None, false)),
+            filled: Condvar::new(),
+            dropped: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl<T> Latest<T> {
+    fn put(&self, item: T) {
+        if self.slot.lock().unwrap().0.replace(item).is_some() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        self.filled.notify_one();
+    }
+
+    /// The waiting item, blocking until there is one; None once closed.
+    fn take(&self) -> Option<T> {
+        let mut slot = self.slot.lock().unwrap();
+        loop {
+            if let Some(item) = slot.0.take() {
+                return Some(item);
+            }
+            if slot.1 {
+                return None;
+            }
+            slot = self.filled.wait(slot).unwrap();
+        }
+    }
+
+    fn close(&self) {
+        self.slot.lock().unwrap().1 = true;
+        self.filled.notify_all();
+    }
+
+    /// Items replaced since the last call.
+    fn take_dropped(&self) -> usize {
+        self.dropped.swap(0, Ordering::Relaxed)
+    }
+}
+
+/// A frame whose transforms are known, on its way to the model.
+struct Picked {
+    image: CompressedImage,
+    frame_id: String,
+    poses: Poses,
+    info: CameraInfo,
 }
 
 /// A frame through the model, on its way to the calibration.
@@ -175,29 +239,34 @@ struct Scan {
 
 impl Depth2DepthCloud {
     async fn start(&mut self) {
-        let (wake, woken) = sync_channel(1);
-        self.wake = Some(wake);
-        let worker = Worker {
+        let worker = Arc::new(Worker {
             shared: self.shared.clone(),
             tf: self.tf.clone(),
             output: self.depth_cloud.clone(),
             runtime: tokio::runtime::Handle::current(),
             config: self.config.clone(),
-        };
-        let worker = Arc::new(worker);
-        let (predicted, to_calibrate) = sync_channel(0);
-        let calibrator = worker.clone();
-        std::thread::spawn(move || calibrator.calibrate(to_calibrate));
-        self.worker = Some(std::thread::spawn(move || worker.run(woken, predicted)));
+            to_model: self.to_model.clone(),
+            to_calibrate: Arc::default(),
+        });
+        let (picker, resolver, model, calibrator) =
+            (worker.clone(), worker.clone(), worker.clone(), worker);
+        self.tasks = vec![
+            tokio::spawn(async move { picker.pick_frames().await }),
+            tokio::spawn(async move { resolver.resolve_scans().await }),
+        ];
+        std::thread::spawn(move || calibrator.calibrate());
+        self.model_thread = Some(std::thread::spawn(move || model.run_model()));
     }
 
-    /// Stop the worker and let it drop the model while CUDA is still up: left to process exit, TensorRT
-    /// tears down after CUDA has unloaded and logs an error doing it.
+    /// Stop the stages and let the model thread drop the model while CUDA is still up.
     async fn stop(&mut self) {
-        self.wake = None;
-        if let Some(worker) = self.worker.take() {
-            // A worker still building its TensorRT engine isn't waited for.
-            let joined = tokio::task::spawn_blocking(move || worker.join());
+        for task in self.tasks.drain(..) {
+            task.abort();
+        }
+        self.to_model.close();
+        if let Some(model_thread) = self.model_thread.take() {
+            // A model thread still building its TensorRT engine isn't waited for.
+            let joined = tokio::task::spawn_blocking(move || model_thread.join());
             let _ = tokio::time::timeout(Duration::from_secs(2), joined).await;
         }
     }
@@ -213,9 +282,7 @@ impl Depth2DepthCloud {
             frames.pop_front();
         }
         drop(frames);
-        if let Some(wake) = &self.wake {
-            let _ = wake.try_send(());
-        }
+        self.shared.frame_arrived.notify_one();
     }
 
     async fn on_camera_info(&mut self, msg: CameraInfo) {
@@ -236,6 +303,8 @@ impl Depth2DepthCloud {
         {
             pending.pop_front();
         }
+        drop(pending);
+        self.shared.scan_arrived.notify_one();
     }
 }
 
@@ -253,35 +322,92 @@ struct Worker {
     output: Output<PointCloud2>,
     runtime: tokio::runtime::Handle,
     config: Config,
+    to_model: Arc<Latest<Picked>>,
+    to_calibrate: Arc<Latest<Predicted>>,
 }
 
 impl Worker {
-    /// Pick, decode, undistort and run the model on frames, handing each to `calibrate`.
-    fn run(&self, woken: Receiver<()>, predicted: SyncSender<Predicted>) {
+    /// Hand the model the newest frame whose transforms are known, waking when a frame arrives or a
+    /// transform for the newest one does.
+    async fn pick_frames(&self) {
+        let cfg = &self.config;
+        loop {
+            let frame_arrived = self.shared.frame_arrived.notified();
+            tokio::pin!(frame_arrived);
+            frame_arrived.as_mut().enable();
+            let info = self.shared.camera_info.lock().unwrap().clone();
+            let Some(info) = info else {
+                if !self.shared.frames.lock().unwrap().is_empty() {
+                    warn_throttled!(Duration::from_secs(5), "No CameraInfo yet, waiting.");
+                }
+                frame_arrived.await;
+                continue;
+            };
+            if let Some(picked) = self.next_frame(info.clone()) {
+                self.to_model.put(picked);
+                continue;
+            }
+            let newest = self.shared.frames.lock().unwrap().back().map(|image| {
+                let frame_id =
+                    resolve_frame_id(&cfg.frame_id, &info.header.frame_id, &image.header.frame_id);
+                (frame_id.to_string(), seconds(&image.header.stamp))
+            });
+            let Some((frame_id, stamp)) = newest else {
+                frame_arrived.await;
+                continue;
+            };
+            let wait = Duration::from_secs_f64(cfg.max_tf_lag_s);
+            let lookup = |target: &str| {
+                let tf = self.tf.clone();
+                let (target, frame_id) = (target.to_string(), frame_id.clone());
+                async move {
+                    target.is_empty()
+                        || tf
+                            .lookup(&target, &frame_id)
+                            .at(stamp)
+                            .tolerance(cfg.tf_tolerance_s)
+                            .within(wait)
+                            .await
+                            .is_some()
+                }
+            };
+            let transforms =
+                async { tokio::join!(lookup(&cfg.world_frame), lookup(&cfg.height_frame)) };
+            tokio::select! {
+                _ = frame_arrived => {}
+                (world, height) = transforms => {
+                    // Waited out: this frame and older ones never get their pose.
+                    if !(world && height) {
+                        self.shared
+                            .frames
+                            .lock()
+                            .unwrap()
+                            .retain(|image| seconds(&image.header.stamp) > stamp);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Decode, undistort and run the model on each frame picked, handing it to `calibrate`.
+    fn run_model(&self) {
         let cfg = &self.config;
         let model = match load_model(cfg) {
             Ok(model) => model,
             Err(error) => {
                 tracing::error!(%error, "Could not load the depth model; no clouds will be published.");
+                self.to_calibrate.close();
                 return;
             }
         };
         let mut undistort: Option<(CameraInfo, usize, Arc<UndistortMap>)> = None;
-        loop {
-            if let Err(RecvTimeoutError::Disconnected) = woken.recv_timeout(TF_POLL) {
-                return;
-            }
-            self.resolve_scans();
-            if self.shared.frames.lock().unwrap().is_empty() {
-                continue;
-            }
-            let Some(info) = self.shared.camera_info.lock().unwrap().clone() else {
-                warn_throttled!(Duration::from_secs(5), "No CameraInfo yet, waiting.");
-                continue;
-            };
-            let Some((image, frame_id, poses)) = self.next_frame(&info) else {
-                continue;
-            };
+        while let Some(Picked {
+            image,
+            frame_id,
+            poses,
+            info,
+        }) = self.to_model.take()
+        {
             let started = Instant::now();
             let Some((rgb, width, height)) = decode_rgb(&image, cfg.decode_scale as usize) else {
                 warn_throttled!(Duration::from_secs(5), format = %image.format, "Could not decode a frame, skipped it.");
@@ -342,14 +468,13 @@ impl Worker {
                     undistorted.elapsed(),
                 ],
             };
-            if predicted.send(frame).is_err() {
-                return;
-            }
+            self.to_calibrate.put(frame);
         }
+        self.to_calibrate.close();
     }
 
     /// Calibrate each predicted frame to the lidar and publish its cloud.
-    fn calibrate(&self, predicted: Receiver<Predicted>) {
+    fn calibrate(&self) {
         let cfg = &self.config;
         let mut calibration = Calibration::new(CalibrationConfig {
             sigma_px: cfg.sigma_px as f32,
@@ -368,7 +493,7 @@ impl Worker {
             ..CloudOptions::default()
         };
         let mut timing = Timing::default();
-        for frame in predicted {
+        while let Some(frame) = self.to_calibrate.take() {
             let started = Instant::now();
             let (map, poses) = (&frame.map, &frame.poses);
             let anchors = self.anchors(
@@ -407,53 +532,61 @@ impl Worker {
                 ],
                 visible.len(),
                 points.len(),
+                [
+                    self.to_model.take_dropped(),
+                    self.to_calibrate.take_dropped(),
+                ],
             );
         }
     }
 
-    /// Move the scans whose transform has arrived into the history, in the world frame.
-    fn resolve_scans(&self) {
+    /// Move each scan into the history, in the world frame, once its transform arrives.
+    async fn resolve_scans(&self) {
         let cfg = &self.config;
-        let mut pending = self.shared.pending.lock().unwrap();
-        let mut history = self.shared.history.lock().unwrap();
-        pending.retain(|msg| {
+        loop {
+            let scan_arrived = self.shared.scan_arrived.notified();
+            tokio::pin!(scan_arrived);
+            scan_arrived.as_mut().enable();
+            let Some(msg) = self.shared.pending.lock().unwrap().pop_front() else {
+                scan_arrived.await;
+                continue;
+            };
             let stamp = seconds(&msg.header.stamp);
             let Some(world_from_lidar) = self
                 .tf
                 .lookup(&cfg.world_frame, &msg.header.frame_id)
                 .at(stamp)
                 .tolerance(cfg.tf_tolerance_s)
-                .get()
+                .within(Duration::from_secs_f64(cfg.max_tf_lag_s))
+                .await
             else {
-                return true;
+                continue;
             };
             let pose = isometry(&world_from_lidar);
-            match extract_xyz(msg) {
-                Ok(points) => history.push_back(Scan {
-                    stamp,
-                    points: points
-                        .into_iter()
-                        .filter(|p| p.iter().all(|v| v.is_finite()))
-                        .map(|[x, y, z]| {
-                            let p = pose * Point3::new(x as f64, y as f64, z as f64);
-                            [p.x as f32, p.y as f32, p.z as f32]
-                        })
-                        .collect(),
-                }),
+            let points = match extract_xyz(&msg) {
+                Ok(points) => points,
                 Err(error) => {
-                    warn_throttled!(Duration::from_secs(5), %error, "Unreadable lidar scan, dropped it.")
+                    warn_throttled!(Duration::from_secs(5), %error, "Unreadable lidar scan, dropped it.");
+                    continue;
                 }
-            }
-            false
-        });
-        let Some(newest) = history.iter().map(|scan| scan.stamp).reduce(f64::max) else {
-            return;
-        };
-        history.retain(|scan| scan.stamp >= newest - cfg.lidar_history_s - HISTORY_MARGIN_S);
+            };
+            let points = points
+                .into_iter()
+                .filter(|p| p.iter().all(|v| v.is_finite()))
+                .map(|[x, y, z]| {
+                    let p = pose * Point3::new(x as f64, y as f64, z as f64);
+                    [p.x as f32, p.y as f32, p.z as f32]
+                })
+                .collect();
+            let mut history = self.shared.history.lock().unwrap();
+            history.push_back(Scan { stamp, points });
+            let newest = history.iter().map(|scan| scan.stamp).fold(stamp, f64::max);
+            history.retain(|scan| scan.stamp >= newest - cfg.lidar_history_s - HISTORY_MARGIN_S);
+        }
     }
 
     /// The newest frame whose transforms are known; it and every older frame leave the queue.
-    fn next_frame(&self, info: &CameraInfo) -> Option<(CompressedImage, String, Poses)> {
+    fn next_frame(&self, info: CameraInfo) -> Option<Picked> {
         let mut frames = self.shared.frames.lock().unwrap();
         let (index, (frame_id, poses)) =
             frames.iter().enumerate().rev().find_map(|(i, image)| {
@@ -466,7 +599,12 @@ impl Worker {
                 Some((i, (frame_id.to_string(), poses)))
             })?;
         let image = frames.drain(..=index).next_back()?;
-        Some((image, frame_id, poses))
+        Some(Picked {
+            image,
+            frame_id,
+            poses,
+            info,
+        })
     }
 
     fn poses(&self, frame_id: &str, stamp: f64) -> Option<Poses> {
@@ -624,13 +762,22 @@ struct Timing {
     frames: Vec<[Duration; 5]>,
     anchors: usize,
     points: usize,
+    /// Frames replaced while waiting for the model, and for the calibration.
+    dropped: [usize; 2],
     since: Option<Instant>,
 }
 
 impl Timing {
-    fn record(&mut self, stages: [Duration; 5], anchors: usize, points: usize) {
+    fn record(
+        &mut self,
+        stages: [Duration; 5],
+        anchors: usize,
+        points: usize,
+        dropped: [usize; 2],
+    ) {
         let since = *self.since.get_or_insert_with(Instant::now);
         self.frames.push(stages);
+        self.dropped = [self.dropped[0] + dropped[0], self.dropped[1] + dropped[1]];
         (self.anchors, self.points) = (anchors, points);
         let elapsed = since.elapsed();
         if elapsed < TIMING_REPORT_EVERY {
@@ -654,9 +801,12 @@ impl Timing {
             calibrate_ms = median_ms(4),
             anchors = self.anchors,
             points = self.points,
+            dropped_waiting_for_model = self.dropped[0],
+            dropped_waiting_for_calibration = self.dropped[1],
             "depth2depth_cloud timing (median ms per stage over the window)",
         );
         self.frames.clear();
+        self.dropped = [0, 0];
         self.since = Some(Instant::now());
     }
 }
@@ -664,6 +814,17 @@ impl Timing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stage_behind_takes_the_newest_item_and_counts_the_ones_it_missed() {
+        let latest = Latest::default();
+        latest.put(1);
+        latest.put(2);
+        latest.put(3);
+        assert_eq!((latest.take(), latest.take_dropped()), (Some(3), 2));
+        latest.close();
+        assert_eq!(latest.take(), None);
+    }
 
     #[test]
     fn frame_id_precedence_is_config_then_calibration_then_image() {
