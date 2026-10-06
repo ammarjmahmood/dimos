@@ -76,6 +76,7 @@ class WorldMonitor:
         self._prepared_model: PreparedRobotModel | None = None
         self._planning_groups = PlanningGroupRegistry()
         self._state_monitor: RobotStateMonitor | None = None
+        self._latest_joint_state: JointState | None = None
         self._obstacle_monitor: WorldObstacleMonitor | None = None
         self._viz_thread: threading.Thread | None = None
         self._viz_stop_event = threading.Event()
@@ -210,6 +211,13 @@ class WorldMonitor:
                 lock=self._lock,
                 joint_names=config.joint_names,
             )
+            self._latest_joint_state = None
+
+            def record_state(state: JointState) -> None:
+                # RobotStateMonitor invokes callbacks under our shared lock.
+                self._latest_joint_state = JointState(state)
+
+            monitor.add_state_callback(record_state)
             monitor.start()
             self._state_monitor = monitor
 
@@ -322,11 +330,10 @@ class WorldMonitor:
 
     def get_current_joint_state(self) -> JointState | None:
         """Get current joint state. Returns None if not yet received."""
-        if self._state_monitor is not None:
-            return self._state_monitor.get_current_joint_state()
-
-        # Fall back to world's live context
         with self._lock:
+            if self._state_monitor is not None:
+                return JointState(self._latest_joint_state) if self._latest_joint_state else None
+            # Fall back to world's live context when no monitor is running.
             ctx = self._world.get_live_context()
             return self._world.get_joint_state(ctx)
 

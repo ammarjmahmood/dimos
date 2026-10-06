@@ -476,6 +476,14 @@ def test_group_ee_pose_uses_current_state_when_no_joint_state_is_provided() -> N
     assert pose.position.x == 1
     assert pose.ts == 123.5
 
+    snapshot = monitor.get_current_joint_state()
+    assert snapshot is not None
+    snapshot.position[0] = 99.0
+    assert monitor.get_current_joint_state().position == [0.1, 0.2, 0.3]
+    monitor.stop_all_monitors()
+    monitor.start_state_monitor()
+    assert monitor.get_current_joint_state() is None
+
 
 def test_group_ee_pose_without_joint_state_rejects_stale_state(mocker) -> None:
     stale_world = FakeWorld()
