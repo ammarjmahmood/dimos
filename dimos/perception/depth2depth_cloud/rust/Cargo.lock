@@ -748,8 +748,8 @@ dependencies = [
 
 [[package]]
 name = "depth2depth"
-version = "0.3.0"
-source = "git+https://github.com/jeff-hykin/depth2depth.git?rev=f45920f#f45920fb0838f8fc8779f620a3973c1701a27ec1"
+version = "0.3.1"
+source = "git+https://github.com/jeff-hykin/depth2depth.git?rev=4185117#418511703eea73e1def3b984f0190fb56e286ff7"
 dependencies = [
  "candle-core",
  "candle-nn",

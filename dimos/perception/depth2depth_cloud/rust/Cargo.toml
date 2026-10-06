@@ -44,13 +44,13 @@ turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake"] 
 
 # The model runs on the GPU each platform has: TensorRT on a Jetson, Metal on a Mac.
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "f45920f", features = ["tensorrt"] }
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "4185117", features = ["tensorrt"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "f45920f", features = ["metal"] }
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "4185117", features = ["metal"] }
 
 [target.'cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "aarch64"))))'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "f45920f" }
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "4185117" }
 
 [profile.release]
 lto = "thin"
