@@ -411,9 +411,11 @@ mod tests {
         }
     }
 
-    /// Explicit metric free-space evidence clears stored cells and live hits.
+    /// The ghost case: a sensor deposits returns off its own body, then tells
+    /// the mapper that volume is free. Ray tracing never reaches it because the
+    /// body occludes what is behind it, so the mask is the only way out.
     #[test]
-    fn clear_metric_erases_live_and_stored_voxels() {
+    fn clear_metric_erases_voxels_ray_tracing_cannot_reach() {
         let mut mapper = Mapper::new(config());
         let pose = Pose {
             position: (0.0, 0.0, 0.0),

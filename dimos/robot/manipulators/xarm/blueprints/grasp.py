@@ -36,6 +36,7 @@ from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_skills import ManipulationSkills
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
+from dimos.manipulation.planning.utils.point_cloud_self_filter import PointCloudSelfFilter
 from dimos.mapping.ray_tracing.module import RayTracingVoxelMap
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -44,6 +45,7 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.perception.experimental.object_scene_registration import ObjectSceneRegistrationModule
 from dimos.robot.manipulators.common.blueprints import coordinator, trajectory_task
 from dimos.robot.manipulators.xarm.config import (
+    XARM7_COLLISION_LINKS,
     make_xarm7_model_config,
     make_xarm7_sim_hardware,
     make_xarm7_sim_module_kwargs,
@@ -61,7 +63,10 @@ XARM_GRASP_SCENE_PATH = LfsPath("xarm_grasp_sim/scene.xml")
 # spaced targets. This collision-free top-down pose raises the camera enough to
 # put every mesh in one frame, without changing the configured base pose.
 XARM_GRASP_SCAN_JOINTS = [0.0, -0.04609, 0.0, 1.83940, 0.0, 1.87106, 0.0]
-# The mapper and planner octree share the same cell resolution.
+# One resolution for the whole mapping chain. The self filter's clear mask, the
+# mapper's cells and the planner's octree must all agree: a mismatched mask names
+# cells the map does not hold, and a mismatched octree does not line up with what
+# was mapped.
 XARM_GRASP_VOXEL_SIZE = 0.025
 
 XARM_GRASP_PROMPTS = [
@@ -117,8 +122,8 @@ if SIMULATED:
     # planning model 12 cm above the arm MuJoCo simulates.
     _model = make_xarm7_sim_robot_config(
         base_pose=PoseStamped(frame_id="world"),
-        # MuJoCo publishes the camera directly in world.
-        tf_extra_links=[],
+        # Preserve the existing collision-link TF exports for other consumers.
+        tf_extra_links=XARM7_COLLISION_LINKS,
     )
     _hardware = make_xarm7_sim_hardware(XARM_GRASP_SCENE_PATH, home_joints=XARM_GRASP_SCAN_JOINTS)
 else:
@@ -126,8 +131,8 @@ else:
         add_gripper=True,
         gripper_hardware_id="arm",
         base_pose=PoseStamped(frame_id="world"),
-        # The wrist camera's fixed mount references link7.
-        tf_extra_links=["link7"],
+        # Preserve the existing collision-link TF exports for other consumers.
+        tf_extra_links=XARM7_COLLISION_LINKS,
     )
     _hardware = xarm7_hardware("arm", gripper=True)
 
@@ -192,6 +197,22 @@ def _scene_registration() -> Blueprint:
 def _voxel_mapping() -> tuple[Blueprint, ...]:
     """Wrist camera -> self filter -> mapper -> the planner's octree obstacle."""
     return (
+        # The wrist camera sees the arm itself, so the arm's returns must be
+        # dropped before mapping and the volume it occupies erased from the map:
+        # ray tracing cannot clear what the arm permanently occludes.
+        PointCloudSelfFilter.blueprint(
+            model=_model.model,
+            xarm_sim_gripper=bool(SIMULATED),
+            state_tolerance_s=0.1,
+            voxel_size=XARM_GRASP_VOXEL_SIZE,
+            world_frame="world",
+            # ManipulationModule publishes robot TF at 10Hz, so the stock 20ms
+            # tolerance cannot bracket a ~92ms publish period and drops most
+            # clouds. One full period admits them all, and the arm holds still
+            # while scanning, so a transform a period old describes the same pose.
+            tf_tolerance_s=0.1,
+            tf_forward_tolerance_s=0.1,
+        ),
         # Tabletop reach, not a room-scale lidar sweep.
         RayTracingVoxelMap.blueprint(
             voxel_size=XARM_GRASP_VOXEL_SIZE,

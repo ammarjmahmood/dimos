@@ -488,31 +488,6 @@ never the remove/add intermediate state. This boundary applies to each native
 operation, not to an entire generic planning run; RoboPlan's opaque native
 planner is locked for its whole native call.
 
-### Robot points in camera mapping
-
-Connect the camera's `pointcloud` to `ManipulationModule`, its
-`filtered_pointcloud` to the mapper, and the mapper's complete map to `voxel_map`.
-Filtering runs automatically for incoming captures; there is no enable flag.
-The `xarm-grasp` blueprint wires this chain. Planning without point-cloud input
-does not need a camera transform or initialize the native body filter.
-
-`WorldMonitor` owns capture history and filtering. It matches a cloud's original
-timestamp to joint-state and sensor-transform samples, then asks
-`WorldSpec.robot_body_mask` which points belong to the robot. `RoboPlanWorld`
-implements this operation with upstream `RobotBodyFilter` Narrowphase over the
-prepared robot model. Drake currently rejects this operation explicitly. The
-module only connects streams and dispatches processing; the mapper owns map
-history, and the planning world receives the resulting octree obstacle.
-
-For example, a cloud captured before the arm moved must use the earlier arm
-pose even if it arrives after motion. Matching uses the nearest sample within
-the tolerance, choosing the later sample on equal distances; it does not
-interpolate. Missing alignment drops the capture without publishing raw points.
-FK and published TF preserve the original joint measurement timestamp. Kept
-points retain their sensor frame, timestamp, colors and other per-point fields.
-Filtering removes robot surface returns before insertion; ordinary mapper ray
-tracing handles clearing, without explicitly erasing historical robot volumes.
-
 ## Blueprints
 
 | Blueprint | Description |

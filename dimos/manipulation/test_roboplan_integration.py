@@ -303,31 +303,3 @@ def test_native_context_cannot_be_used_with_another_world(scalar_world, roboplan
 
         with pytest.raises(ValueError, match="belongs to another world"):
             other.is_collision_free(ctx)
-
-
-def test_native_robot_filter_uses_consumer_state_and_keeps_environment(scalar_world):
-    world = scalar_world
-    world.add_obstacle(
-        Obstacle(
-            name="nearby",
-            obstacle_type=ObstacleType.BOX,
-            dimensions=(0.1, 0.1, 0.1),
-            pose=PoseStamped(frame_id="world", position=[1.4, 0, 0]),
-        )
-    )
-    points = np.array([[1, 0, 0], [1.4, 0, 0]])
-    with world.scratch_context() as first, world.scratch_context() as second:
-        world.set_joint_state(first, JointState(name=["slide"], position=[0]))
-        world.set_joint_state(second, JointState(name=["slide"], position=[0.4]))
-
-        np.testing.assert_array_equal(world.robot_body_mask(first, points), [True, False])
-        np.testing.assert_array_equal(world.robot_body_mask(second, points), [False, True])
-        np.testing.assert_array_equal(
-            world.robot_body_mask(first, np.array([[1.09, 0, 0]])), [False]
-        )
-        np.testing.assert_array_equal(
-            world.robot_body_mask(first, np.array([[1.09, 0, 0]]), extra_padding=np.array([0.05])),
-            [True],
-        )
-        with world.parametrization_model() as model:
-            np.testing.assert_allclose(model.scene.getCurrentJointPositions(), [0])

@@ -55,7 +55,6 @@ class WorldSpec(Protocol):
     The world owns the physics/collision backend and provides:
     - Robot/obstacle management
     - Collision checking
-    - Robot point classification
     - Forward kinematics
     - Context management for thread safety
 
@@ -65,7 +64,6 @@ class WorldSpec(Protocol):
 
     Implementations:
         - DrakeWorld: Uses Drake's MultibodyPlant and SceneGraph
-        - RoboPlanWorld: Uses RoboPlan Scene and SceneContext
     """
 
     # Model Management
@@ -132,21 +130,6 @@ class WorldSpec(Protocol):
 
     def get_joint_state(self, ctx: Any) -> JointState:
         """Get robot joint state from a context."""
-        ...
-
-    def robot_body_mask(
-        self,
-        ctx: Any,
-        points: NDArray[np.float64],
-        *,
-        padding: float = 0.01,
-        extra_padding: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.bool_]:
-        """Mark world-frame points on the robot at the context's joint state.
-
-        True entries belong to robot collision geometry. Unsupported backends
-        raise NotImplementedError; callers must not pass unfiltered points on.
-        """
         ...
 
     # Collision Checking (require context)

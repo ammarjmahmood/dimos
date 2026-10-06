@@ -58,21 +58,18 @@ the registered objects:
 
 ```
 camera pointcloud
-  -> ManipulationModule.pointcloud  upstream robot surface exclusion
-  -> filtered_pointcloud
-  -> RayTracingVoxelMap             accumulated world-frame occupied cells
-  -> ManipulationModule.voxel_map   "mapping/voxel-map" planner obstacle
+  -> PointCloudSelfFilter        drops the arm's own returns, emits a clear mask
+  -> RayTracingVoxelMap          accumulates occupied cells in the world frame
+  -> ManipulationModule.voxel_map   rebuilt as the "mapping/voxel-map" obstacle
 ```
 
-`XARM_GRASP_VOXEL_SIZE` keeps mapper cells and the planner octree aligned.
-The blueprint enables the camera's `pointcloud` output, which is off by default
-on RealSense and MuJoCo. Filtering reuses the prepared RoboPlan scene and matches
-canonical joint state and sensor TF to the capture timestamp. Missing alignment
-drops a cloud. Only `link7` needs extra TF for the real wrist camera attachment.
-
-Robot surface returns are excluded before mapping. Solid-volume sampling and
-historical robot-volume clear masks are removed; normal ray tracing clears the
-map. Previously occupied deep mesh interiors are not filled and erased explicitly.
+`XARM_GRASP_VOXEL_SIZE` is the single resolution all three stages share; they
+must agree or the clear mask names cells the map does not hold and the octree
+does not line up with what was mapped. The blueprint also enables the camera's
+`pointcloud` output, which is off by default on both the RealSense and the
+MuJoCo camera, and publishes TF for every one of the arm's collision links. The
+self filter drops a whole cloud if its full joint state or sensor/base TF is missing
+at capture time.
 
 Because the target object is itself mapped geometry, a collision-checked plan
 into it can only ever be rejected. The pregrasp-to-grasp leg and the retreat are
@@ -179,3 +176,11 @@ its category silhouette in the wrist camera's top-down view.
 A failed grasp knocks free-body targets out of place, and `MujocoSimModule.reset()`
 does not respawn them. Restart the blueprint between pick attempts that need a
 pristine scene.
+
+The independent `PointCloudSelfFilter` uses RoboPlan 0.7 Narrowphase for sensor
+returns, with full joint state and TF matched to the capture timestamp. Missing
+alignment drops the capture. The existing volume samples still produce the
+current and previous voxel clear masks; native surface queries do not replace
+volume clearing. The shipped MuJoCo gripper measurement is converted locally
+to `drive_joint`; planner trajectories remain seven-axis. Hardware SDK gripper
+feedback needs its own verified conversion and is not treated as simulation data.
