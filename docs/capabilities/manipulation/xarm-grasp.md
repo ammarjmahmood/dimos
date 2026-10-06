@@ -58,18 +58,15 @@ the registered objects:
 
 ```
 camera pointcloud
-  -> PointCloudSelfFilter        drops the arm's own returns, emits a clear mask
+  -> PointCloudSelfFilter        drops robot surface returns using RoboPlan
   -> RayTracingVoxelMap          accumulates occupied cells in the world frame
   -> ManipulationModule.voxel_map   rebuilt as the "mapping/voxel-map" obstacle
 ```
 
-`XARM_GRASP_VOXEL_SIZE` is the single resolution all three stages share; they
-must agree or the clear mask names cells the map does not hold and the octree
-does not line up with what was mapped. The blueprint also enables the camera's
-`pointcloud` output, which is off by default on both the RealSense and the
-MuJoCo camera, and publishes TF for every one of the arm's collision links. The
-self filter drops a whole cloud if its full joint state or sensor/base TF is missing
-at capture time.
+`XARM_GRASP_VOXEL_SIZE` is shared by the mapper and planner octree so their
+cells line up. The blueprint enables the camera's `pointcloud` output, which is
+off by default on both the RealSense and MuJoCo camera. The self filter drops a
+whole cloud if its full joint state or sensor/base TF is missing at capture time.
 
 Because the target object is itself mapped geometry, a collision-checked plan
 into it can only ever be rejected. The pregrasp-to-grasp leg and the retreat are
@@ -177,10 +174,14 @@ A failed grasp knocks free-body targets out of place, and `MujocoSimModule.reset
 does not respawn them. Restart the blueprint between pick attempts that need a
 pristine scene.
 
-The independent `PointCloudSelfFilter` uses RoboPlan 0.7 Narrowphase for sensor
-returns, with full joint state and TF matched to the capture timestamp. Missing
-alignment drops the capture. The existing volume samples still produce the
-current and previous voxel clear masks; native surface queries do not replace
-volume clearing. The shipped MuJoCo gripper measurement is converted locally
-to `drive_joint`; planner trajectories remain seven-axis. Hardware SDK gripper
-feedback needs its own verified conversion and is not treated as simulation data.
+The independent `PointCloudSelfFilter` delegates geometry loading, kinematics,
+mimic joints and Narrowphase surface classification to RoboPlan 0.7. DimOS matches
+joint state and TF to the capture timestamp, preserves point fields, and drops
+unaligned captures. The shipped simulation gripper coordinate is converted only
+at this boundary; planning remains seven-axis. Hardware SDK feedback needs its
+own verified conversion.
+
+Filtering removes robot surface returns before voxel fusion. There is no solid
+volume sampling or historical robot clear mask; clearing is the mapper's ordinary
+ray tracing. This does not promise to erase every previously accumulated robot
+voxel, especially where later rays do not reach.
