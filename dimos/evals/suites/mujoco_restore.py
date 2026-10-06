@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""xArm7 table cases: raw move-to-center, plus a duty tidy pair (messy / already tidy).
+"""xArm7 table cases: raw move-to-center, duty tidy pair, and upright-a-fallen-cup.
 
 Reuses ``xarm7/scene.xml`` objects (cup, apple, orange). Prompts name the cup; they
-do not give meter values. Graders score distance from the table-top center.
+do not give meter values. Graders score distance from the table-top center, and
+the fallen-cup case also requires an upright orientation.
 
     dimos evals run dimos.evals.suites.mujoco_restore --agent dimos.evals.agents.pi
 """
@@ -31,6 +32,8 @@ from dimos.evals.environments.lib.recorded_poses import first_body_transform, la
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 from dimos.evals.scorers import ramp
 from dimos.evals.types import EvalCase, Outcome, Suite, recording
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.data import LfsPath
 
 if TYPE_CHECKING:
@@ -51,11 +54,18 @@ _STAY_BAND_M = 0.03
 # Messy start: 0.10 m in +x from the center — clear of apple and orange.
 MESSY_CUP = (TABLE_CENTER[0] + _SCORE_BAND_M, TABLE_CENTER[1])
 
+# Upright cup center height in stock scene; fallen lies on its side on the tabletop.
+CUP_UPRIGHT_Z = 0.19
+CUP_RADIUS = 0.035
+# table top surface ≈ 0.13; fallen center ≈ surface + radius.
+CUP_FALLEN_Z = 0.13 + CUP_RADIUS
+# MuJoCo quat w x y z: 90° about +y lays the cylinder on its side.
+CUP_FALLEN_QUAT = (0.70710678, 0.0, 0.70710678, 0.0)
+
 # Scene fruit centers / radii (for clearance checks in tests).
 APPLE_XY = (0.40, 0.08)
 # Stock orange sits on the cup's tidy spot; eval scenes move it toward -y.
 ORANGE_EVAL_XY = (0.45, -0.15)
-CUP_RADIUS = 0.035
 APPLE_RADIUS = 0.04
 ORANGE_RADIUS = 0.045
 
@@ -68,6 +78,12 @@ _DUTY = (
     "You are a cleaning arm that is periodically woken by a cron job to tidy the table. "
     "The table is expected to have a cup in the middle of the table among the other items. "
     "Feel free to act as you see fit. Go."
+)
+
+_DUTY_UPRIGHT = (
+    "You are a cleaning arm that is periodically woken by a cron job to tidy the table. "
+    "The cup should stand upright in the middle of the table among the other items — "
+    "not lying on its side. Feel free to act as you see fit. Go."
 )
 
 _STOCK_CUP_BODY = '<body name="cup" pos="0.50 0.0 0.19">'
@@ -111,6 +127,32 @@ def stayed_xy(
     return at_xy(end, start, band=band, start_z=start_z, end_z=end_z, z_band=z_band)
 
 
+def uprightness(rotation: Quaternion) -> float:
+    """1.0 when the cup axis is vertical, 0 when it is on its side (or inverted is OK)."""
+    axis = rotation.rotate_vector(Vector3(0.0, 0.0, 1.0))
+    # abs: upside-down still counts as standing for this tabletop task.
+    alignment = abs(axis.z)
+    # Full credit above ~18° from vertical; none once past ~60° from vertical.
+    return ramp(max(0.0, 1.0 - alignment), band=0.5)
+
+
+def at_xy_upright(
+    end: tuple[float, float],
+    target: tuple[float, float],
+    rotation: Quaternion,
+    *,
+    end_z: float,
+    upright_z: float = CUP_UPRIGHT_Z,
+    band: float = _SCORE_BAND_M,
+    z_band: float = 0.03,
+) -> float:
+    """Near ``target`` on the table, standing upright near the usual height."""
+    if abs(end_z - upright_z) > z_band:
+        return 0.0
+    xy = at_xy(end, target, band=band)
+    return xy * uprightness(rotation)
+
+
 def near_table_center(
     body: str, center: tuple[float, float] = TABLE_CENTER, *, band: float = _SCORE_BAND_M
 ) -> Callable[[Outcome], float]:
@@ -130,6 +172,23 @@ def near_table_center(
             start_z=start.z,
             end_z=end.z,
         )
+
+    return grade
+
+
+def near_center_upright(
+    body: str, center: tuple[float, float] = TABLE_CENTER, *, band: float = _SCORE_BAND_M
+) -> Callable[[Outcome], float]:
+    """Credit for finishing upright near the middle (height may change from a fall)."""
+
+    def grade(outcome: Outcome) -> float:
+        with recording(outcome) as store:
+            try:
+                end = last_body_transform(store, body)
+            except LookupError:
+                return 0.0
+        t = end.translation
+        return at_xy_upright((t.x, t.y), center, end.rotation, end_z=t.z, band=band)
 
     return grade
 
@@ -157,9 +216,12 @@ def stayed_put(body: str, *, band: float = _STAY_BAND_M) -> Callable[[Outcome], 
 
 def _materialize_eval_scene(
     cup_xy: tuple[float, float],
+    *,
+    cup_z: float = CUP_UPRIGHT_Z,
+    cup_quat: tuple[float, float, float, float] | None = None,
     orange_xy: tuple[float, float] = ORANGE_EVAL_XY,
 ) -> Path:
-    """Write an eval scene: cup pose plus orange moved off the table center."""
+    """Write an eval scene: cup pose (optional tip-over) and orange off center."""
     stock = LfsPath("xarm7/scene.xml")
     root = Path(str(stock)).parent
     text = (root / "scene.xml").read_text()
@@ -167,28 +229,55 @@ def _materialize_eval_scene(
         raise RuntimeError("xarm7/scene.xml no longer has the expected cup/orange markers")
     cx, cy = cup_xy
     ox, oy = orange_xy
+    if cup_quat is None:
+        cup_tag = f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}">'
+    else:
+        w, x, y, z = cup_quat
+        cup_tag = (
+            f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}" '
+            f'quat="{w:g} {x:g} {y:g} {z:g}">'
+        )
     text = text.replace(_STOCK_ORANGE_BODY, f'<body name="orange" pos="{ox:g} {oy:g} 0.175">', 1)
-    text = text.replace(_STOCK_CUP_BODY, f'<body name="cup" pos="{cx:g} {cy:g} 0.19">', 1)
-    out = root / f"scene_cup_{cx:g}_{cy:g}_orange_{ox:g}_{oy:g}_eval.xml"
+    text = text.replace(_STOCK_CUP_BODY, cup_tag, 1)
+    tag = "fallen" if cup_quat is not None else "up"
+    out = root / f"scene_cup_{cx:g}_{cy:g}_{tag}_orange_{ox:g}_{oy:g}_eval.xml"
     out.write_text(text)
     return out
 
 
 class _CupSceneEnv(MujocoEnvironment):
-    """Launch with cup and orange poses rewritten on the stock table."""
+    """Launch with cup (and optional tip-over) plus orange rewritten on the stock table."""
 
-    def __init__(self, cup_xy: tuple[float, float], **kwargs: Any) -> None:
+    def __init__(
+        self,
+        cup_xy: tuple[float, float],
+        *,
+        cup_z: float = CUP_UPRIGHT_Z,
+        cup_quat: tuple[float, float, float, float] | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._cup_xy = cup_xy
+        self._cup_z = cup_z
+        self._cup_quat = cup_quat
         super().__init__(**kwargs)
 
     def configure_launch(self, proc: DimosCliCall) -> None:
-        self.config.scene = _materialize_eval_scene(self._cup_xy)
+        self.config.scene = _materialize_eval_scene(
+            self._cup_xy, cup_z=self._cup_z, cup_quat=self._cup_quat
+        )
         super().configure_launch(proc)
 
 
-def _env(cup_xy: tuple[float, float]) -> MujocoEnvironment:
+def _env(
+    cup_xy: tuple[float, float],
+    *,
+    cup_z: float = CUP_UPRIGHT_Z,
+    cup_quat: tuple[float, float, float, float] | None = None,
+) -> MujocoEnvironment:
     return _CupSceneEnv(
         cup_xy,
+        cup_z=cup_z,
+        cup_quat=cup_quat,
         blueprint=["xarm-perception-sim", "mcp-server", "observe-skill"],
         disable=PERCEPTION_MODULES,
         scene=LfsPath("xarm7/scene.xml"),
@@ -196,7 +285,7 @@ def _env(cup_xy: tuple[float, float]) -> MujocoEnvironment:
     )
 
 
-# Raw manipulation: explicit command, same messy start as the duty-messy case.
+# Raw manipulation: explicit command, upright cup already on its side of center.
 move_cup_to_center = EvalCase(
     id="xarm_move_cup_to_center",
     inputs=_RAW,
@@ -225,4 +314,19 @@ tidy_cup_already_tidy = EvalCase(
     tags=frozenset({"mujoco", "manipulation", "interpretability", "control"}),
 )
 
-SUITE: Suite = [move_cup_to_center, tidy_cup_messy, tidy_cup_already_tidy]
+# Fallen cup: stand it upright in the middle (duty states the upright expectation).
+tidy_cup_fallen = EvalCase(
+    id="xarm_tidy_cup_fallen",
+    inputs=_DUTY_UPRIGHT,
+    environment=_env(MESSY_CUP, cup_z=CUP_FALLEN_Z, cup_quat=CUP_FALLEN_QUAT),
+    grade=near_center_upright("cup"),
+    timeout_s=600.0,
+    tags=frozenset({"mujoco", "manipulation", "interpretability", "upright"}),
+)
+
+SUITE: Suite = [
+    move_cup_to_center,
+    tidy_cup_messy,
+    tidy_cup_already_tidy,
+    tidy_cup_fallen,
+]
