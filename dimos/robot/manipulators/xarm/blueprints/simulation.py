@@ -81,7 +81,6 @@ xarm_sim = autoconnect(
         **{
             **_xarm7_sim_kwargs,
             "base_frame_id": "world",
-            "tracked_sites": ["link_tcp"],
         }
     ),
     coordinator(
@@ -102,5 +101,6 @@ xarm_sim = autoconnect(
         ],
         cls=ArmTwistCoordinator,
         instance_name="ControlCoordinator",
+        publish_frame_poses=True,
     ),
 )

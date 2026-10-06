@@ -44,8 +44,9 @@ single zero is sent: the same deadman for the base and the arm. Gripper openings
 
 Robot-specific settings default to off and are set per suite through `module_env`:
 `RAWROBOTBRIDGE__CAMERA_FRAME`, `__EE_FRAME`, `__GRIPPER_JOINT` and
-`__GRIPPER_RANGE`. The xArm sim blueprint has MuJoCo publish its `link_tcp` site on
-TF (`tracked_sites`) so the bridge can report the measured TCP pose.
+`__GRIPPER_RANGE`. The measured TCP pose comes from the coordinator, which publishes
+its IK task's `link_tcp` on TF (`publish_frame_poses`) by forward kinematics on the
+measured joints, so it works the same in simulation and on hardware.
 
 ## Describing the interface to the agent
 

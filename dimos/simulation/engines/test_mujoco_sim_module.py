@@ -171,22 +171,15 @@ def test_camera_tf_is_published_relative_to_configured_base_frame() -> None:
         module.stop()
 
 
-def test_tracked_bodies_and_sites_are_published_on_tf_in_world() -> None:
+def test_tracked_bodies_are_published_on_tf_in_world() -> None:
     module = MujocoSimModule(tracked_bodies=["apple", "ghost"])
     try:
-        module.config = MujocoSimModuleConfig(
-            tracked_bodies=["apple", "ghost"], tracked_sites=["link_tcp", "no_site"]
-        )
+        module.config = MujocoSimModuleConfig(tracked_bodies=["apple", "ghost"])
 
         class _FakeEngine:
             def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray] | None:
                 if body_name == "apple":
                     return np.array([0.4, 0.08, 0.17]), np.array([0.0, 0.0, 0.0, 1.0])
-                return None
-
-            def get_site_pose(self, site_name: str) -> tuple[np.ndarray, np.ndarray] | None:
-                if site_name == "link_tcp":
-                    return np.array([0.5, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0])
                 return None
 
             def disconnect(self) -> None:
@@ -211,11 +204,7 @@ def test_tracked_bodies_and_sites_are_published_on_tf_in_world() -> None:
             "wrist_camera_depth_optical_frame",
             "wrist_camera_link",
         ]
-        assert children[3:] == ["apple", "link_tcp"]
-        tcp = messages[-1].transforms[4]
-        assert tcp.frame_id == "world"
-        assert np.allclose(tcp.translation.to_numpy(), [0.5, 0.0, 0.3])
-        assert np.allclose(tcp.rotation.to_numpy(), [1.0, 0.0, 0.0, 0.0])
+        assert children[3:] == ["apple"]
         apple = messages[-1].transforms[3]
         assert apple.frame_id == "world"
         assert apple.ts == pytest.approx(time.time(), abs=5.0)
