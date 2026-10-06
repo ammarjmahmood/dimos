@@ -9,9 +9,12 @@
     dimos-repo = { url = "path:../../../.."; flake = false; };
     crate2nix.url = "github:nix-community/crate2nix";
     crate2nix.inputs.nixpkgs.follows = "nixpkgs";
+    # Same rev as Cargo.toml's depth2depth: its flake fetches the model the crate embeds (pinned in its model.json).
+    depth2depth.url = "github:jeff-hykin/depth2depth/f45920fb0838f8fc8779f620a3973c1701a27ec1";
+    depth2depth.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, dimos-repo, crate2nix }:
+  outputs = { self, nixpkgs, flake-utils, dimos-repo, crate2nix, depth2depth }:
     flake-utils.lib.eachSystem [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ] (system:
       let
         isJetson = system == "aarch64-linux";
@@ -25,10 +28,6 @@
             allowInsecurePredicate = pkg: nixpkgs.lib.hasPrefix "cuda12.6-tensorrt-" (pkg.name or "");
           };
         };
-        cuda = pkgs.cudaPackages_12_6;
-        # depth2depth's build.rs wants CUDA_HOME/{include,lib64} and TENSORRT_ROOT/{include,lib}; nvcc carries crt/ in CUDA 12.6.
-        cudaHome = pkgs.symlinkJoin { name = "cuda-home"; paths = [ cuda.cuda_cudart cuda.cuda_nvcc ]; postBuild = "ln -s lib $out/lib64"; };
-        tensorrtRoot = pkgs.symlinkJoin { name = "tensorrt-root"; paths = cuda.tensorrt.all; };
 
         src = pkgs.runCommand "depth2depth-cloud-src" {} ''
           mkdir -p $out/dimos/perception/depth2depth_cloud/rust
@@ -58,10 +57,8 @@
               dimos-depth2depth-cloud = attrs: pkgs.lib.optionalAttrs isJetson {
                 extraRustcOpts = (attrs.extraRustcOpts or []) ++ [ "-C" "link-arg=-Wl,--allow-shlib-undefined" ];
               };
-              depth2depth = attrs: pkgs.lib.optionalAttrs isJetson {
-                CUDA_HOME = cudaHome;
-                TENSORRT_ROOT = tensorrtRoot;
-              };
+              # The model it embeds, and on a Jetson CUDA 12.6 + TensorRT.
+              depth2depth = depth2depth.lib.crateOverride { inherit pkgs; cudaPackages = pkgs.cudaPackages_12_6; };
             };
           };
         }).rootCrate.build;

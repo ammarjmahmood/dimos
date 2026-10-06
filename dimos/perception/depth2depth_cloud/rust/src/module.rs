@@ -49,11 +49,6 @@ const HISTORY_MARGIN_S: f64 = 1.0;
 #[native_config]
 #[derive(Clone)]
 pub struct Config {
-    /// Directory holding `dinov2_vits14.safetensors` and `da2_head_vits.safetensors`.
-    weights_dir: String,
-    /// The model as an ONNX export (in `weights_dir`) for TensorRT on a Jetson, and where built engines are cached.
-    onnx_file: String,
-    engine_cache_dir: String,
     /// Model input size for candle (a Mac, or CPU); both multiples of 14, smaller is faster. TensorRT uses the ONNX's.
     #[validate(range(min = 56, max = 1036))]
     model_height: i64,
@@ -255,7 +250,7 @@ impl Worker {
         let model = match load_model(cfg) {
             Ok(model) => model,
             Err(error) => {
-                tracing::error!(%error, weights_dir = %cfg.weights_dir, "Could not load the depth model; no clouds will be published.");
+                tracing::error!(%error, "Could not load the depth model; no clouds will be published.");
                 return;
             }
         };
@@ -504,58 +499,18 @@ impl Worker {
     }
 }
 
-/// On a Jetson, TensorRT: candle's CUDA path is bound by kernel launches there (190 ms a frame
-/// against TensorRT's 17). The engine is built from the ONNX once and cached, which takes minutes.
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+/// The model built into the depth2depth crate: TensorRT on a Jetson (candle's CUDA path is bound by kernel
+/// launches there, 190 ms a frame against TensorRT's 17; the engine is built once, minutes, and cached),
+/// Metal on a Mac, else CPU.
 fn load_model(cfg: &Config) -> Result<Depth2Depth, String> {
-    let onnx = format!("{}/{}", cfg.weights_dir, cfg.onnx_file);
-    std::fs::create_dir_all(&cfg.engine_cache_dir).map_err(|e| e.to_string())?;
-    let stem = cfg.onnx_file.trim_end_matches(".onnx");
-    let engine = format!("{}/{stem}.engine", cfg.engine_cache_dir);
-    info!(%engine, "Loading the TensorRT engine (building it first if it is not cached).");
-    let open = || Depth2Depth::new_tensorrt(&onnx, &engine, ModelConfig::default());
-    let model = match open() {
-        Ok(model) => model,
-        // An engine another TensorRT version built won't deserialize; rebuild it once.
-        Err(error) if std::path::Path::new(&engine).exists() => {
-            tracing::warn!(%error, %engine, "The cached TensorRT engine did not load; rebuilding it.");
-            std::fs::remove_file(&engine).map_err(|e| e.to_string())?;
-            open().map_err(|e| e.to_string())?
-        }
-        Err(error) => return Err(error.to_string()),
-    };
-    info!("Depth model loaded on TensorRT.");
-    Ok(model)
-}
-
-/// Elsewhere candle: Metal on a Mac, else CPU.
-#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
-fn load_model(cfg: &Config) -> Result<Depth2Depth, String> {
-    use depth2depth::candle::{DType, Device};
-    #[cfg(target_os = "macos")]
-    let device = Device::new_metal(0).unwrap_or(Device::Cpu);
-    #[cfg(not(target_os = "macos"))]
-    let device = Device::Cpu;
-    let weights = |name: &str| format!("{}/{name}", cfg.weights_dir);
-    let model_config = ModelConfig {
+    info!("Loading the depth model (on a Jetson, building the TensorRT engine first if it is not cached).");
+    let model = Depth2Depth::load(ModelConfig {
         model_h: cfg.model_height as usize,
         model_w: cfg.model_width as usize,
         ..ModelConfig::default()
-    };
-    let dtype = if device.is_cpu() {
-        DType::F32
-    } else {
-        DType::F16
-    };
-    let model = Depth2Depth::new(
-        &weights("dinov2_vits14.safetensors"),
-        &weights("da2_head_vits.safetensors"),
-        device.clone(),
-        dtype,
-        model_config,
-    )
+    })
     .map_err(|e| e.to_string())?;
-    info!(?device, "Depth model loaded.");
+    info!("Depth model loaded.");
     Ok(model)
 }
 

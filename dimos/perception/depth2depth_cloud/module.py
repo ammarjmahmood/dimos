@@ -16,19 +16,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import Field, field_validator
 
-from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.CompressedImage import CompressedImage
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
-from dimos.utils.data import get_data
 
 
 class Depth2DepthCloudConfig(NativeModuleConfig):
@@ -43,13 +40,6 @@ class Depth2DepthCloudConfig(NativeModuleConfig):
     # frame_id is also a NativeModuleConfig field; listed so it still crosses to the Rust config.
     base_fields: frozenset[str] = frozenset({"frame_id"})
 
-    # Depth Anything V2 small, metric (Hypersim), as the depth2depth crate's two safetensors files; empty fetches
-    # the bundled ones (184 MB) when the module starts, not whenever a config is built.
-    weights_dir: str = ""
-    # On a Jetson the model runs through TensorRT from this ONNX export (fixed 364x448 input); the engine is
-    # built on first run (minutes) and cached per machine.
-    onnx_file: str = "da2_metric_hypersim_vits_364x448.onnx"
-    engine_cache_dir: str = str(Path.home() / ".cache" / "dimos" / "depth2depth_cloud")
     # Model input for candle (Mac, CPU); multiples of 14, smaller is faster.
     model_height: int = 364
     model_width: int = 448
@@ -114,12 +104,6 @@ class Depth2DepthCloud(NativeModule):
     lidar: In[PointCloud2]
     tf: In[TFMessage]
     depth_cloud: Out[PointCloud2]
-
-    @rpc
-    def start(self) -> None:
-        if not self.config.weights_dir:
-            self.config.weights_dir = str(get_data("depth2depth_vits_hypersim"))
-        super().start()
 
 
 if TYPE_CHECKING:
