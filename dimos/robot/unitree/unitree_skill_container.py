@@ -269,7 +269,8 @@ class UnitreeSkillContainer(Module):
 
         The planner drops out of FOLLOWING_PATH for a moment every time it
         replans, so a pause only counts as the end once it has lasted `settle`
-        seconds without the goal being reached.
+        seconds without the goal being reached. A goal that did not arrive is
+        cancelled, since a planner can keep retrying one it reported failed.
         """
         # TODO: Improve this. This is not a nice way to do it. I should
         # subscribe to arrival/cancellation events instead.
@@ -285,8 +286,10 @@ class UnitreeSkillContainer(Module):
             elif idle_since is None:
                 idle_since = time.monotonic()
             elif time.monotonic() - idle_since > settle:
+                self._navigation.cancel_goal()
                 return "Navigation was cancelled or failed"
             time.sleep(0.1)
+        self._navigation.cancel_goal()
         return "Navigation timed out"
 
     @skill

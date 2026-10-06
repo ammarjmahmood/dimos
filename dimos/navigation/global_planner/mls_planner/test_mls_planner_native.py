@@ -25,12 +25,14 @@ import pytest
 from dimos.agents.skills.navigation import NavigationSkillContainer
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.coordination.module_coordinator import _resolve_single_ref
+from dimos.core.module import ModuleBase
 from dimos.core.stream import Stream, Transport
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.navigation.base import NavigationState
 from dimos.navigation.global_planner.mls_planner.mls_planner_native import MLSPlannerNative
 from dimos.navigation.go2.replanning_a_star.spec import NavigationInterfaceSpec
+from dimos.robot.unitree.unitree_skill_container import UnitreeSkillContainer
 from dimos.spec.utils import spec_annotation_compliance
 
 
@@ -159,12 +161,15 @@ def test_the_planner_exposes_no_skills(
     assert module.get_skills() == []
 
 
-def test_navigation_skills_resolve_to_the_mls_planner() -> None:
+def test_the_planner_matches_the_navigation_spec_by_signature() -> None:
     assert spec_annotation_compliance(MLSPlannerNative, NavigationInterfaceSpec)
 
-    blueprint = autoconnect(MLSPlannerNative.blueprint(), NavigationSkillContainer.blueprint())
+
+@pytest.mark.parametrize("skills", [NavigationSkillContainer, UnitreeSkillContainer])
+def test_navigation_skills_resolve_to_the_mls_planner(skills: type[ModuleBase]) -> None:
+    blueprint = autoconnect(MLSPlannerNative.blueprint(), skills.blueprint())
     atoms = {atom.module: atom for atom in blueprint.active_blueprints}
-    consumer = atoms[NavigationSkillContainer]
+    consumer = atoms[skills]
     (ref,) = [ref for ref in consumer.module_refs if ref.name == "_navigation"]
     resolved = _resolve_single_ref(consumer, ref, ref.spec, blueprint, set())
     assert resolved == atoms[MLSPlannerNative].name
