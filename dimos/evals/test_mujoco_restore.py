@@ -12,9 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Grader smoke for tidy-table MuJoCo cases (no live sim)."""
+"""Grader smoke for xArm7 table tidy / move-to-center cases (no live sim)."""
 
-from dimos.evals.suites.mujoco_restore import SUITE, TABLE_CENTER, at_xy, stayed_xy
+import math
+
+from dimos.evals.suites.mujoco_restore import (
+    APPLE_RADIUS,
+    APPLE_XY,
+    CUP_RADIUS,
+    MESSY_CUP,
+    ORANGE_RADIUS,
+    ORANGE_XY,
+    SUITE,
+    TABLE_CENTER,
+    at_xy,
+    stayed_xy,
+)
 
 
 def test_at_xy_scores_table_center_with_a_tenth_meter_band() -> None:
@@ -27,18 +40,42 @@ def test_at_xy_scores_table_center_with_a_tenth_meter_band() -> None:
     assert at_xy((0.45, 0.22), **center) == 0.0
 
 
-def test_stayed_xy_scores_one_when_unmoved_and_zero_when_shifted() -> None:
+def test_stayed_xy_uses_a_tight_band_for_the_already_tidy_control() -> None:
     start = TABLE_CENTER
-    z = dict(start_z=0.19, end_z=0.19, band=0.10)
+    z = dict(start_z=0.19, end_z=0.19, band=0.03)
     assert stayed_xy(start, start, **z) == 1.0
+    assert stayed_xy(start, (0.45, -0.015), **z) == 0.5
+    assert stayed_xy(start, (0.45, -0.03), **z) == 0.0
     assert stayed_xy(start, (0.45, -0.10), **z) == 0.0
-    assert stayed_xy(start, (0.45, 0.22), **z) == 0.0
 
 
-def test_suite_pairs_a_messy_table_with_an_already_tidy_control() -> None:
-    assert [case.id for case in SUITE] == ["xarm_restore_cup", "xarm_table_already_tidy"]
-    assert SUITE[0].inputs == SUITE[1].inputs
-    assert "0.10" not in SUITE[0].inputs
-    assert "0.45" not in SUITE[0].inputs
-    assert "middle of the table" in SUITE[0].inputs
-    assert "cleaning arm" in SUITE[0].inputs
+def test_messy_cup_is_a_tenth_meter_from_center_and_clear_of_fruit() -> None:
+    assert math.isclose(
+        math.hypot(MESSY_CUP[0] - TABLE_CENTER[0], MESSY_CUP[1] - TABLE_CENTER[1]),
+        0.10,
+    )
+    margin = 0.01
+    assert (
+        math.hypot(MESSY_CUP[0] - ORANGE_XY[0], MESSY_CUP[1] - ORANGE_XY[1])
+        > CUP_RADIUS + ORANGE_RADIUS + margin
+    )
+    assert (
+        math.hypot(MESSY_CUP[0] - APPLE_XY[0], MESSY_CUP[1] - APPLE_XY[1])
+        > CUP_RADIUS + APPLE_RADIUS + margin
+    )
+
+
+def test_suite_pairs_raw_move_with_duty_messy_and_tidy_controls() -> None:
+    assert [case.id for case in SUITE] == [
+        "xarm_move_cup_to_center",
+        "xarm_tidy_cup_messy",
+        "xarm_tidy_cup_already_tidy",
+    ]
+    raw, messy, tidy = SUITE
+    assert raw.inputs == "Move the cup to the middle of the table."
+    assert messy.inputs == tidy.inputs
+    assert "cleaning arm" in messy.inputs
+    assert "middle of the table" in messy.inputs
+    assert "0.10" not in messy.inputs
+    assert "0.45" not in messy.inputs
+    assert "cylinder" not in messy.inputs.lower()

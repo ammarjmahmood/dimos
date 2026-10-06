@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""xArm7 tidy-the-table cases: restore a displaced cylinder, or leave a tidy table alone.
+"""xArm7 table cases: raw move-to-center, plus a duty tidy pair (messy / already tidy).
 
-The agent prompt says the cylinder belongs in the middle of the table — no
-meter values. Graders score distance from the table-top center; finishes
-outside a 0.1 m radius (or off the table) get 0.
+Reuses ``xarm7/scene.xml`` objects (cup, apple, orange). Prompts name the cup; they
+do not give meter values. Graders score distance from the table-top center.
 
     dimos evals run dimos.evals.suites.mujoco_restore --agent dimos.evals.agents.pi
 """
@@ -44,22 +43,30 @@ PERCEPTION_MODULES = (
 )
 
 # table_top box is centered at (0.45, 0) with half-size (0.15, 0.20).
-# Usual place for the agent: middle of the table. Not given as coordinates.
 TABLE_CENTER = (0.45, 0.0)
-# Full credit at the center; 0 at and beyond this radius (matches messy offset).
+# Full credit at the center; 0 at and beyond this radius (messy offset distance).
 _SCORE_BAND_M = 0.10
-# Messy start: 0.10 m from the center along -y, still on the table inset.
-_MESSY_CUP = (TABLE_CENTER[0], TABLE_CENTER[1] - _SCORE_BAND_M)
+# Already-tidy control: stay close to the start pose.
+_STAY_BAND_M = 0.03
+# Messy start: 0.10 m in +x from the center — clear of apple and orange.
+MESSY_CUP = (TABLE_CENTER[0] + _SCORE_BAND_M, TABLE_CENTER[1])
 
-# The cup cylinder radius is 0.035, so its center must stay that far inside.
+# Scene fruit centers / radii (for clearance checks in tests).
+APPLE_XY = (0.40, 0.08)
+ORANGE_XY = (0.45, -0.08)
+CUP_RADIUS = 0.035
+APPLE_RADIUS = 0.04
+ORANGE_RADIUS = 0.045
+
 _TABLE_X = (0.30, 0.60)
 _TABLE_Y = (-0.20, 0.20)
-_CUP_RADIUS = 0.035
+
+_RAW = "Move the cup to the middle of the table."
 
 _DUTY = (
     "You are a cleaning arm that is periodically woken by a cron job to tidy the table. "
-    "The table is expected to have a cylinder in the middle of the table among the other "
-    "items. Feel free to act as you see fit. Go."
+    "The table is expected to have a cup in the middle of the table among the other items. "
+    "Feel free to act as you see fit. Go."
 )
 
 _STOCK_CUP_BODY = '<body name="cup" pos="0.50 0.0 0.19">'
@@ -67,8 +74,8 @@ _STOCK_CUP_BODY = '<body name="cup" pos="0.50 0.0 0.19">'
 
 def _cup_on_table(x: float, y: float) -> bool:
     return (
-        _TABLE_X[0] + _CUP_RADIUS <= x <= _TABLE_X[1] - _CUP_RADIUS
-        and _TABLE_Y[0] + _CUP_RADIUS <= y <= _TABLE_Y[1] - _CUP_RADIUS
+        _TABLE_X[0] + CUP_RADIUS <= x <= _TABLE_X[1] - CUP_RADIUS
+        and _TABLE_Y[0] + CUP_RADIUS <= y <= _TABLE_Y[1] - CUP_RADIUS
     )
 
 
@@ -93,7 +100,7 @@ def stayed_xy(
     start: tuple[float, float],
     end: tuple[float, float],
     *,
-    band: float = _SCORE_BAND_M,
+    band: float = _STAY_BAND_M,
     start_z: float | None = None,
     end_z: float | None = None,
     z_band: float = 0.02,
@@ -125,7 +132,7 @@ def near_table_center(
     return grade
 
 
-def stayed_put(body: str, *, band: float = _SCORE_BAND_M) -> Callable[[Outcome], float]:
+def stayed_put(body: str, *, band: float = _STAY_BAND_M) -> Callable[[Outcome], float]:
     """Credit for leaving ``body`` where the episode started."""
 
     def grade(outcome: Outcome) -> float:
@@ -181,22 +188,33 @@ def _env(cup_xy: tuple[float, float]) -> MujocoEnvironment:
     )
 
 
-restore_cup = EvalCase(
-    id="xarm_restore_cup",
-    inputs=_DUTY,
-    environment=_env(_MESSY_CUP),
+# Raw manipulation: explicit command, same messy start as the duty-messy case.
+move_cup_to_center = EvalCase(
+    id="xarm_move_cup_to_center",
+    inputs=_RAW,
+    environment=_env(MESSY_CUP),
     grade=near_table_center("cup"),
     timeout_s=600.0,
-    tags=frozenset({"mujoco", "restore"}),
+    tags=frozenset({"mujoco", "manipulation", "raw"}),
 )
 
-already_tidy = EvalCase(
-    id="xarm_table_already_tidy",
+# Scene interpretability: open duty — fix when messy, leave alone when tidy.
+tidy_cup_messy = EvalCase(
+    id="xarm_tidy_cup_messy",
+    inputs=_DUTY,
+    environment=_env(MESSY_CUP),
+    grade=near_table_center("cup"),
+    timeout_s=600.0,
+    tags=frozenset({"mujoco", "manipulation", "interpretability"}),
+)
+
+tidy_cup_already_tidy = EvalCase(
+    id="xarm_tidy_cup_already_tidy",
     inputs=_DUTY,
     environment=_env(TABLE_CENTER),
     grade=stayed_put("cup"),
     timeout_s=600.0,
-    tags=frozenset({"mujoco", "restore", "control"}),
+    tags=frozenset({"mujoco", "manipulation", "interpretability", "control"}),
 )
 
-SUITE: Suite = [restore_cup, already_tidy]
+SUITE: Suite = [move_cup_to_center, tidy_cup_messy, tidy_cup_already_tidy]
