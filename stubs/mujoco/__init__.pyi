@@ -97,6 +97,7 @@ class mjtObj:
     mjOBJ_CAMERA: int
     mjOBJ_GEOM: int
     mjOBJ_JOINT: int
+    mjOBJ_KEY: int
     mjOBJ_MESH: int
     mjOBJ_SITE: int
     mjOBJ_TENDON: int
