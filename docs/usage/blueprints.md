@@ -33,13 +33,6 @@ Now you can create the blueprint with:
 blueprint = connection(arg1=5, arg2="foo")
 ```
 
-A one-module blueprint can be called again to change its config. The new values merge over the old ones and everything else is kept:
-
-```python session=blueprint-ex1
-base = connection(arg1=5, arg2="foo").global_config(n_workers=2)
-variant = base(arg2="bar")  # arg1=5, arg2="bar", n_workers=2
-```
-
 ## Linking blueprints
 
 You can link multiple blueprints together with `autoconnect`:

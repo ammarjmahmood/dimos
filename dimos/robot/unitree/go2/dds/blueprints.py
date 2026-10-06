@@ -77,7 +77,12 @@ _mls_planner_motion = MLSPlannerNative.blueprint(
 # The head L1 stays off and Point-LIO owns odom, so GO2DDS publishes no lidar, odometry or
 # odom tf edge. Its raw L1 cloud and body IMU move aside so only the MID-360 reaches
 # Point-LIO's inputs.
-go2_dds_mid360 = go2_dds(lidar_on=False, tf_root="mid360_link").remappings(
+go2_dds_mid360 = GO2DDS.blueprint(
+    iface="enP8p1s0",
+    session=ZenohConfig(mode="router", listen=["tcp/0.0.0.0:7447"], connect=[]),
+    lidar_on=False,
+    tf_root="mid360_link",
+).remappings(
     [
         (GO2DDS, "odometry", "go2_odometry_unused"),
         (GO2DDS, "lidar", "go2_lidar_unused"),
