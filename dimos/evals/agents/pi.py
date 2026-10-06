@@ -49,11 +49,12 @@ from dimos.evals.constants import (
     PROVIDERS,
     RAW_MAX_ANGULAR_RPS,
     RAW_MAX_CMD_S,
+    RAW_MAX_EE_ANGULAR_RPS,
+    RAW_MAX_EE_LINEAR_MPS,
     RAW_MAX_LINEAR_MPS,
     RAW_README,
 )
 from dimos.evals.environments.base import Environment
-from dimos.evals.robot_context import stage_robot_context
 from dimos.evals.types import (
     EndedBy,
     RunningEnvironment,
@@ -250,22 +251,10 @@ class PiAdapter(Agent):
             files = dict(env.artifacts)
             if env.streams:
                 files["recording"] = recording_file(env.streams, run_dir / "recording.db")
-        if env.robot_context is not None:
-            files.update(stage_robot_context(env.robot_context, run_dir / "robot"))
         parts = [self.config.system_prompt, self.config.instructions]
-        if env.robot_context is not None:
-            parts.append(
-                "Robot context is in robot/README.md and robot/robot_info.json. "
-                "robot/robot.urdf and robot/gripper.urdf have local mesh references. "
-                "Read the short README/JSON once for frames, limits, gripper dimensions and TCP geometry; "
-                "consult the URDFs selectively or parse them in code if needed. "
-                "Use live observations for current poses and objects."
-            )
         parts.append("Files:\n" + "\n".join(f"- {name}: {path}" for name, path in files.items()))
         if self.config.no_dimos:
             parts.append(NO_DIMOS_GUIDANCE)
-            if env.raw_endpoint:
-                parts.append(f"Robot endpoint (plain Zenoh, connect directly): {env.raw_endpoint}")
         elif self.config.builtin_guidance and "recording" in files:
             parts.append(
                 "The recording is a dimos memory store (sqlite). In Python:\n"
@@ -289,18 +278,20 @@ class PiAdapter(Agent):
         """ROBOT.md for a robot; the selected observations as plain files for a dataset."""
         files = dict(env.artifacts)
         files.pop("recording", None)  # a dimOS memory store; not readable without dimOS
-        if env.raw_endpoint and env.raw_guide:
+        if env.raw_endpoint:
             readme = run_dir / "ROBOT.md"
             readme.write_text(
-                RAW_README.format(
+                (env.raw_guide or RAW_README).format(
                     endpoint=env.raw_endpoint,
                     max_cmd_s=RAW_MAX_CMD_S,
                     max_linear=RAW_MAX_LINEAR_MPS,
                     max_angular=RAW_MAX_ANGULAR_RPS,
+                    max_ee_linear=RAW_MAX_EE_LINEAR_MPS,
+                    max_ee_angular=RAW_MAX_EE_ANGULAR_RPS,
                 )
             )
             files["robot"] = readme
-        elif env.mcp_url and not env.raw_endpoint:
+        elif env.mcp_url:
             raise ValueError("no_dimos on a robot environment needs raw_bridge=True")
         if env.streams:
             files["observations"] = plain_recording(env.streams, run_dir / "input")

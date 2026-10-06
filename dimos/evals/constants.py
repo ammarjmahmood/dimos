@@ -69,3 +69,42 @@ any Zenoh client works, e.g. `pip install eclipse-zenoh`.
 
 There is no other interface to this robot.
 """
+
+RAW_XARM7_README = """\
+Robot interface: an xArm7 with a parallel gripper and a wrist RGB-D camera, as a Zenoh peer
+at {endpoint}. Connect to it directly in peer mode with multicast and gossip scouting off,
+e.g. `uv venv .clientenv && uv pip install --python .clientenv/bin/python eclipse-zenoh numpy pillow`.
+Close the session before your script exits. Subscribe before commanding.
+
+Binary payloads carry an attachment {{"t": unix_seconds}}.
+  robot/arm/state/json     {{"t", "joint_names", "positions" (rad), "velocities" (rad/s),
+                           "ee_pose": {{"frame", "xyz", "quaternion_xyzw"}} or null,
+                           "gripper_opening" (0 closed .. 1 open)}}, 20 Hz.
+                           ee_pose is the measured tool centre point (TCP) in world.
+  robot/camera/jpeg        wrist RGB, 15 Hz
+  robot/camera/depth_f32   wrist depth aligned to the RGB: float32 little-endian
+                           (height, width), optical-axis Z in metres
+  robot/camera/depth_info/json  {{"t", "width", "height", "dtype", "unit", "frame_id"}}
+  robot/camera_info/json   {{"width", "height", "K"}}
+  robot/camera_pose/json   {{"t", "frame", "xyz", "quaternion_xyzw"}}: wrist optical pose
+                           in world; optical +Z forward, +X image right, +Y image down
+  robot/arm/twist/json     publish {{"vx", "vy", "vz" (m/s), "wx", "wy", "wz" (rad/s), "t" (s)}}:
+                           TCP velocity about fixed world axes, held for t seconds
+                           (max {max_cmd_s:g}) and then stopped. A new twist replaces the previous
+                           one; a zero twist stops. Components clamp to {max_ee_linear:g} m/s and
+                           {max_ee_angular:g} rad/s; omitted fields are zero.
+  robot/arm/gripper/json   publish {{"opening": 0..1}}, 0 closed and 1 open; persists until changed.
+Commands get no acknowledgement; malformed or out-of-range ones are dropped.
+
+Motion is local IK tracking without collision checking. Distance is velocity x time and
+only approximate, so check ee_pose and the cameras after every move. The robot base is
+0.12 m above world with the same axes. At the start pose the wrist camera looks straight
+down: image right = world -Y, image up = world +X. Depth pixel (u, v) back-projects as
+z = depth[v, u], x = (u - cx) z / fx, y = (v - cy) z / fy, then camera_pose takes it to world.
+
+Gripper: the TCP is 0.172 m along the gripper axis from its root; the finger pads sit
+11-48 mm behind the TCP. The jaw gap runs from about 1.6 mm (closed) to 88.9 mm (open).
+A gripper blocked by an object holds its target; judge a grasp from object motion.
+
+There is no other interface to this robot.
+"""

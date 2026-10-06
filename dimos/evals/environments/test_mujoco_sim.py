@@ -113,8 +113,9 @@ def test_raw_manipulation_uses_the_shared_bridge_and_suite_owned_interface():
     assert twist["params"]["robot_model"] is not None
 
 
-def test_suite_owned_interface_replaces_robot_md(tmp_path):
+def test_suite_guide_becomes_robot_md(tmp_path):
     from dimos.evals.agents.pi import PiAdapter
+    from dimos.evals.suites.mujoco_xarm_raw import SUITE
     from dimos.evals.types import RunningEnvironment
 
     env = RunningEnvironment(
@@ -122,13 +123,12 @@ def test_suite_owned_interface_replaces_robot_md(tmp_path):
         streams=(),
         artifacts={},
         raw_endpoint="tcp/127.0.0.1:12345",
-        raw_guide=False,
+        raw_guide=SUITE[0].environment.config.raw_guide,
     )
-    agent = PiAdapter(no_dimos=True)
-    assert "robot" not in agent._no_dimos_files(env, tmp_path)
-    prompt = agent._prepare_case(env, tmp_path)
-    assert "tcp/127.0.0.1:12345" in prompt
-    assert not (tmp_path / "ROBOT.md").exists()
+    guide = PiAdapter(no_dimos=True)._no_dimos_files(env, tmp_path)["robot"].read_text()
+    assert "tcp/127.0.0.1:12345" in guide
+    assert "robot/arm/twist/json" in guide and "cmd_vel/json" not in guide
+    assert "0.1 m/s" in guide and "0.5 rad/s" in guide  # limits filled in
 
 
 def test_default_guide_is_still_written_for_navigation(tmp_path):

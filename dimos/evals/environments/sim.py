@@ -31,7 +31,6 @@ from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.evals.constants import RAW_ENDPOINT
 from dimos.evals.environments.base import Environment
 from dimos.evals.environments.lib.launch import default_mcp_url, validate_blueprints
-from dimos.evals.robot_context import robot_context_files
 from dimos.evals.types import RunningEnvironment
 from dimos.protocol.service.spec import BaseConfig
 
@@ -47,9 +46,8 @@ class SimConfig(BaseConfig):
     disable: tuple[str, ...] = ()
     # Also expose the robot as plain Zenoh topics (raw-robot-bridge) for agents without dimOS.
     raw_bridge: bool = False
-    # False when the suite's own instruction describes the raw interface (no default ROBOT.md).
-    raw_guide: bool = True
-    robot_context: Path | None = None
+    # ROBOT.md template describing this robot's raw topics; None: the default RAW_README.
+    raw_guide: str | None = None
     attach: bool = False
     launch_timeout_s: float = 1200.0
     at_rest_m: float = 0.05
@@ -93,8 +91,6 @@ class Sim(Environment):
         """Return achieved pose for settling; raise LookupError before the first sample."""
 
     def preflight(self, agent: Agent) -> None:
-        if self.config.robot_context is not None:
-            robot_context_files(self.config.robot_context)
         if self.config.attach:
             if agent.config.modules:
                 raise RuntimeError(
@@ -165,7 +161,6 @@ class Sim(Environment):
             artifacts=artifacts,
             raw_endpoint=self._raw_endpoint if self.config.raw_bridge else None,
             raw_guide=self.config.raw_guide,
-            robot_context=self.config.robot_context,
         )
 
     def _wait_recording(self, deadline: float, pid: int | None) -> Path:

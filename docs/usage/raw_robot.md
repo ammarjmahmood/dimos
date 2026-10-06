@@ -50,16 +50,8 @@ measured joints, so it works the same in simulation and on hardware.
 
 ## Describing the interface to the agent
 
-The suite owns the description. `mujoco_xarm_raw` puts the topics, units and
-command formats in the case instruction and sets `raw_guide=False`; the harness
-adds only the per-run endpoint. Suites that leave `raw_guide` on get the default
-navigation `ROBOT.md`.
-
-## Robot context
-
-Suites can select a robot-only bundle with `robot_context=local_robot_context(...)`,
-which resolves `$DIMOS_ROBOT_CONTEXT_DIR/<name>`; with the variable unset the case
-runs without it. The bundle is kept outside the repository for now. Pi stages only
-checksum-manifest-listed files (URDFs, meshes, licenses, `robot_info.json`, a short
-README) into the case's `robot/` directory. Scene XML, object poses and grader state
-are never included.
+A no-dimOS agent learns the robot from `ROBOT.md`, which Pi writes into the run
+directory from a template, filling in the per-run endpoint and limits. The template
+comes from the suite's `raw_guide`; when unset it is the default navigation guide
+(`RAW_README`). `mujoco_xarm_raw` uses `RAW_XARM7_README`, which also covers the
+gripper geometry. The case instruction carries only the task.
