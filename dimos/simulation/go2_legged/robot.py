@@ -121,7 +121,7 @@ class LeggedGo2:
         self.policy.reset()
 
     def tick(
-        self, command: NDArray[np.float64], on_substep: Callable[[int], None] | None = None
+        self, command: NDArray[np.float64], on_substep: Callable[[], None] | None = None
     ) -> None:
         """Advance one policy tick toward a velocity command."""
         self._command += np.clip(command - self._command, -COMMAND_SLEW, COMMAND_SLEW)
@@ -130,14 +130,14 @@ class LeggedGo2:
         d = self.data
         dt = self.model.opt.timestep
         alpha = dt / (FITTED_ACTUATOR_TAU + dt)
-        for i in range(self.substeps):
+        for _ in range(self.substeps):
             tau = kp * (self._target - d.qpos[self._qpos_adr]) - kd * d.qvel[self._dof_adr]
             tau = np.clip(tau, -self._torque_limit, self._torque_limit)
             self._applied += alpha * (tau - self._applied)
             d.ctrl[self._actuator_ids] = self._applied
             mujoco.mj_step(self.model, d)
             if on_substep is not None:
-                on_substep(i)
+                on_substep()
 
     def _observe(self) -> Proprioception:
         d = self.data

@@ -20,7 +20,13 @@ import pytest
 
 from dimos.msgs.sim_msgs.Contacts import Contact
 from dimos.simulation.go2_legged.policy import OnnxGo2Policy
-from dimos.simulation.go2_sim.world import FRAME_DT, Go2Sim, LidarFrame, scene_edges
+from dimos.simulation.go2_sim.world import (
+    FRAME_DT,
+    TICKS_PER_FRAME,
+    Go2Sim,
+    LidarFrame,
+    scene_edges,
+)
 from dimos.simulation.scenes.procedural import Scene, office
 
 pytestmark = pytest.mark.self_hosted
@@ -47,13 +53,15 @@ def sim(scene: Scene, policy: OnnxGo2Policy) -> Go2Sim:
 
 
 def _next_frame(sim: Go2Sim, command: NDArray[np.float64]) -> LidarFrame:
-    while (frame := sim.tick(command)) is None:
-        pass
-    return frame
+    for _ in range(TICKS_PER_FRAME):
+        if (frame := sim.tick(command)) is not None:
+            return frame
+    raise AssertionError("no lidar frame within one frame period")
 
 
-def _floor_is_flat(frame: LidarFrame, floor: float) -> None:
-    world = frame.position + frame.points.astype(np.float64) @ frame.rotation.T
+def _floor_is_flat(frame: LidarFrame, sim: Go2Sim, floor: float) -> None:
+    position, rotation = sim.sensor_pose()
+    world = position + frame.points.astype(np.float64) @ rotation.T
     z = world[:, 2]
     assert z.min() > floor - 0.05
     assert abs(np.quantile(z, 0.1) - floor) < 0.03
@@ -64,13 +72,13 @@ def test_frames_come_out_at_10hz_in_the_sensor_frame(sim: Go2Sim) -> None:
     frames = [f for _ in range(10) if (f := sim.tick(STILL)) is not None]
     assert [f.t for f in frames] == pytest.approx([FRAME_DT, 2 * FRAME_DT])
     assert 12_000 < len(frames[-1].points) < 20_000
-    _floor_is_flat(frames[-1], sim.scene.params["z0"])
+    _floor_is_flat(frames[-1], sim, sim.scene.params["z0"])
 
 
 def test_deskew_keeps_the_floor_flat_while_walking(sim: Go2Sim) -> None:
     for _ in range(75):
         sim.tick(FORWARD)
-    _floor_is_flat(_next_frame(sim, FORWARD), sim.scene.params["z0"])
+    _floor_is_flat(_next_frame(sim, FORWARD), sim, sim.scene.params["z0"])
 
 
 def test_standing_robot_touches_the_floor_only_with_its_feet(sim: Go2Sim) -> None:

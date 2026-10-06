@@ -20,8 +20,8 @@ import pytest
 
 from dimos.simulation.scenes.procedural import (
     CEILING_HEIGHT,
-    GOAL_MIN_DISTANCE,
     SLAB_THICKNESS,
+    START_CLEARANCE,
     Scene,
     generate,
     office,
@@ -29,7 +29,7 @@ from dimos.simulation.scenes.procedural import (
 
 
 def test_office_is_deterministic_and_pinned() -> None:
-    assert office(3).digest() == office(3).digest() == "9e198719f08231d1"
+    assert office(3).digest() == office(3).digest() == "1f153a5d1bbd37d4"
     assert office(3).digest() != office(4).digest()
 
 
@@ -41,17 +41,18 @@ def test_office_geometry_is_enclosed_and_on_one_floor() -> None:
     assert lo[2] == pytest.approx(z0 - SLAB_THICKNESS)
     assert hi[2] > z0 + CEILING_HEIGHT
     assert scene.start[2] == z0
-    assert all(goal.position[2] == z0 for goal in scene.goals)
 
 
-def test_office_goals_are_far_from_the_start_and_inside_the_walls() -> None:
-    scene = office(7)
-    lo, hi = scene.bounds()
-    for goal in scene.goals:
-        distance = math.hypot(goal.position[0] - scene.start[0], goal.position[1] - scene.start[1])
-        assert distance >= GOAL_MIN_DISTANCE
-        assert lo[0] < goal.position[0] < hi[0]
-        assert lo[1] < goal.position[1] < hi[1]
+def test_office_keeps_clutter_and_tables_clear_of_the_start() -> None:
+    for seed in range(1, 101):
+        scene = office(seed)
+        sx, sy, _ = scene.start
+        for box in scene.boxes:
+            if box.kind != "clutter":
+                continue
+            dx = max(box.center[0] - box.half[0] - sx, 0.0, sx - box.center[0] - box.half[0])
+            dy = max(box.center[1] - box.half[1] - sy, 0.0, sy - box.center[1] - box.half[1])
+            assert math.hypot(dx, dy) >= START_CLEARANCE - 1e-9, seed
 
 
 def test_office_records_its_parameters() -> None:
@@ -66,6 +67,5 @@ def test_degenerate_boxes_are_dropped() -> None:
     assert scene.boxes == []
 
 
-def test_unknown_family_is_an_error() -> None:
-    with pytest.raises(KeyError):
-        generate("warehouse", 1)
+def test_generate_dispatches_by_family() -> None:
+    assert generate("office", 3).digest() == office(3).digest()

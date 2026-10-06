@@ -16,12 +16,12 @@
 
 from __future__ import annotations
 
-from types import ModuleType
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.global_config import global_config
-from dimos.navigation.global_planner.viz import robot_body_box
+from dimos.navigation.global_planner.viz import body_on_base_link
 from dimos.navigation.movement_manager.movement_manager import MovementManager
 from dimos.robot.unitree.go2.constants import ROBOT_HEIGHT, ROBOT_LENGTH, ROBOT_WIDTH
 from dimos.robot.unitree.go2.go2_mid360_static_transforms import Go2Mid360StaticTf
@@ -34,13 +34,6 @@ if TYPE_CHECKING:
     from rerun.blueprint import Blueprint
 
     from dimos.msgs.nav_msgs.LineSegments3D import LineSegments3D
-
-
-def _robot_body(rr: ModuleType) -> list[Archetype]:
-    return [
-        robot_body_box(ROBOT_LENGTH, ROBOT_WIDTH, ROBOT_HEIGHT),
-        rr.Transform3D(parent_frame="tf#/base_link"),
-    ]
 
 
 def _scene_lines(scene: LineSegments3D) -> Archetype:
@@ -67,7 +60,11 @@ def _rerun_blueprint() -> Blueprint:
 _rerun_config: dict[str, Any] = {
     "blueprint": _rerun_blueprint,
     "tf_axes": 0.3,
-    "static": {"world/robot_body": _robot_body},
+    "static": {
+        "world/robot_body": partial(
+            body_on_base_link, length=ROBOT_LENGTH, width=ROBOT_WIDTH, height=ROBOT_HEIGHT
+        )
+    },
     "visual_override": {"world/scene": _scene_lines},
 }
 

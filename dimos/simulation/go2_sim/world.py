@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from pathlib import Path
 from threading import Event, Thread
 import time
 
@@ -49,10 +50,11 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.sim_msgs.Contacts import Contact, Contacts, Part
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.protocol.tf.static_tf_publisher import frames_to_edge_transforms
+from dimos.robot.unitree.go2.constants import CMD_VEL_TIMEOUT
 from dimos.robot.unitree.go2.go2_mid360_static_transforms import FRAMES
 from dimos.simulation.go2_legged.policy import Go2Policy, load_policy
 from dimos.simulation.go2_legged.robot import CONTROL_DT, LeggedGo2, apply_fitted_physics, go2_spec
-from dimos.simulation.scenes.procedural import Scene, generate
+from dimos.simulation.scenes.procedural import Family, Scene, generate
 from dimos.simulation.sensors.mid360.lidar import SimMid360
 from dimos.simulation.sensors.mid360.pattern import POINT_RATE
 from dimos.simulation.sensors.mujoco_raycaster import MujocoRaycaster
@@ -65,7 +67,8 @@ TICKS_PER_FRAME = round(FRAME_DT / CONTROL_DT)
 LIDAR_HALF_EXTENTS = (0.0325, 0.0325, 0.03)
 COLLISION_GROUP = 3
 SCENE_PUBLISH_DT = 2.0
-COMMAND_TIMEOUT = 0.2
+ODOM_FRAME_ID = "odom"
+SENSOR_FRAME_ID = "mid360_link"
 STILL = np.zeros(3)
 
 BOX_EDGES = np.array(
@@ -103,8 +106,6 @@ class LidarFrame:
 
     t: float
     points: NDArray[np.float32]
-    position: NDArray[np.float64]
-    rotation: NDArray[np.float64]
 
 
 class GroundTruthLio:
@@ -129,7 +130,7 @@ class GroundTruthLio:
         world = np.concatenate(self._world) if self._world else np.zeros((0, 3))
         self._world = []
         points = ((world - position) @ rotation).astype(np.float32)
-        return LidarFrame(t, points, position, rotation)
+        return LidarFrame(t, points)
 
     def clear(self) -> None:
         self._world = []
@@ -222,7 +223,7 @@ class Go2Sim:
     def tick(self, command: NDArray[np.float64]) -> LidarFrame | None:
         """Advance one policy tick. Returns the lidar frame that completed on this tick, if any."""
 
-        def cast(_: int) -> None:
+        def cast() -> None:
             position, rotation = self.sensor_pose()
             self.lio.add(
                 self.lidar.cast(position, rotation, self._points_per_step), position, rotation
@@ -236,15 +237,31 @@ class Go2Sim:
         return self.lio.frame(self.t, *self.sensor_pose())
 
 
+class CommandHold:
+    """The latest velocity command, or still once it is older than the driver's timeout."""
+
+    def __init__(self, timeout: float = CMD_VEL_TIMEOUT) -> None:
+        self._timeout = timeout
+        self._latest: tuple[NDArray[np.float64], float] = (STILL, -math.inf)
+
+    def update(self, command: NDArray[np.float64], now: float) -> bool:
+        """Take a finite command. A non-finite one is refused and the previous one kept."""
+        if not np.all(np.isfinite(command)):
+            return False
+        self._latest = (command, now)
+        return True
+
+    def current(self, now: float) -> NDArray[np.float64]:
+        command, received = self._latest
+        return command if now - received < self._timeout else STILL
+
+
 class SimGo2WorldConfig(ModuleConfig):
-    family: str = "office"
+    family: Family = "office"
     seed: int = 1
-    frame_id: str = "odom"
-    sensor_frame_id: str = "mid360_link"
     real_time_factor: float = Field(default=1.0, gt=0.0)
     mujoco_viewer: bool = False
-    # a .onnx or FREE .bin path, empty for the bundled policy
-    policy: str = ""
+    policy: Path | None = None
 
 
 class SimGo2World(Module):
@@ -262,13 +279,13 @@ class SimGo2World(Module):
     scene: Out[LineSegments3D]
 
     _thread: Thread | None = None
-    _command: tuple[NDArray[np.float64], float] = (STILL, 0.0)
 
     @rpc
     def start(self) -> None:
         super().start()
         self._policy = load_policy(self.config.policy)
-        self._command = (STILL, 0.0)
+        self._sim = self._load(self.config.family, self.config.seed)
+        self._hold = CommandHold()
         self._stop_event = Event()
         self.register_disposable(Disposable(self.cmd_vel.subscribe(self._on_cmd_vel)))
         self._thread = Thread(target=self._run, daemon=True)
@@ -283,26 +300,17 @@ class SimGo2World(Module):
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         command = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
-        if not all(math.isfinite(v) for v in command):
+        if not self._hold.update(command, time.monotonic()):
             logger.warning("Ignored non-finite cmd_vel", command=command.tolist())
-            return
-        self._command = (command, time.monotonic())
 
-    def _current_command(self) -> NDArray[np.float64]:
-        """The latest command, or still once it is older than the driver's timeout."""
-        command, received = self._command
-        return command if time.monotonic() - received < COMMAND_TIMEOUT else STILL
-
-    def _load(self, family: str, seed: int) -> Go2Sim:
+    def _load(self, family: Family, seed: int) -> Go2Sim:
         scene = generate(family, seed)
         sim = Go2Sim(scene, seed, self._policy)
         sim.reset(*scene.start, 0.0)
-        logger.info(
-            "Sim world ready", scene=scene.name, goals={g.name: g.position for g in scene.goals}
-        )
         blocked = [c for c in sim.contacts() if c.kind != "floor"]
         if blocked:
-            logger.warning("Robot starts inside scene geometry", scene=scene.name, contacts=blocked)
+            raise RuntimeError(f"robot starts inside scene geometry in {scene.name}: {blocked}")
+        logger.info("Sim world ready", scene=scene.name)
         return sim
 
     def _open_viewer(self, sim: Go2Sim) -> mujoco.viewer.Handle | None:
@@ -319,15 +327,23 @@ class SimGo2World(Module):
         return viewer
 
     def _run(self) -> None:
-        sim = self._load(self.config.family, self.config.seed)
         # open3d loads on the first cloud, about a second
-        PointCloud2.from_numpy(np.zeros((0, 3), np.float32), frame_id=self.config.sensor_frame_id)
-        viewer = self._open_viewer(sim)
+        PointCloud2.from_numpy(np.zeros((0, 3), np.float32), frame_id=SENSOR_FRAME_ID)
+        viewer = self._open_viewer(self._sim)
+        try:
+            self._simulate(self._sim, viewer)
+        except Exception:
+            logger.exception("Sim thread failed")
+        finally:
+            if viewer is not None:
+                viewer.close()
+
+    def _simulate(self, sim: Go2Sim, viewer: mujoco.viewer.Handle | None) -> None:
         t0 = time.time()
         last_contacts: list[Contact] | None = None
         next_scene_publish = 0.0
         while not self._stop_event.is_set():
-            frame = sim.tick(self._current_command())
+            frame = sim.tick(self._hold.current(time.monotonic()))
             if viewer is not None:
                 viewer.sync()
             stamp = t0 + sim.t / self.config.real_time_factor
@@ -338,14 +354,12 @@ class SimGo2World(Module):
                 last_contacts = contacts
             if frame is not None:
                 self.lidar.publish(
-                    PointCloud2.from_numpy(
-                        frame.points, frame_id=self.config.sensor_frame_id, timestamp=stamp
-                    )
+                    PointCloud2.from_numpy(frame.points, frame_id=SENSOR_FRAME_ID, timestamp=stamp)
                 )
             if sim.t >= next_scene_publish:
                 self.scene.publish(
                     LineSegments3D(
-                        ts=stamp, frame_id=self.config.frame_id, segments=scene_edges(sim.scene)
+                        ts=stamp, frame_id=ODOM_FRAME_ID, segments=scene_edges(sim.scene)
                     )
                 )
                 next_scene_publish = sim.t + SCENE_PUBLISH_DT
@@ -355,8 +369,6 @@ class SimGo2World(Module):
             elif delay < -1.0:
                 logger.warning("Sim running slower than real time", behind_s=round(-delay, 1))
                 t0 -= delay
-        if viewer is not None:
-            viewer.close()
 
     def _publish_poses(self, sim: Go2Sim, stamp: float) -> None:
         position, rotation = sim.sensor_pose()
@@ -365,8 +377,8 @@ class SimGo2World(Module):
         self.odometry.publish(
             Odometry(
                 ts=stamp,
-                frame_id=self.config.frame_id,
-                child_frame_id=self.config.sensor_frame_id,
+                frame_id=ODOM_FRAME_ID,
+                child_frame_id=SENSOR_FRAME_ID,
                 pose=sensor,
             )
         )
@@ -375,8 +387,8 @@ class SimGo2World(Module):
                 Transform(
                     translation=Vector3(sensor.position),
                     rotation=Quaternion(sensor.orientation),
-                    frame_id=self.config.frame_id,
-                    child_frame_id=self.config.sensor_frame_id,
+                    frame_id=ODOM_FRAME_ID,
+                    child_frame_id=SENSOR_FRAME_ID,
                     ts=stamp,
                 )
             )
@@ -388,6 +400,6 @@ class SimGo2World(Module):
                 *map(float, base_position),
                 *map(float, base_q),
                 ts=stamp,
-                frame_id=self.config.frame_id,
+                frame_id=ODOM_FRAME_ID,
             )
         )

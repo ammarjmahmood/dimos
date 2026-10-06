@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import math
+from typing import Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -28,6 +29,7 @@ from numpy.typing import ArrayLike, NDArray
 from dimos.msgs.sim_msgs.Contacts import Kind
 
 Vec3 = tuple[float, float, float]
+Family = Literal["office"]
 
 SLAB_THICKNESS = 0.15
 WALL_THICKNESS = 0.1
@@ -36,7 +38,8 @@ DOOR_HEIGHT = 2.0
 DOOR_WIDTH = (0.8, 1.2)
 TABLE_TOP_THICKNESS = 0.04
 TABLE_LEG = 0.04
-GOAL_MIN_DISTANCE = 5.0
+START_CLEARANCE = 1.0
+PLACEMENT_TRIES = 50
 
 
 @dataclass(frozen=True)
@@ -46,19 +49,12 @@ class Box:
     kind: Kind
 
 
-@dataclass(frozen=True)
-class Goal:
-    name: str
-    position: Vec3
-
-
 @dataclass
 class Scene:
     name: str
     params: dict[str, float] = field(default_factory=dict)
     boxes: list[Box] = field(default_factory=list)
     start: Vec3 = (0.0, 0.0, 0.0)
-    goals: list[Goal] = field(default_factory=list)
 
     def add(self, lo: ArrayLike, hi: ArrayLike, kind: Kind) -> None:
         low, high = np.asarray(lo, float), np.asarray(hi, float)
@@ -79,11 +75,10 @@ class Scene:
         return (centers - halves).min(0), (centers + halves).max(0)
 
     def digest(self) -> str:
-        """A hash of the geometry, start and goals, for detecting generator drift."""
+        """A hash of the geometry and start, for detecting generator drift."""
         record = {
             "boxes": [(box.center, box.half, box.kind) for box in self.boxes],
             "start": self.start,
-            "goals": [(goal.name, goal.position) for goal in self.goals],
         }
         return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -131,6 +126,13 @@ def _wall_with_doors(
             scene.add((door_start, at, lintel), (door_start + door_width, at + t, top), "wall")
 
 
+def _clear_of_start(x0: float, y0: float, x1: float, y1: float, start: Vec3) -> bool:
+    """Whether a footprint keeps START_CLEARANCE from the start point."""
+    dx = max(x0 - start[0], 0.0, start[0] - x1)
+    dy = max(y0 - start[1], 0.0, start[1] - y1)
+    return math.hypot(dx, dy) >= START_CLEARANCE
+
+
 def _clutter(
     scene: Scene,
     rng: np.random.Generator,
@@ -140,19 +142,37 @@ def _clutter(
     y1: float,
     z: float,
     n: int,
+    start: Vec3,
 ) -> None:
     for _ in range(n):
-        hx, hy = rng.uniform(0.15, 0.5), rng.uniform(0.15, 0.5)
-        cx, cy = rng.uniform(x0 + hx, x1 - hx), rng.uniform(y0 + hy, y1 - hy)
-        scene.add((cx - hx, cy - hy, z), (cx + hx, cy + hy, z + rng.uniform(0.2, 1.0)), "clutter")
+        for _ in range(PLACEMENT_TRIES):
+            hx, hy = rng.uniform(0.15, 0.5), rng.uniform(0.15, 0.5)
+            cx, cy = rng.uniform(x0 + hx, x1 - hx), rng.uniform(y0 + hy, y1 - hy)
+            if _clear_of_start(cx - hx, cy - hy, cx + hx, cy + hy, start):
+                scene.add(
+                    (cx - hx, cy - hy, z), (cx + hx, cy + hy, z + rng.uniform(0.2, 1.0)), "clutter"
+                )
+                break
 
 
 def _table(
-    scene: Scene, rng: np.random.Generator, x0: float, y0: float, x1: float, y1: float, z: float
+    scene: Scene,
+    rng: np.random.Generator,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    z: float,
+    start: Vec3,
 ) -> None:
     """A table on four legs, with its top anywhere from below to well above the robot's height."""
     lx, ly = rng.uniform(1.0, 1.8), rng.uniform(0.6, 0.9)
-    tx, ty = rng.uniform(x0, x1 - lx), rng.uniform(y0, y1 - ly)
+    for _ in range(PLACEMENT_TRIES):
+        tx, ty = rng.uniform(x0, x1 - lx), rng.uniform(y0, y1 - ly)
+        if _clear_of_start(tx, ty, tx + lx, ty + ly, start):
+            break
+    else:
+        return
     top = z + rng.uniform(0.45, 0.8)
     scene.add((tx, ty, top - TABLE_TOP_THICKNESS), (tx + lx, ty + ly, top), "clutter")
     for px in (tx, tx + lx - TABLE_LEG):
@@ -162,25 +182,8 @@ def _table(
             )
 
 
-def _far_point(
-    rng: np.random.Generator,
-    x0: float,
-    y0: float,
-    x1: float,
-    y1: float,
-    z: float,
-    start: Vec3,
-    min_dist: float,
-) -> Vec3:
-    for _ in range(200):
-        p = (float(rng.uniform(x0, x1)), float(rng.uniform(y0, y1)), z)
-        if math.hypot(p[0] - start[0], p[1] - start[1]) >= min_dist:
-            return p
-    return p
-
-
 def office(seed: int) -> Scene:
-    """One floor of rooms joined by doorways, with clutter and tables placed anywhere."""
+    """One floor of rooms joined by doorways, with clutter and tables kept clear of the start."""
     rng = np.random.default_rng(seed)
     width, length = float(rng.uniform(12, 18)), float(rng.uniform(9, 13))
     z0 = float(rng.uniform(0.0, 0.08))
@@ -202,23 +205,18 @@ def office(seed: int) -> Scene:
             door_width = rng.uniform(*DOOR_WIDTH)
             door = (rng.uniform(a + 0.3, b - door_width - 0.3), door_width)
             _wall_with_doors(scene, 0, x, a, b, z0, top, [door])
+    scene.start = (1.0, 1.0, z0)
     clutter = int(rng.integers(8, 16))
-    _clutter(scene, rng, 0.2, 0.2, width - 0.2, length - 0.2, z0, clutter)
+    _clutter(scene, rng, 0.2, 0.2, width - 0.2, length - 0.2, z0, clutter, scene.start)
     tables = int(rng.integers(1, 4))
     for _ in range(tables):
-        _table(scene, rng, 0.3, 0.3, width - 0.3, length - 0.3, z0)
+        _table(scene, rng, 0.3, 0.3, width - 0.3, length - 0.3, z0, scene.start)
     scene.params.update({"rooms": 2 * (len(xs) + 1), "clutter": clutter, "tables": tables})
-    scene.start = (1.0, 1.0, z0)
-    for i in range(3):
-        goal = _far_point(
-            rng, 0.8, 0.8, width - 0.8, length - 0.8, z0, scene.start, GOAL_MIN_DISTANCE
-        )
-        scene.goals.append(Goal(f"room_{i}", goal))
     return scene
 
 
-FAMILIES: dict[str, Callable[[int], Scene]] = {"office": office}
+FAMILIES: dict[Family, Callable[[int], Scene]] = {"office": office}
 
 
-def generate(family: str, seed: int) -> Scene:
+def generate(family: Family, seed: int) -> Scene:
     return FAMILIES[family](seed)

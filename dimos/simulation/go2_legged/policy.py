@@ -63,6 +63,7 @@ class Go2Policy(Protocol):
 
 
 LEGS = ("FR", "FL", "RR", "RL")
+JOINT_COUNT = 12
 
 
 class OnnxGo2Policy:
@@ -70,15 +71,15 @@ class OnnxGo2Policy:
 
     joint_names = tuple(f"{leg}_{part}_joint" for leg in LEGS for part in ("hip", "thigh", "calf"))
     default_pose = np.array([0.0, 0.8, -1.5] * 4)
-    kp = np.full(12, 20.0)
-    kd = np.full(12, 0.5)
+    kp = np.full(JOINT_COUNT, 20.0)
+    kd = np.full(JOINT_COUNT, 0.5)
     action_scale = np.array([0.125, 0.25, 0.25] * 4)
     angular_velocity_scale = 0.25
     joint_velocity_scale = 0.05
-    clip_observation = 100.0
-    clip_action = 100.0
+    clip_obs = 100.0
+    clip_act = 100.0
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         options = ort.SessionOptions()
         options.intra_op_num_threads = 1
         options.inter_op_num_threads = 1
@@ -104,9 +105,9 @@ class OnnxGo2Policy:
                 self._last_action,
             ]
         )
-        x = np.clip(raw, -self.clip_observation, self.clip_observation).astype(np.float32)
+        x = np.clip(raw, -self.clip_obs, self.clip_obs).astype(np.float32)
         (out,) = self._session.run(None, {self._input: x[None, :]})
-        action = np.clip(out[0].astype(np.float64), -self.clip_action, self.clip_action)
+        action = np.clip(out[0].astype(np.float64), -self.clip_act, self.clip_act)
         self._last_action = action
         targets: NDArray[np.float64] = self.default_pose + action * self.action_scale
         return targets
@@ -163,6 +164,16 @@ BAND_WALK = 0
 BAND_FAST = 1
 BAND_SPRINT = 2
 BAND_ROTATE = 3
+BAND_FALLBACK = {
+    BAND_WALK: (BAND_WALK,),
+    BAND_FAST: (BAND_FAST, BAND_WALK),
+    BAND_SPRINT: (BAND_SPRINT, BAND_FAST, BAND_WALK),
+    BAND_ROTATE: (BAND_ROTATE, BAND_WALK),
+}
+BAND_LIMITS = 6
+TURN_IN_PLACE_SPEED = 0.05
+WALK_MAX_SPEED = 1.0
+FAST_MAX_SPEED = 5.0
 FREE_OBS = 45
 
 
@@ -184,29 +195,33 @@ class FreePolicy:
             raise ValueError(f"unsupported FREE version {version}")
         self.hist, obs_per_frame, act_dim = reader.u32(), reader.u32(), reader.u32()
         self.enc_vel, self.enc_lat = reader.u32(), reader.u32()
-        if obs_per_frame != FREE_OBS or act_dim != len(self.joint_names):
+        if obs_per_frame != FREE_OBS or act_dim != JOINT_COUNT:
             raise ValueError(
-                f"expected a {FREE_OBS} observation, 12 action net, got {obs_per_frame}, {act_dim}"
+                f"expected a {FREE_OBS} observation, {JOINT_COUNT} action net, "
+                f"got {obs_per_frame}, {act_dim}"
             )
         self.clip_obs, self.clip_act = (float(v) for v in reader.f32(2))
-        self.ob_mean, self.ob_scale = reader.f32(FREE_OBS), reader.f32(FREE_OBS)
+        self.obs_mean, self.obs_scale = reader.f32(FREE_OBS), reader.f32(FREE_OBS)
         self.act_mean, self.act_scale = reader.f32(act_dim), reader.f32(act_dim)
         self.default_pose = reader.f32(act_dim)
         self.kp, self.kd = reader.f32(act_dim), reader.f32(act_dim)
-        reader.f32(6)
+        reader.f32(BAND_LIMITS)
         self.bands = {}
         for _ in range(reader.u32()):
             kind = reader.u32()
             self.bands[kind] = _Band(kind, reader.block(), reader.block())
         if not self.bands:
             raise ValueError("FREE blob has no band models")
+        for band in self.bands.values():
+            if band.encoder[-1][1].size != self.enc_vel + self.enc_lat:
+                raise ValueError("encoder output does not match the velocity and latent widths")
         self._history: collections.deque[NDArray[np.float64]] = collections.deque(maxlen=self.hist)
         self._last_action = np.zeros(act_dim)
 
     @classmethod
-    def load(cls, path: str | Path) -> FreePolicy:
+    def load(cls, path: Path) -> FreePolicy:
         """Read a blob from a path outside the repository."""
-        resolved = Path(path).expanduser().resolve()
+        resolved = path.expanduser().resolve()
         if resolved.is_relative_to(DIMOS_PROJECT_ROOT.resolve()):
             raise ValueError(f"policy blobs are loaded from outside the repository: {resolved}")
         return cls(resolved.read_bytes())
@@ -218,15 +233,15 @@ class FreePolicy:
     def band_for(self, command: NDArray[np.float64]) -> _Band:
         """The speed-band expert the robot's state machine would pick, or the nearest present."""
         speed = max(abs(command[0]), abs(command[1]))
-        if speed < 0.05 and abs(command[2]) > 0.05:
+        if speed < TURN_IN_PLACE_SPEED and abs(command[2]) > TURN_IN_PLACE_SPEED:
             want = BAND_ROTATE
-        elif speed < 1.0:
+        elif speed < WALK_MAX_SPEED:
             want = BAND_WALK
-        elif speed < 5.0:
+        elif speed < FAST_MAX_SPEED:
             want = BAND_FAST
         else:
             want = BAND_SPRINT
-        for kind in (want, max(want - 1, 0), BAND_WALK):
+        for kind in BAND_FALLBACK[want]:
             if kind in self.bands:
                 return self.bands[kind]
         return next(iter(self.bands.values()))
@@ -242,7 +257,7 @@ class FreePolicy:
                 self._last_action,
             ]
         )
-        frame = np.clip((raw - self.ob_mean) * self.ob_scale, -self.clip_obs, self.clip_obs)
+        frame = np.clip((raw - self.obs_mean) * self.obs_scale, -self.clip_obs, self.clip_obs)
         if not self._history:
             self._history.extend([frame] * self.hist)
         else:
@@ -258,13 +273,12 @@ class FreePolicy:
         return targets
 
 
-def load_policy(path: str) -> Go2Policy:
-    """The bundled open policy when path is empty, else an ONNX or FREE file by suffix."""
-    if not path:
+def load_policy(path: Path | None) -> Go2Policy:
+    """The bundled open policy when path is None, else an ONNX or FREE file by suffix."""
+    if path is None:
         return OnnxGo2Policy.load()
-    suffix = Path(path).suffix
-    if suffix == ".onnx":
-        return OnnxGo2Policy(Path(path).expanduser())
-    if suffix == ".bin":
+    if path.suffix == ".onnx":
+        return OnnxGo2Policy(path.expanduser())
+    if path.suffix == ".bin":
         return FreePolicy.load(path)
-    raise ValueError(f"unknown policy format {suffix!r}, expected .onnx or .bin")
+    raise ValueError(f"unknown policy format {path.suffix!r}, expected .onnx or .bin")

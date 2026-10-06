@@ -31,8 +31,6 @@ from dimos.simulation.go2_legged.robot import (
 
 pytestmark = pytest.mark.self_hosted
 
-STILL = np.zeros(3)
-
 
 @pytest.fixture(scope="module")
 def policy() -> OnnxGo2Policy:
