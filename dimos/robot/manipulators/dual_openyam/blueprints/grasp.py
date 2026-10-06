@@ -14,17 +14,21 @@
 """The dual OpenYAM grasping stack, on hardware by default.
 
 ```bash
-dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
-    --realsensecamera.serial-number <SERIAL>
+dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r
 dimos run dual-openyam-grasp ... --graspgen                  # GraspGenX grasps
+dimos run dual-openyam-grasp ... --record ""                 # no recording
 dimos run dual-openyam-grasp                                 # in-memory arms, no CAN
 ```
 
 The port of the xArm grasp stack: coordinator, planner, pick-and-place, scene
 registration and a grasp provider, with a fixed depth camera over the table
-instead of a wrist camera. Both arms are planning groups with their own
-grippers, so ``pick_object`` takes ``left_manipulator`` or
+feeding perception and one more on each wrist. Both arms are planning groups
+with their own grippers, so ``pick_object`` takes ``left_manipulator`` or
 ``right_manipulator``.
+
+Every run records the policy-training streams (joint states, planned and
+accepted joint commands, all three cameras, TF) to
+``recordings/<run-id>/memory.db`` unless ``--record ""`` turns it off.
 
 The grasp provider is chosen at import time from ``global_config.graspgen``,
 as the xArm stack chooses sim or hardware: the heuristic top-down grasp by
@@ -107,6 +111,32 @@ DUAL_OPENYAM_CAMERA_TRANSFORM = Transform(
     child_frame_id="camera_link",
 )
 
+# RealSense D405 serials on the benchmark rig; override per camera with
+# --realsensecamera.serial-number, --left_wrist/realsensecamera.serial-number
+# and --right_wrist/realsensecamera.serial-number.
+DUAL_OPENYAM_OVERHEAD_CAMERA_SERIAL = "230322272156"
+DUAL_OPENYAM_WRIST_CAMERA_SERIALS = {"left": "260322276650", "right": "260322272983"}
+
+# Streams a run keeps for ACT and VLA training: the joint states, the plans
+# the planner sent and the commands the hardware accepted, every camera's
+# colour, depth and intrinsics, and TF. Globs on the stream names.
+DUAL_OPENYAM_RECORD_TOPICS = ",".join(
+    [
+        "coordinator_joint_state",
+        "planned_joint_trajectory",
+        "applied_joint_position_command",
+        "color_image",
+        "depth_image",
+        "camera_info",
+        "tf",
+        *(
+            f"{side}_wrist/{stream}"
+            for side in DUAL_OPENYAM_SIDES
+            for stream in ("color_image", "depth_image", "camera_info", "tf")
+        ),
+    ]
+)
+
 DUAL_OPENYAM_GRASP_PROMPTS = [
     "soup can",
     "mustard bottle",
@@ -149,6 +179,20 @@ def dual_openyam_grasp_provider(graspgen: bool) -> Blueprint:
     return HeuristicGraspModule.blueprint(tool_rotation_rpy=(0.0, math.pi, 0.0), yaw_candidates=8)
 
 
+def dual_openyam_wrist_camera(side: str) -> Blueprint:
+    """A wrist D405 under its own namespace, so its streams and frames never
+    collide with the overhead camera that feeds perception."""
+    if side not in DUAL_OPENYAM_SIDES:
+        raise ValueError(f"side must be 'left' or 'right', got {side!r}")
+    return RealSenseCamera.blueprint(
+        width=640,
+        height=480,
+        fps=15,
+        enable_pointcloud=False,
+        serial_number=DUAL_OPENYAM_WRIST_CAMERA_SERIALS[side],
+    ).namespace(f"{side}_wrist")
+
+
 def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
     return (
         planner(
@@ -162,7 +206,15 @@ def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
         ManipulationSkills.blueprint(),
         PickAndPlaceModule.blueprint(planning_frame="world", pregrasp_along_tool_z=True),
         dual_openyam_grasp_provider(graspgen),
-        RealSenseCamera.blueprint(width=640, height=480, fps=30, enable_pointcloud=True),
+        RealSenseCamera.blueprint(
+            width=640,
+            height=480,
+            fps=30,
+            enable_pointcloud=True,
+            serial_number=DUAL_OPENYAM_OVERHEAD_CAMERA_SERIAL,
+        ),
+        dual_openyam_wrist_camera("left"),
+        dual_openyam_wrist_camera("right"),
         ObjectSceneRegistrationModule.blueprint(
             target_frame="world",
             detector_backend="moondream",
@@ -186,8 +238,12 @@ def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
 
 
 def dual_openyam_grasp_blueprint(*, graspgen: bool) -> Blueprint:
-    return autoconnect(*dual_openyam_grasp_modules(graspgen=graspgen))
+    return autoconnect(*dual_openyam_grasp_modules(graspgen=graspgen)).global_config(
+        record="sqlite", record_topics=DUAL_OPENYAM_RECORD_TOPICS
+    )
 
 
 # Assigned through autoconnect so the registry generator sees it.
-dual_openyam_grasp = autoconnect(*dual_openyam_grasp_modules(graspgen=bool(global_config.graspgen)))
+dual_openyam_grasp = autoconnect(
+    *dual_openyam_grasp_modules(graspgen=bool(global_config.graspgen))
+).global_config(record="sqlite", record_topics=DUAL_OPENYAM_RECORD_TOPICS)

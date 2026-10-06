@@ -95,21 +95,37 @@ component.
 
 `dual-openyam-grasp` is the xArm grasp stack on the dual OpenYAM: coordinator,
 planner, pick-and-place, scene registration and a grasp provider, with a fixed
-RealSense over the table. Each arm is a planning group with its own gripper, so
-pick-and-place calls take `left_manipulator` or `right_manipulator`.
+RealSense over the table feeding perception and one RealSense on each wrist.
+Each arm is a planning group with its own gripper, so pick-and-place calls take
+`left_manipulator` or `right_manipulator`. The three D405 serials of the
+benchmark rig are the defaults; override them with
+`--realsensecamera.serial-number`, `--left_wrist/realsensecamera.serial-number`
+and `--right_wrist/realsensecamera.serial-number`.
 
 ```bash
 # robot, heuristic top-down grasps
-dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
-  --realsensecamera.serial-number <SERIAL>
+dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r
 
 # robot, GraspGenX grasps (up to 100 ranked learned grasps per object)
-dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
-  --realsensecamera.serial-number <SERIAL> --graspgen
+dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r --graspgen
 
-# in-memory arms, no CAN or camera needed
+# in-memory arms, no CAN or camera needed (removes all three cameras)
 dimos run dual-openyam-grasp --disable real-sense-camera --disable object-scene-registration-module
 ```
+
+Every run records the policy-training data to `recordings/<run-id>/memory.db`
+without any flag; `--record ""` turns it off and `--record-topics` widens or
+narrows the set. What is kept, against the data a learned policy needs:
+
+| Training input | Stream | Source |
+|---|---|---|
+| joint states | `coordinator_joint_state` | coordinator, 12 arm joints and both grippers, 100 Hz |
+| joint trajectory | `planned_joint_trajectory` | ManipulationModule, the plan handed over per `execute()` |
+| joint commands | `applied_joint_position_command` | coordinator, the positions the hardware accepted, per tick |
+| camera images | `color_image`, `depth_image`, `camera_info` | overhead camera |
+| | `left_wrist/color_image`, `left_wrist/depth_image`, `left_wrist/camera_info` | left wrist camera |
+| | `right_wrist/color_image`, `right_wrist/depth_image`, `right_wrist/camera_info` | right wrist camera |
+| frames | `tf`, `left_wrist/tf`, `right_wrist/tf` | planner and cameras |
 
 `--graspgen` is a global flag read when the blueprint is imported, so it also
 works as `dimos --graspgen run dual-openyam-grasp ...`. GraspGenX has the same
@@ -141,8 +157,7 @@ the `.env` of the directory `dimos run` starts in. `--graspgen` works here too.
 
 ```bash
 # terminal 1, robot
-dimos run dual-openyam-grasp-agent --left-can-port follower_l --right-can-port follower_r \
-  --realsensecamera.serial-number <SERIAL>
+dimos run dual-openyam-grasp-agent --left-can-port follower_l --right-can-port follower_r
 
 # terminal 2, same machine
 dimos humancli
@@ -153,14 +168,6 @@ the soup can with the right hand", "put it in the bin", "right arm go init".
 The agent passes the arm as `planning_group` on every motion skill and asks
 once when the arm is not stated.
 
-To keep the data a run produces for policy training, record the joint states,
-the position commands the hardware accepted, and the camera images:
-
-```bash
-dimos --record --record-topics coordinator_joint_state,applied_joint_position_command,color_image,depth_image \
-  run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r \
-  --realsensecamera.serial-number <SERIAL>
-```
 
 The recording lands under `recordings/<run-id>/`. `applied_joint_position_command`
 carries only the targets the hardware accepted, at the control rate, so it is

@@ -16,13 +16,17 @@ import pytest
 
 from dimos.control.coordinator import TaskConfig
 from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
+from dimos.core.coordination.module_coordinator import stream_name_types
 from dimos.core.module import ModuleBase
+from dimos.hardware.sensors.camera.realsense.camera import RealSenseCamera
 from dimos.manipulation.grasping.grasp_gen_x.module import GraspGenXConfig, GraspGenXModule
 from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
+from dimos.memory.tap import check_topics, matching
 from dimos.robot.manipulators.dual_openyam.blueprints.basic import DualOpenYamCoordinator
 from dimos.robot.manipulators.dual_openyam.blueprints.grasp import (
+    DUAL_OPENYAM_RECORD_TOPICS,
     DUAL_OPENYAM_TCP_OFFSET,
     dual_openyam_grasp,
     dual_openyam_grasp_blueprint,
@@ -89,3 +93,43 @@ def test_graspgenx_gripper_matches_the_urdf_fingertips() -> None:
     assert np.allclose(frame_to_tcp[:3, 2], (0.0, 0.0, -1.0))
     assert config.gripper.fingertip_depth > config.gripper.offset_open[2]
     assert config.gripper.extents_half_open[0] == pytest.approx(config.gripper.extents_open[0] / 2)
+
+
+def test_three_cameras_and_only_the_overhead_one_feeds_perception() -> None:
+    cameras = [a for a in dual_openyam_grasp.active_blueprints if a.module is RealSenseCamera]
+
+    assert sorted(a.name for a in cameras) == [
+        "left_wrist/realsensecamera",
+        "realsensecamera",
+        "right_wrist/realsensecamera",
+    ]
+    assert len({a.kwargs["serial_number"] for a in cameras}) == 3
+    names = {n for n, _ in stream_name_types(dual_openyam_grasp)}
+    # Perception subscribes color_image; the wrist copies live under their namespaces.
+    assert {"color_image", "left_wrist/color_image", "right_wrist/color_image"} <= names
+
+
+def test_every_run_records_the_policy_training_streams() -> None:
+    overrides = dual_openyam_grasp.global_config_overrides
+    assert overrides["record"] == "sqlite"
+    assert overrides["record_topics"] == DUAL_OPENYAM_RECORD_TOPICS
+
+    names = {n for n, _ in stream_name_types(dual_openyam_grasp)}
+    check_topics(DUAL_OPENYAM_RECORD_TOPICS, names)
+    recorded = matching(DUAL_OPENYAM_RECORD_TOPICS, names)
+    for required in (
+        "coordinator_joint_state",
+        "planned_joint_trajectory",
+        "applied_joint_position_command",
+        "color_image",
+        "depth_image",
+        "camera_info",
+        "left_wrist/color_image",
+        "left_wrist/depth_image",
+        "right_wrist/color_image",
+        "right_wrist/depth_image",
+        "tf",
+    ):
+        assert required in recorded, required
+    # Globs stay tight: no empty infrared or IMU streams in the recording.
+    assert not {n for n in recorded if "infrared" in n or "imu" in n}
