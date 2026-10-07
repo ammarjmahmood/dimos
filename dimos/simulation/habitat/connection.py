@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.core.native_module import LogFormat, NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -36,23 +35,16 @@ class HabitatConnectionConfig(NativeModuleConfig):
 
     # habitat-sim is python 3.9 conda-only, so it runs in its own env under
     # target/habitat (outside the package tree); the wrapper is the build sentinel.
-    cwd: str | None = "nix"
-    executable: str = str(DIMOS_PROJECT_ROOT / "target" / "habitat" / "habitat-native")
+    source_dir: str | None = "dimos/simulation/habitat/nix"
+    executable: str = "../../../../target/habitat/habitat-native"
     build_command: str | None = "nix develop path:. -c ./install.sh"
     stdin_config: bool = True
     log_format: LogFormat = LogFormat.TEXT
 
     # Annotated HM3D house, no Matterport credentials needed.
-    scene_dataset_config: str = str(
-        DIMOS_PROJECT_ROOT
-        / "target"
-        / "habitat"
-        / "data"
-        / "versioned_data"
-        / "hm3d-0.2"
-        / "hm3d"
-        / "example"
-        / "hm3d_annotated_example_basis.scene_dataset_config.json"
+    scene_dataset_config: str = (
+        "../../../../target/habitat/data/versioned_data/hm3d-0.2/hm3d/example/"
+        "hm3d_annotated_example_basis.scene_dataset_config.json"
     )
     scene_id: str = "00861-GLAQ4DNUx5U"
     # ROS yaw, +left. 90 faces into the room in the default scene.
