@@ -29,10 +29,13 @@ from dimos.robot.manipulators.dual_openyam.blueprints.basic import DualOpenYamCo
 from dimos.robot.manipulators.dual_openyam.blueprints.grasp import (
     DUAL_OPENYAM_RECORD_TOPICS,
     DUAL_OPENYAM_TCP_OFFSET,
+    DUAL_OPENYAM_VIEW_TOPICS,
     dual_openyam_grasp,
     dual_openyam_grasp_blueprint,
     dual_openyam_grasp_model_config,
+    dual_openyam_grasp_view,
 )
+from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 
 def _atom(blueprint: Blueprint, module: type[ModuleBase]) -> BlueprintAtom:
@@ -138,3 +141,14 @@ def test_every_run_records_the_policy_training_streams() -> None:
     # The recorder uses stream names as SQL identifiers.
     for name in recorded:
         validate_identifier(name)
+
+
+def test_rerun_bridge_tiles_the_three_cameras_without_a_window_on_the_box() -> None:
+    import rerun.blueprint as rrb
+
+    bridge = _atom(dual_openyam_grasp, RerunBridgeModule).kwargs
+    assert bridge["rerun_open"] == "none"
+    assert bridge["blueprint"] is dual_openyam_grasp_view
+    names = {n for n, _ in stream_name_types(dual_openyam_grasp)}
+    assert set(DUAL_OPENYAM_VIEW_TOPICS) <= names
+    assert isinstance(dual_openyam_grasp_view(), rrb.Blueprint)

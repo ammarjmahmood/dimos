@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import math
+from typing import Any
 
 from dimos.core.coordination.blueprints import Blueprint, autoconnect
 from dimos.core.global_config import global_config
@@ -64,6 +65,7 @@ from dimos.robot.manipulators.dual_openyam.config import (
     DUAL_OPENYAM_SIDES,
     dual_openyam_model_config,
 )
+from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 # {side}_grasp_frame is 10 cm below the gripper link on its axis. The finger
 # pads (tip_left.stl, tip_right.stl at the URDF's closed zero position) meet on
@@ -180,6 +182,55 @@ def dual_openyam_grasp_provider(graspgen: bool) -> Blueprint:
     return HeuristicGraspModule.blueprint(tool_rotation_rpy=(0.0, math.pi, 0.0), yaw_candidates=8)
 
 
+def dual_openyam_grasp_view() -> Any:
+    """Rerun layout: the three cameras as tiles on the left, the scene on the right."""
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    cameras = [
+        ("world/color_image", "Overhead"),
+        ("world/left_wrist_color_image", "Left wrist"),
+        ("world/right_wrist_color_image", "Right wrist"),
+    ]
+    return rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Vertical(*[rrb.Spatial2DView(origin=path, name=name) for path, name in cameras]),
+            rrb.Spatial3DView(
+                origin="world",
+                name="Scene",
+                background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
+                line_grid=rrb.LineGrid3D(plane=rr.components.Plane3D.XY.with_distance(0.0)),
+                # The images already have their own tiles; in 3D they only clutter.
+                overrides={path: rrb.EntityBehavior(visible=False) for path, _ in cameras},
+            ),
+            column_shares=[1, 2],
+        ),
+        rrb.TimePanel(state="collapsed"),
+        rrb.SelectionPanel(state="collapsed"),
+    )
+
+
+# Streams the Rerun bridge forwards; everything else stays off the viewer link.
+DUAL_OPENYAM_VIEW_TOPICS = [
+    "color_image",
+    "left_wrist_color_image",
+    "right_wrist_color_image",
+    "pointcloud",
+    "detections_3d",
+    "tf",
+]
+
+
+def dual_openyam_grasp_rerun() -> Blueprint:
+    """The bridge for a headless rig: no window on the box, watch it from dimos-viewer."""
+    return RerunBridgeModule.blueprint(
+        blueprint=dual_openyam_grasp_view,
+        topics=DUAL_OPENYAM_VIEW_TOPICS,
+        memory_limit="2GB",
+        rerun_open="none",
+    )
+
+
 def dual_openyam_wrist_camera(side: str) -> Blueprint:
     """A wrist D405 whose streams and frames carry a ``{side}_wrist_`` prefix, so
     they never collide with the overhead camera that feeds perception.
@@ -225,6 +276,7 @@ def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
         ),
         dual_openyam_wrist_camera("left"),
         dual_openyam_wrist_camera("right"),
+        dual_openyam_grasp_rerun(),
         ObjectSceneRegistrationModule.blueprint(
             target_frame="world",
             detector_backend="moondream",

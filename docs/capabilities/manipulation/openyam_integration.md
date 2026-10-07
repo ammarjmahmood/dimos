@@ -113,6 +113,13 @@ dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port followe
 dimos run dual-openyam-grasp --disable real-sense-camera --disable object-scene-registration-module
 ```
 
+The blueprint carries a Rerun bridge with the three cameras as tiles and the
+scene beside them. It opens no window on the robot; watch it from a laptop:
+
+```bash
+uvx dimos-viewer --connect rerun+http://<robot-ip>:9877/proxy --ws-url ws://<robot-ip>:3030/ws
+```
+
 Every run records the policy-training data to `recordings/<run-id>/memory.db`
 without any flag; `--record ""` turns it off and `--record-topics` widens or
 narrows the set. What is kept, against the data a learned policy needs:
