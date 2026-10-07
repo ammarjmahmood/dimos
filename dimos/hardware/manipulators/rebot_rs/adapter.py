@@ -158,6 +158,7 @@ class RebotRSAdapter:
         """Confirm all motors are at their configured zero pose after connect."""
         if not self.is_connected() or self._enabled:
             return False
+        self._zero_confirmed = False
         positions = self._read_positions_direct()
         outside = [
             index + 1 for index, value in enumerate(positions) if abs(value) > ZERO_TOLERANCE
@@ -282,6 +283,8 @@ class RebotRSAdapter:
         if self._enabled:
             return True
         if not self._zero_confirmed or self._error:
+            return False
+        if not self.confirm_zero_pose():
             return False
         from motorbridge import Mode
 

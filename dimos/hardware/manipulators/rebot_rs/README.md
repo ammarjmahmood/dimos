@@ -18,4 +18,6 @@ arm.connect()
 assert arm.confirm_zero_pose()
 ```
 
-Physical activation is intentionally omitted from the example. Measure the installed gripper range before relying on the default. This adapter has only been tested with a simulated Motorbridge controller so far.
+Physical activation is intentionally omitted from the example. Measure the installed gripper range before relying on the default. The adapter passes mock tests on an x86 desktop and a physical Jetson Orin. Registry discovery, direct adapter connection and position reads have been exercised on the physical B601 RS. The zero guard rejected the observed encoder readings and no activation was attempted. Motion qualification remains pending. See `VALIDATION.md` for the measured scope and outstanding checks.
+
+Activation rechecks the zero readings before motor configuration. Failed zero checks revoke any previous confirmation. A physical zero pose does not establish encoder calibration. If readings disagree with the prescribed pose, complete the Seeed calibration procedure rather than widening the confirmation tolerance.

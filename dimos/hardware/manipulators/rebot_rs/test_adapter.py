@@ -24,6 +24,7 @@ class FakeMotor:
         self.temperature = 35.0
         self.sent: list[tuple[float, float, float, float, float]] = []
         self.feedback = True
+        self.configuration_calls = 0
 
     def robstride_ping_host_id(self, host_id: int, timeout_ms: int) -> tuple[int, int]:
         return self.motor_id, host_id
@@ -32,7 +33,7 @@ class FakeMotor:
         return self.position
 
     def ensure_mode(self, mode: object, timeout_ms: int) -> None:
-        return None
+        self.configuration_calls += 1
 
     def set_can_timeout_ms(self, timeout_ms: int) -> None:
         assert timeout_ms == 250
@@ -185,4 +186,42 @@ def test_temperature_fault_latches_and_blocks_new_commands() -> None:
     time.sleep(0.05)
     assert "temperature" in adapter.read_error()[1]
     assert not adapter.write_joint_positions([0.0] * 7)
+    adapter.disconnect()
+
+
+def test_observed_physical_zero_readings_refuse_activation_without_writes() -> None:
+    positions = [
+        math.radians(value) for value in (2.527, 0.21, 0.176, 0.094, 9.268, -178.407, -8.598)
+    ]
+    adapter, controller = adapter_with(positions)
+    adapter.connect()
+    assert not adapter.confirm_zero_pose()
+    assert adapter.read_error()[1] == "Joints 5, 6, 7 are not at the zero pose"
+    assert not adapter.activate()
+    assert not controller.enabled
+    assert all(not motor.sent and not motor.configuration_calls for motor in controller.motors)
+    adapter.disconnect()
+
+
+def test_zero_drift_is_rechecked_before_configuration_or_enable() -> None:
+    adapter, controller = adapter_with()
+    adapter.connect()
+    assert adapter.confirm_zero_pose()
+    controller.motors[5].position = math.radians(178.0)
+    assert not adapter.activate()
+    assert not controller.enabled
+    assert all(not motor.sent and not motor.configuration_calls for motor in controller.motors)
+    assert not adapter._zero_confirmed
+    adapter.disconnect()
+
+
+def test_failed_zero_recheck_revokes_prior_confirmation() -> None:
+    adapter, controller = adapter_with()
+    adapter.connect()
+    assert adapter.confirm_zero_pose()
+    controller.motors[4].position = math.radians(10.0)
+    assert not adapter.confirm_zero_pose()
+    adapter.write_clear_errors()
+    assert not adapter.activate()
+    assert not controller.enabled
     adapter.disconnect()
