@@ -6,8 +6,8 @@
     flake-utils.url = "github:numtide/flake-utils";
     crate2nix.url = "github:nix-community/crate2nix";
     crate2nix.inputs.nixpkgs.follows = "nixpkgs";
-    # Same rev as Cargo.toml's depth2depth: its flake fetches the model the crate embeds (pinned in its model.json).
-    depth2depth.url = "github:jeff-hykin/depth2depth/146bd2841329e48a5355b0119fa1038b78afc20e";
+    # The tag of the depth2depth release Cargo.toml uses: its flake fetches the model that release embeds (pinned in its model.json).
+    depth2depth.url = "github:jeff-hykin/depth2depth/v0.4.0";
     depth2depth.inputs.nixpkgs.follows = "nixpkgs";
   };
 

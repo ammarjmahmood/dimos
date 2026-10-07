@@ -69,8 +69,8 @@
       },
       "original": {
         "owner": "jeff-hykin",
+        "ref": "v0.4.0",
         "repo": "depth2depth",
-        "rev": "146bd2841329e48a5355b0119fa1038b78afc20e",
         "type": "github"
       }
     },
