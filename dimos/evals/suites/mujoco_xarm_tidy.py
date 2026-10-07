@@ -89,6 +89,7 @@ _DUTY_UPRIGHT = (
     "not lying on its side. Feel free to act as you see fit. Go."
 )
 
+
 def _cup_on_table(x: float, y: float) -> bool:
     return (
         _TABLE_X[0] + CUP_RADIUS <= x <= _TABLE_X[1] - CUP_RADIUS
