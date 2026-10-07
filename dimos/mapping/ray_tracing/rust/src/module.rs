@@ -47,10 +47,6 @@ const JOB_QUEUE_CAPACITY: usize = 256;
 /// Tiles between seed load progress lines.
 const SEED_PROGRESS_TILES: usize = 100;
 
-/// How long one worker pass may spend on seed tiles before it returns to the
-/// job queue.
-const SEED_PASS_BUDGET: Duration = Duration::from_millis(20);
-
 #[derive(Module)]
 #[module(name = "ray_tracing", setup = spawn_worker, teardown = stop_worker)]
 pub struct RayTracingVoxelMap {
@@ -167,9 +163,9 @@ impl RayTracingVoxelMap {
     }
 }
 
-/// A seed load in progress, applied a pass budget of tiles at a time and
-/// handed on region by region as each one completes. Counts the live frames
-/// folded in meanwhile and how long they waited behind seed work.
+/// A seed load in progress, applied a tile at a time whenever no live work is
+/// queued and handed on region by region as each one completes. Counts the
+/// live frames folded in meanwhile and how long they waited behind seed work.
 struct SeedLoad {
     regions: Vec<SeedRegion>,
     next_region: usize,
@@ -295,7 +291,8 @@ struct State {
 }
 
 /// Owns the mapper and does every map mutation and publish off the handle
-/// loop. Queued jobs go first, then one pass budget of seed tiles.
+/// loop. Queued jobs always go first. A seed tile is applied only when none
+/// is waiting.
 struct Worker {
     jobs: mpsc::Receiver<Job>,
     // Handed to the seed placement task so its result re-enters the queue.
@@ -322,25 +319,26 @@ impl Worker {
             viz: RegionSweep::default(),
         };
         loop {
-            let loading = matches!(state.seed, SeedState::Loading(_));
-            let job = if loading {
+            let job = if matches!(state.seed, SeedState::Loading(_)) {
+                // don't sit and wait for a cloud, there are tiles to seed!
                 match self.jobs.try_recv() {
                     Ok(job) => Some(job),
                     Err(TryRecvError::Empty) => None,
                     Err(TryRecvError::Disconnected) => return,
                 }
             } else {
+                // there are no tiles, so we should just wait for the next real job
                 match self.jobs.recv().await {
                     Some(job) => Some(job),
                     None => return,
                 }
             };
-            if let Some(job) = job {
-                self.handle(&mut state, job).await;
-            }
-            self.seed_step(&mut state).await;
-            if loading {
-                tokio::task::yield_now().await;
+            match job {
+                Some(job) => self.handle(&mut state, job).await,
+                None => {
+                    self.seed_step(&mut state).await;
+                    tokio::task::yield_now().await;
+                }
             }
         }
     }
@@ -584,41 +582,31 @@ impl Worker {
         });
     }
 
-    /// Apply seed tiles for one pass budget, handing each completed region
-    /// on as it lands.
+    /// Apply one seed tile, handing its region on if that completed one.
     async fn seed_step(&self, state: &mut State) {
         let SeedState::Loading(load) = &mut state.seed else {
             return;
         };
-        let pass_start = Instant::now();
-        while !load.finished() {
-            let completed = load.step(&mut state.mapper);
-            if load.tiles_done % SEED_PROGRESS_TILES == 0 {
-                info!(
-                    tiles_done = load.tiles_done,
-                    tiles = load.tile_count,
-                    regions_done = load.next_region,
-                    regions = load.regions.len(),
-                    max_tile_ms = load.max_tile_ms,
-                    mean_tile_ms = load.mean_tile_ms(),
-                    frames = load.frames,
-                    max_wait_ms = load.max_wait_ms,
-                    max_backlog = load.max_backlog,
-                    "Seed load in progress."
-                );
-            }
-            if let Some(cylinder) = completed {
-                let seq = load.next_region as i32;
-                self.publish_seed_region(&state.mapper, &cylinder, seq, &state.last_frame_stamp)
-                    .await;
-            }
-            if pass_start.elapsed() >= SEED_PASS_BUDGET {
-                break;
-            }
+        let completed = load.step(&mut state.mapper);
+        if load.tiles_done % SEED_PROGRESS_TILES == 0 {
+            info!(
+                tiles_done = load.tiles_done,
+                tiles = load.tile_count,
+                regions_done = load.next_region,
+                regions = load.regions.len(),
+                max_tile_ms = load.max_tile_ms,
+                mean_tile_ms = load.mean_tile_ms(),
+                frames = load.frames,
+                max_wait_ms = load.max_wait_ms,
+                max_backlog = load.max_backlog,
+                "Seed load in progress."
+            );
         }
-        let SeedState::Loading(load) = &state.seed else {
-            return;
-        };
+        if let Some(cylinder) = completed {
+            let seq = load.next_region as i32;
+            self.publish_seed_region(&state.mapper, &cylinder, seq, &state.last_frame_stamp)
+                .await;
+        }
         if !load.finished() {
             return;
         }
