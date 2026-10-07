@@ -7,24 +7,25 @@
     crate2nix.url = "github:nix-community/crate2nix";
     crate2nix.inputs.nixpkgs.follows = "nixpkgs";
     # Same rev as Cargo.toml's depth2depth: its flake fetches the model the crate embeds (pinned in its model.json).
-    depth2depth.url = "github:jeff-hykin/depth2depth/e240a1bcf8862c8b1f50d265ff7170d5f3fb9332";
+    depth2depth.url = "github:jeff-hykin/depth2depth/d21e75ff808dc0c4eeeeb5278d80d0aff212259e";
     depth2depth.inputs.nixpkgs.follows = "nixpkgs";
   };
 
+  # packages.default: Metal on a Mac, CPU elsewhere (e.g. a Pi). packages.tensorrt (Linux): TensorRT on an NVIDIA GPU,
+  # a Jetson (JetPack 6, CUDA 12.6) on aarch64 or a PC (CUDA 12.8, through the RTX 50-series) on x86_64.
   outputs = { self, nixpkgs, flake-utils, crate2nix, depth2depth }:
     flake-utils.lib.eachSystem [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ] (system:
       let
-        isJetson = system == "aarch64-linux";
         pkgs = import nixpkgs {
           inherit system;
-          # TensorRT from nixpkgs (the build sandbox can't see JetPack's). Its CVE flag is about
-          # malicious engine files; this one only loads engines it built itself.
-          config = nixpkgs.lib.optionalAttrs isJetson {
+          # TensorRT from nixpkgs (the build sandbox can't see the host's). Its CVE flag is about
+          # malicious engine files; this one only loads engines it built itself or the crate pins.
+          config = nixpkgs.lib.optionalAttrs (nixpkgs.lib.hasSuffix "-linux" system) {
             allowUnfree = true;
-            cudaCapabilities = [ "8.7" ];
-            allowInsecurePredicate = pkg: nixpkgs.lib.hasPrefix "cuda12.6-tensorrt-" (pkg.name or "");
+            allowInsecurePredicate = pkg: nixpkgs.lib.hasInfix "tensorrt" (pkg.name or "");
           };
         };
+        cudaPackages = if system == "aarch64-linux" then pkgs.cudaPackages_12_6 else pkgs.cudaPackages_12_8;
 
         src = pkgs.runCommand "depth2depth-cloud-src" {} ''
           mkdir -p $out/dimos/perception/depth2depth_cloud/rust
@@ -43,29 +44,40 @@
           cargoToml = "dimos/perception/depth2depth_cloud/rust/Cargo.toml";
         };
 
-        depth2depth-cloud = (import generatedCargoNix {
+        build = features: (import generatedCargoNix {
           inherit pkgs;
+          rootFeatures = [ "default" ] ++ features;
           buildRustCrateForPkgs = cratePkgs: cratePkgs.buildRustCrate.override {
             defaultCrateOverrides = cratePkgs.defaultCrateOverrides // {
               # Builds libjpeg-turbo from source (the `cmake` feature).
               turbojpeg-sys = attrs: { nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [ pkgs.cmake pkgs.nasm ]; };
-              # TensorRT and cuDLA reference JetPack's driver libraries (libcuda, libnvdla_compiler), which the
+              # TensorRT references the driver's libraries (libcuda, and on a Jetson libnvdla_compiler), which the
               # sandbox lacks; they resolve at runtime from the host (see the wrapper below).
-              dimos-depth2depth-cloud = attrs: pkgs.lib.optionalAttrs isJetson {
+              dimos-depth2depth-cloud = attrs: pkgs.lib.optionalAttrs (builtins.elem "tensorrt" (attrs.features or [])) {
                 extraRustcOpts = (attrs.extraRustcOpts or []) ++ [ "-C" "link-arg=-Wl,--allow-shlib-undefined" ];
               };
-              # The model it embeds, and on a Jetson CUDA 12.6 + TensorRT.
-              depth2depth = depth2depth.lib.crateOverride { inherit pkgs; cudaPackages = pkgs.cudaPackages_12_6; };
+              # The model it embeds, and for TensorRT CUDA + TensorRT.
+              depth2depth = depth2depth.lib.crateOverride { inherit pkgs cudaPackages; };
             };
           };
         }).rootCrate.build;
-      in {
-        # nix's glibc doesn't read ld.so.cache, so name JetPack's driver (libcuda) for it.
-        packages.default = if !isJetson then depth2depth-cloud else pkgs.runCommand "depth2depth-cloud" {
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-        } ''
-          makeWrapper ${depth2depth-cloud}/bin/depth2depth_cloud $out/bin/depth2depth_cloud \
-            --prefix LD_LIBRARY_PATH : /usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra
+
+        # nix's glibc doesn't read ld.so.cache, so hand it the host's NVIDIA driver: JetPack's directories on a
+        # Jetson, else symlinks to just the driver's libraries (a whole /usr/lib would shadow nix's own).
+        withHostDriver = unwrapped: pkgs.writeShellScriptBin "depth2depth_cloud" ''
+          driver=''${XDG_CACHE_HOME:-$HOME/.cache}/depth2depth/host-driver
+          mkdir -p "$driver"
+          for lib in /usr/lib/x86_64-linux-gnu/lib{cuda,nvidia-}*.so* /run/opengl-driver/lib/lib{cuda,nvidia-}*.so*; do
+            [ -e "$lib" ] && ln -sf "$lib" "$driver/"
+          done
+          export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:$driver''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+          exec ${unwrapped}/bin/depth2depth_cloud "$@"
         '';
+      in {
+        packages = {
+          default = build [ ];
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          tensorrt = withHostDriver (build [ "tensorrt" ]);
+        };
       });
 }

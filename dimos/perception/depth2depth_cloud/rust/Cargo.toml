@@ -42,15 +42,15 @@ nalgebra = "0.35.0"
 rayon = "1"
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake"] }
 
-# The model runs on the GPU each platform has: TensorRT on a Jetson, Metal on a Mac.
-[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "e240a1b", features = ["tensorrt"] }
+# The model's backend: Metal on a Mac, TensorRT with the `tensorrt` feature (Jetsons, NVIDIA PCs), else CPU (e.g. a Pi).
+# The flake builds one package per backend and module.py picks by hardware.
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "d21e75f" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "e240a1b", features = ["metal"] }
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "d21e75f", features = ["metal"] }
 
-[target.'cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "aarch64"))))'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "e240a1b" }
+[features]
+tensorrt = ["depth2depth/tensorrt"]
 
 [profile.release]
 lto = "thin"

@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.core.stream import In, Out
@@ -28,16 +29,22 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 
 
+def has_nvidia_gpu() -> bool:
+    """A Jetson (JetPack), or a PC with the NVIDIA driver loaded."""
+    return Path("/etc/nv_tegra_release").exists() or Path("/proc/driver/nvidia/version").exists()
+
+
 class Depth2DepthCloudConfig(NativeModuleConfig):
     cwd: str | None = "rust"
     executable: str = "result/bin/depth2depth_cloud"
     # "." in a git checkout enters the whole repo, so the flake can read ../../../../native/rust (tracked files only).
+    # This builds for the CPU (Metal on a Mac); with an NVIDIA GPU it becomes .#tensorrt (see below).
     build_command: str | None = "nix build -L ."
     stdin_config: bool = True
     # frame_id is also a NativeModuleConfig field; listed so it still crosses to the Rust config.
     base_fields: frozenset[str] = frozenset({"frame_id"})
 
-    # Model input for candle (Mac, CPU); multiples of 14, smaller is faster.
+    # Model input; multiples of 14, smaller is faster. TensorRT builds an engine per size (minutes, once).
     model_height: int = 364
     model_width: int = 448
     # JPEG decoded at 1/decode_scale of full size, then resampled to this pinhole image for the model;
@@ -82,6 +89,12 @@ class Depth2DepthCloudConfig(NativeModuleConfig):
                 f"{size} must be a multiple of 14 in [56, 1036], the model's patch grid"
             )
         return size
+
+    @model_validator(mode="after")
+    def _tensorrt_on_nvidia(self) -> Depth2DepthCloudConfig:
+        if self.build_command == "nix build -L ." and has_nvidia_gpu():
+            self.build_command = "nix build -L .#tensorrt"
+        return self
 
     @field_validator("decode_scale")
     @classmethod

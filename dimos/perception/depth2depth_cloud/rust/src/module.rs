@@ -51,7 +51,7 @@ const HISTORY_MARGIN_S: f64 = 1.0;
 #[native_config]
 #[derive(Clone)]
 pub struct Config {
-    /// Model input size for candle (a Mac, or CPU); both multiples of 14, smaller is faster. TensorRT uses the ONNX's.
+    /// Model input size; both multiples of 14, smaller is faster. TensorRT builds an engine per size (minutes, once).
     #[validate(range(min = 56, max = 1036))]
     model_height: i64,
     #[validate(range(min = 56, max = 1036))]

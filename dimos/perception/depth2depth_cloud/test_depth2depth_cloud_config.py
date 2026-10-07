@@ -56,3 +56,13 @@ def test_a_jpeg_scale_the_decoder_cannot_do_is_refused():
     # The Rust decoder would silently fall back to full size, three times the undistort work.
     with pytest.raises(ValidationError, match="1, 2, 4 or 8"):
         Depth2DepthCloudConfig(decode_scale=3)
+
+
+def test_an_nvidia_gpu_builds_tensorrt_and_anything_else_the_cpu_build(monkeypatch):
+    from dimos.perception.depth2depth_cloud import module
+
+    monkeypatch.setattr(module, "has_nvidia_gpu", lambda: False)
+    assert Depth2DepthCloudConfig().build_command == "nix build -L ."
+    monkeypatch.setattr(module, "has_nvidia_gpu", lambda: True)
+    assert Depth2DepthCloudConfig().build_command == "nix build -L .#tensorrt"
+    assert Depth2DepthCloudConfig(build_command="custom").build_command == "custom"
