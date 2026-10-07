@@ -244,8 +244,8 @@ from dimos.msgs.sensor_msgs.Imu import Imu
 from dimos.spec import perception
 
 class Mid360Config(NativeModuleConfig):
-    source_dir: str | None = "dimos/my_module/rust"
-    executable: str = str(DIMOS_PROJECT_ROOT / "target" / "release" / "mid360_native")
+    source_dir: str | None = "dimos/hardware/sensors/lidar/livox/rust"
+    executable: str = "../../../../../../target/release/mid360_native"
     build_command: str | None = "cargo build --release"
     host_ip: str | None = None  # auto-detected on the lidar's subnet
     lidar_ip: str | None = None  # required for a live sensor

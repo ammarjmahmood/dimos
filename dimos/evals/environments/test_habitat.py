@@ -19,11 +19,13 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
+from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
 from dimos.evals.environments.habitat import HabitatEnvironment
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Odometry import Odometry
+from dimos.simulation.habitat.connection import HabitatConnection, HabitatConnectionConfig
 
 
 def environment(**kwargs):
@@ -44,7 +46,6 @@ def test_smoke_checks_recorded_samples(mocker, missing):
 
 
 def test_scene_config_reaches_blueprint_parser(tmp_path):
-    from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
     from dimos.simulation.habitat.blueprints import habitat_nav
 
     dataset = tmp_path / "dataset.json"
@@ -66,6 +67,8 @@ def test_scene_config_reaches_blueprint_parser(tmp_path):
     assert "start_position_ros_override" not in config
     assert config["seed"] == 42
     assert config["publish_semantic"] is False
+    assert config["source_dir"] == HabitatConnectionConfig().source_dir
+    assert config["build_command"] == HabitatConnectionConfig().build_command
     assert parsed.global_config["transport"] == "zenoh"
     assert proc.simulator is None
     overrides = env.episode_metadata()["connection_overrides"]
@@ -80,6 +83,32 @@ def test_invalid_configuration(tmp_path):
         environment(attach=True)
     with pytest.raises(FileNotFoundError):
         environment(scene_dataset_config=str(tmp_path / "missing")).preflight(Mock())
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_external_executable_reaches_blueprint_without_source_build(
+    tmp_path, monkeypatch, mocker, relative
+):
+    executable = tmp_path / "habitat-native"
+    executable.touch()
+    monkeypatch.chdir(tmp_path)
+    source = mocker.patch(
+        "dimos.core.native_module.get_project_root", side_effect=AssertionError("source fetch")
+    )
+    env = environment(
+        executable=executable.name if relative else str(executable), scene_dataset_config="default"
+    )
+    proc = DimosCliCall()
+
+    env.configure_launch(proc)
+    monkeypatch.chdir(tmp_path.parent)
+    parsed = BlueprintConfigParser(HabitatConnection.blueprint()).parse(environ=proc.extra_env)
+    config = HabitatConnectionConfig(**parsed.module_kwargs("habitatconnection"))
+
+    assert config.resolve_paths() == (str(tmp_path), str(executable))
+    assert config.source_dir is None
+    assert config.build_command is None
+    source.assert_not_called()
 
 
 def test_launch_and_cleanup(tmp_path, mocker):
