@@ -132,6 +132,10 @@ DUAL_OPENYAM_RECORD_TOPICS = ",".join(
         "depth_image",
         "camera_info",
         "tf",
+        "detections_3d",
+        "grasp_candidates",
+        "grasp_target",
+        "planned_tool_path",
         *(
             f"{side}_wrist_{stream}"
             for side in DUAL_OPENYAM_SIDES
@@ -217,8 +221,63 @@ DUAL_OPENYAM_VIEW_TOPICS = [
     "right_wrist_color_image",
     "pointcloud",
     "detections_3d",
+    "grasp_candidates",
+    "grasp_target",
+    "planned_tool_path",
     "tf",
 ]
+
+# Jaw glyph in the TCP frame: pads 9.4 cm apart along Y, the approach along
+# -Z, a stem up toward the wrist.
+_JAW_HALF_OPENING = 0.047
+_JAW_STRIPS = [
+    [[0.0, -_JAW_HALF_OPENING, -0.01], [0.0, -_JAW_HALF_OPENING, 0.03]],
+    [[0.0, _JAW_HALF_OPENING, -0.01], [0.0, _JAW_HALF_OPENING, 0.03]],
+    [[0.0, -_JAW_HALF_OPENING, 0.03], [0.0, _JAW_HALF_OPENING, 0.03]],
+    [[0.0, 0.0, 0.03], [0.0, 0.0, 0.09]],
+]
+_CANDIDATE_COLOR = [100, 190, 255]
+_TARGET_COLOR = [255, 215, 0]
+_PATH_COLOR = (255, 215, 0)
+
+
+def _jaw_glyph(path: str, pose: Any, color: list[int], radius: float) -> list[tuple[str, Any]]:
+    import rerun as rr
+
+    return [
+        (
+            path,
+            rr.Transform3D(
+                translation=pose.position.to_tuple(),
+                rotation=rr.Quaternion(xyzw=pose.orientation.to_tuple()),
+            ),
+        ),
+        (
+            f"{path}/jaws",
+            rr.LineStrips3D(strips=_JAW_STRIPS, colors=[color] * 4, radii=[radius] * 4),
+        ),
+    ]
+
+
+def grasp_candidates_to_rerun(msg: Any) -> list[tuple[str, Any]]:
+    """The top proposals as jaw glyphs; rank 0 is the one tried first."""
+    import rerun as rr
+
+    root = "world/grasp_candidates"
+    data: list[tuple[str, Any]] = [(root, rr.Clear(recursive=True))]
+    for rank, pose in enumerate(msg.poses[:8]):
+        data.extend(_jaw_glyph(f"{root}/{rank:02d}", pose, _CANDIDATE_COLOR, 0.0012))
+    return data
+
+
+def grasp_target_to_rerun(msg: Any) -> list[tuple[str, Any]]:
+    """The grasp being attempted right now, in yellow."""
+    return _jaw_glyph("world/grasp_target", msg, _TARGET_COLOR, 0.0025)
+
+
+def planned_tool_path_to_rerun(msg: Any) -> Any:
+    """The tip's planned path on the table, not the nav default half a metre up."""
+    return msg.to_rerun(color=_PATH_COLOR, z_offset=0.0, radii=0.003)
 
 
 def dual_openyam_grasp_rerun() -> Blueprint:
@@ -226,6 +285,11 @@ def dual_openyam_grasp_rerun() -> Blueprint:
     return RerunBridgeModule.blueprint(
         blueprint=dual_openyam_grasp_view,
         topics=DUAL_OPENYAM_VIEW_TOPICS,
+        visual_override={
+            "world/grasp_candidates": grasp_candidates_to_rerun,
+            "world/grasp_target": grasp_target_to_rerun,
+            "world/planned_tool_path": planned_tool_path_to_rerun,
+        },
         memory_limit="2GB",
         rerun_open="none",
     )

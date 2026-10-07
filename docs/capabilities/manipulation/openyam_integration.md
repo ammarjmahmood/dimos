@@ -114,7 +114,10 @@ dimos run dual-openyam-grasp --disable real-sense-camera --disable object-scene-
 ```
 
 The blueprint carries a Rerun bridge with the three cameras as tiles and the
-scene beside them. It opens no window on the robot; watch it from a laptop:
+scene beside them. After `scan_objects` the detected objects appear as labelled
+boxes; `pick_object` draws the ranked grasp proposals as jaw glyphs, the one
+being attempted in yellow, and every plan draws the tip's path before the arm
+moves. It opens no window on the robot; watch it from a laptop:
 
 ```bash
 uvx dimos-viewer --connect rerun+http://<robot-ip>:9877/proxy --ws-url ws://<robot-ip>:3030/ws

@@ -152,3 +152,32 @@ def test_rerun_bridge_tiles_the_three_cameras_without_a_window_on_the_box() -> N
     names = {n for n, _ in stream_name_types(dual_openyam_grasp)}
     assert set(DUAL_OPENYAM_VIEW_TOPICS) <= names
     assert isinstance(dual_openyam_grasp_view(), rrb.Blueprint)
+
+
+def test_viewer_glyphs_build_for_proposals_target_and_path() -> None:
+    import rerun as rr
+
+    from dimos.msgs.geometry_msgs.Pose import Pose
+    from dimos.msgs.geometry_msgs.PoseArray import PoseArray
+    from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+    from dimos.msgs.nav_msgs.Path import Path
+    from dimos.msgs.std_msgs.Header import Header
+    from dimos.robot.manipulators.dual_openyam.blueprints.grasp import (
+        grasp_candidates_to_rerun,
+        grasp_target_to_rerun,
+        planned_tool_path_to_rerun,
+    )
+
+    poses = [Pose(position=(0.3, 0.1 * k, 0.05)) for k in range(10)]
+    candidates = grasp_candidates_to_rerun(PoseArray(Header(1.0, "world"), poses))
+    assert isinstance(candidates[0][1], rr.Clear)
+    assert sum(path.endswith("/jaws") for path, _ in candidates) == 8
+
+    target = grasp_target_to_rerun(PoseStamped(frame_id="world", position=(0.3, 0.0, 0.05)))
+    assert [path for path, _ in target] == ["world/grasp_target", "world/grasp_target/jaws"]
+
+    path = Path(
+        frame_id="world",
+        poses=[PoseStamped(frame_id="world", position=(0.3, 0, k)) for k in (0.1, 0.2)],
+    )
+    assert isinstance(planned_tool_path_to_rerun(path), rr.LineStrips3D)
