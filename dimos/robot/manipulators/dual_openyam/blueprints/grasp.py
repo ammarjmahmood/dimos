@@ -305,12 +305,13 @@ def dual_openyam_wrist_camera(side: str) -> Blueprint:
     if side not in DUAL_OPENYAM_SIDES:
         raise ValueError(f"side must be 'left' or 'right', got {side!r}")
     name = f"{side}_wrist_camera"
+    # 640x480 at 30 fps is what the OpenArm ACT datasets were collected at.
     camera = RealSenseCamera.blueprint(
         instance_name=name,
         frame_id_prefix=f"{side}_wrist",
         width=640,
         height=480,
-        fps=15,
+        fps=30,
         enable_pointcloud=False,
         serial_number=DUAL_OPENYAM_WRIST_CAMERA_SERIALS[side],
     )
