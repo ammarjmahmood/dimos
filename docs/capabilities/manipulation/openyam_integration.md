@@ -113,6 +113,27 @@ dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port followe
 dimos run dual-openyam-grasp --disable real-sense-camera --disable object-scene-registration-module
 ```
 
+### What the planner avoids
+
+Neither the dual OpenYAM URDF nor the upstream i2rt model carries collision
+geometry, so the grasp blueprint builds its own planning model
+(`dual_openyam_grasp_model_config`):
+
+- every link collides as the convex hull of its visual mesh;
+- the wrist camera and its bracket are boxes on each gripper link
+  (`DUAL_OPENYAM_WRIST_CAMERA_BOXES`, 1.5 cm margin plus room for the plug);
+- the two fingertips and the nested wrist pair are excluded, everything else
+  adjacent is filtered;
+- the arm bases stand at the measured `DUAL_OPENYAM_BASE_SPACING`;
+- the table top and the bin are static obstacles (`DUAL_OPENYAM_STATIC_BOXES`,
+  table top 3 cm below the base plates, bin at the far edge).
+
+Detected objects and, with a voxel map, unknown clutter are added on top by the
+world monitor. Viser's "Robot display" switch shows the collision bodies. The
+acceptance test lives in `test_grasp_collision.py` (self-hosted, needs Drake):
+a plan with the fingertips in the bin is refused, free space plans. Re-measure
+the bin and the base spacing whenever the rig changes.
+
 The blueprint carries a Rerun bridge with the three cameras as tiles and the
 scene beside them. After `scan_objects` the detected objects appear as labelled
 boxes; `pick_object` draws the ranked grasp proposals as jaw glyphs, the one
