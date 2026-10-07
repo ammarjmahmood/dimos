@@ -26,7 +26,10 @@ from __future__ import annotations
 from collections.abc import Callable
 import math
 from pathlib import Path
+import tempfile
 from typing import TYPE_CHECKING, Any
+
+import mujoco
 
 from dimos.evals.environments.lib.recorded_poses import first_body_transform, last_body_transform
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
@@ -85,10 +88,6 @@ _DUTY_UPRIGHT = (
     "The cup should stand upright in the middle of the table among the other items — "
     "not lying on its side. Feel free to act as you see fit. Go."
 )
-
-_STOCK_CUP_BODY = '<body name="cup" pos="0.50 0.0 0.19">'
-_STOCK_ORANGE_BODY = '<body name="orange" pos="0.45 -0.08 0.175">'
-
 
 def _cup_on_table(x: float, y: float) -> bool:
     return (
@@ -214,32 +213,28 @@ def stayed_put(body: str, *, band: float = _STAY_BAND_M) -> Callable[[Outcome], 
     return grade
 
 
-def _materialize_eval_scene(
+def _write_eval_scene(
+    dest_dir: Path,
     cup_xy: tuple[float, float],
     *,
     cup_z: float = CUP_UPRIGHT_Z,
     cup_quat: tuple[float, float, float, float] | None = None,
     orange_xy: tuple[float, float] = ORANGE_EVAL_XY,
 ) -> Path:
-    """Write an eval scene: cup pose (optional tip-over) and orange off center."""
-    stock = LfsPath("xarm7/scene.xml")
-    root = Path(str(stock)).parent
-    text = (root / "scene.xml").read_text()
-    if _STOCK_CUP_BODY not in text or _STOCK_ORANGE_BODY not in text:
-        raise RuntimeError("xarm7/scene.xml no longer has the expected cup/orange markers")
-    cx, cy = cup_xy
-    ox, oy = orange_xy
-    if cup_quat is None:
-        cup_tag = f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}">'
-    else:
-        w, x, y, z = cup_quat
-        cup_tag = f'<body name="cup" pos="{cx:g} {cy:g} {cup_z:g}" quat="{w:g} {x:g} {y:g} {z:g}">'
-    text = text.replace(_STOCK_ORANGE_BODY, f'<body name="orange" pos="{ox:g} {oy:g} 0.175">', 1)
-    text = text.replace(_STOCK_CUP_BODY, cup_tag, 1)
-    tag = "fallen" if cup_quat is not None else "up"
-    out = root / f"scene_cup_{cx:g}_{cy:g}_{tag}_orange_{ox:g}_{oy:g}_eval.xml"
-    out.write_text(text)
-    return out
+    """Write a per-launch scene under ``dest_dir`` via MjSpec (not the LFS tree)."""
+    stock = Path(str(LfsPath("xarm7/scene.xml")))
+    spec = mujoco.MjSpec.from_file(str(stock))
+    meshdir = spec.meshdir or "."
+    spec.meshdir = str((stock.parent / meshdir).resolve())
+    cup = spec.body("cup")
+    cup.pos = [*cup_xy, cup_z]
+    if cup_quat is not None:
+        cup.quat = list(cup_quat)
+    orange = spec.body("orange")
+    orange.pos = [*orange_xy, float(orange.pos[2])]
+    path = dest_dir / "scene.xml"
+    path.write_text(spec.to_xml())
+    return path
 
 
 class _CupSceneEnv(MujocoEnvironment):
@@ -259,8 +254,14 @@ class _CupSceneEnv(MujocoEnvironment):
         super().__init__(**kwargs)
 
     def configure_launch(self, proc: DimosCliCall) -> None:
-        self.config.scene = _materialize_eval_scene(
-            self._cup_xy, cup_z=self._cup_z, cup_quat=self._cup_quat
+        workdir = Path(
+            self._resources.enter_context(tempfile.TemporaryDirectory(prefix="xarm_tidy_"))
+        )
+        self.config.scene = _write_eval_scene(
+            workdir,
+            self._cup_xy,
+            cup_z=self._cup_z,
+            cup_quat=self._cup_quat,
         )
         super().configure_launch(proc)
 
