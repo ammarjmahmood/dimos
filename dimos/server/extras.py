@@ -176,12 +176,12 @@ def wheel_size(entry: dict[str, Any], environment: dict[str, str]) -> int | None
 
 
 def lock_entry(dimos_dir: Path, name: str) -> dict[str, Any] | None:
-    try:
-        lock = tomllib.loads((dimos_dir / "uv.lock").read_text())
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
     return next(
-        (e for e in lock.get("package", []) if canonicalize_name(e["name"]) == name),
+        (
+            e
+            for e in read_lock(dimos_dir).get("package", [])
+            if canonicalize_name(e["name"]) == name
+        ),
         None,
     )
 
@@ -274,17 +274,28 @@ async def prepare_cyclonedds(
     )
 
 
-def lock_download_sizes(
-    dimos_dir: Path, environment: dict[str, str], packages: dict[str, str]
-) -> dict[str, int]:
-    """Extra -> bytes to download for the packages it would add (uv.lock's wheel sizes; markers it can't read count
-    as applying, so it's an upper bound). Empty without a uv.lock."""
+_LOCK_CACHE: dict[Path, tuple[int, dict[str, Any]]] = {}
+
+
+def read_lock(dimos_dir: Path) -> dict[str, Any]:
+    """The checkout's uv.lock, parsed once per change ({} without one)."""
+    path = dimos_dir / "uv.lock"
     try:
-        lock = tomllib.loads((dimos_dir / "uv.lock").read_text())
+        stamp = path.stat().st_mtime_ns
+        cached = _LOCK_CACHE.get(path)
+        if cached is None or cached[0] != stamp:
+            _LOCK_CACHE[path] = (stamp, tomllib.loads(path.read_text()))
+        return _LOCK_CACHE[path][1]
     except (OSError, tomllib.TOMLDecodeError):
         return {}
+
+
+def lock_closures(dimos_dir: Path, environment: dict[str, str]) -> dict[str, set[str]]:
+    """Extra -> every package (canonical name) installing it brings, its dependencies' dependencies too, from uv.lock
+    (markers it can't read count as applying); `""`: what dimos itself needs, without extras. Empty without a
+    uv.lock."""
     by_name: dict[str, dict[str, Any]] = {}
-    for entry in lock.get("package", []):
+    for entry in read_lock(dimos_dir).get("package", []):
         by_name.setdefault(canonicalize_name(entry["name"]), entry)
     dimos = by_name.get("dimos")
     if dimos is None:
@@ -300,7 +311,8 @@ def lock_download_sizes(
             return True
 
     answer = {}
-    for extra, dependencies in dimos.get("optional-dependencies", {}).items():
+    every = {"": dimos.get("dependencies", []), **dimos.get("optional-dependencies", {})}
+    for extra, dependencies in every.items():
         seen: set[str] = set()
         stack = [d for d in dependencies if wanted(d)]
         while stack:
@@ -323,10 +335,98 @@ def lock_download_sizes(
                 stack += [
                     d for d in entry.get("optional-dependencies", {}).get(sub, []) if wanted(d)
                 ]
-        answer[extra] = sum(
+        answer[extra] = seen
+    return answer
+
+
+def lock_download_sizes(
+    dimos_dir: Path, environment: dict[str, str], packages: dict[str, str]
+) -> dict[str, int]:
+    """Extra -> bytes to download for the packages it would add (uv.lock's wheel sizes; markers it can't read count
+    as applying, so it's an upper bound). Empty without a uv.lock."""
+    by_name: dict[str, dict[str, Any]] = {}
+    for entry in read_lock(dimos_dir).get("package", []):
+        by_name.setdefault(canonicalize_name(entry["name"]), entry)
+    return {
+        extra: sum(
             wheel_size(by_name[name], environment) or 0 for name in seen if name not in packages
         )
-    return answer
+        for extra, seen in lock_closures(dimos_dir, environment).items()
+        if extra
+    }
+
+
+# import names that aren't their package's name (`import cv2` comes from opencv-python)
+IMPORT_ALIASES: dict[str, tuple[str, ...]] = {
+    "cv2": ("opencv-python", "opencv-python-headless", "opencv-contrib-python"),
+    "PIL": ("pillow",),
+    "yaml": ("pyyaml",),
+    "sklearn": ("scikit-learn",),
+    "skimage": ("scikit-image",),
+    "pydrake": ("drake",),
+    "pxr": ("usd-core",),
+    "can": ("python-can",),
+    "collada": ("pycollada",),
+    "open_clip": ("open-clip-torch",),
+    "mujoco_playground": ("playground",),
+    "socketio": ("python-socketio",),
+    "multipart": ("python-multipart",),
+    "ffmpeg": ("ffmpeg-python",),
+    "serial": ("pyserial",),
+    "usb": ("pyusb",),
+    "OpenGL": ("pyopengl",),
+    "dateutil": ("python-dateutil",),
+}
+
+
+def providing_extras(
+    dimos_dir: Path, environment: dict[str, str]
+) -> Callable[[str | None], list[str]]:
+    """module -> the extras that would install that missing top-level module, smallest first: those that require its
+    package themselves (by name: `unitree_sdk2py` -> `unitree-sdk2py-dimos` -> unitree-dds; `cv2` -> opencv-python),
+    else those that bring it as a dependency of one of theirs (uv.lock: `torch` -> perception). An extra that includes
+    another one found (all, base) isn't listed: the smaller one is enough. None for a package dimos needs without
+    extras. A hint: dimos doesn't record which extra a
+    blueprint needs. Reads pyproject.toml and uv.lock once, for every module asked."""
+    declared_extras = declared(dimos_dir, {})
+    closures = lock_closures(dimos_dir, environment)
+    includes: dict[str, set[str]] = {}
+    packages: dict[str, set[str]] = {}
+    for extra, requirements in declared_extras.items():
+        includes[extra], packages[extra] = set(), set()
+        for text in requirements:
+            try:
+                requirement = Requirement(text)
+            except InvalidRequirement:
+                continue
+            name = canonicalize_name(requirement.name)
+            if name == "dimos":
+                includes[extra] |= set(requirement.extras)
+            else:
+                packages[extra].add(name)
+
+    def contains(extra: str, other: str, seen: frozenset[str] = frozenset()) -> bool:
+        inner = includes.get(extra, set()) - seen
+        return other in inner or any(contains(i, other, seen | {extra}) for i in inner)
+
+    def providers(module: str | None) -> list[str]:
+        if not module:
+            return []
+        names = {canonicalize_name(module), *IMPORT_ALIASES.get(module, ())}
+
+        def provides(package: str) -> bool:
+            return any(package == n or package.startswith(n + "-") for n in names)
+
+        if any(provides(p) for p in closures.get("", ())):
+            return []  # dimos itself needs it: no extra adds it
+
+        found = [e for e in declared_extras if any(provides(p) for p in packages[e])]
+        if not found:
+            found = [e for e in declared_extras if any(provides(p) for p in closures.get(e, ()))]
+        minimal = [e for e in found if not any(o != e and contains(e, o) for o in found)]
+        return sorted(minimal, key=lambda e: len(closures.get(e, ())))
+
+    return providers
 
 
 def find_uv() -> str | None:
@@ -340,16 +440,22 @@ def find_uv() -> str | None:
 
 
 def install_command(
-    dimos_dir: Path, extras: list[str], python: str, dimos_version: str | None, uv: str
+    dimos_dir: Path,
+    extras: list[str],
+    python: str,
+    dimos_version: str | None,
+    uv: str,
+    cuda: bool | None = None,
 ) -> list[str]:
     """scripts/install.sh's command for these extras. In a checkout `--inexact` keeps every extra and group already
-    installed (plain `uv sync` removes what isn't asked for)."""
+    installed (plain `uv sync` removes what isn't asked for). `cuda`: torch's CUDA build (default: with the cuda
+    extra)."""
     if is_checkout(dimos_dir):
         command = [uv, "sync", "--locked", "--inexact", "--no-progress"]
         for extra in extras:
             command += ["--extra", extra]
         return command
-    backend = "cu128" if "cuda" in extras else "cpu"
+    backend = "cu128" if (cuda if cuda is not None else "cuda" in extras) else "cpu"
     pin = f"=={dimos_version}" if dimos_version else ""
     return [
         uv,
@@ -374,9 +480,10 @@ def shell_commands(
 ) -> list[dict[str, Any]]:
     """The commands Desktop's shell tool runs for these extras, each with a note for the user: with `cyclonedds`
     (the cyclonedds package builds here) first its C library ($CYCLONEDDS_HOME, else nix's from the nixpkgs dimos's
-    flake.lock pins, linked into the venv, else Homebrew's), then install_command. Raises MissingForJobError
-    `cyclonedds_missing` when there's no way to get the library."""
-    install = shlex.join(install_command(dimos_dir, extras, python, dimos_version, uv))
+    flake.lock pins, linked into the venv, else Homebrew's), then install_command once per extra, one at a time (one
+    that fails stops there, and the user sees which). Raises MissingForJobError `cyclonedds_missing` when there's no
+    way to get the library."""
+    prefix = ""
     env = {"VIRTUAL_ENV": str(venv_dir(dimos_dir))} if is_checkout(dimos_dir) else {}
     commands: list[dict[str, Any]] = []
     if cyclonedds:
@@ -403,11 +510,10 @@ def shell_commands(
                     "cwd": str(dimos_dir),
                 }
             )
-            # its store path, resolved when the install runs
-            install = (
+            # its store path, resolved when each install runs
+            prefix = (
                 f'export CYCLONEDDS_HOME="$(cd {shlex.quote(str(link))} && pwd -P)"\n'
                 'export CMAKE_PREFIX_PATH="$CYCLONEDDS_HOME${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"\n'
-                + install
             )
         elif brewed is not None:
             env.update(cyclonedds_env(brewed.resolve()))
@@ -418,12 +524,16 @@ def shell_commands(
                 "install nix (Desktop's installer does), or `brew install cyclonedds`, or set CYCLONEDDS_HOME to "
                 "an install of CycloneDDS 0.10, then install again.",
             )
-    commands.append(
-        {
-            "run": install,
-            "note": f"Install the {', '.join(extras)} extra{'s' if len(extras) > 1 else ''} with uv",
-            "cwd": str(dimos_dir),
-            "env": env,
-        }
-    )
+    for extra in extras:
+        install = shlex.join(
+            install_command(dimos_dir, [extra], python, dimos_version, uv, "cuda" in extras)
+        )
+        commands.append(
+            {
+                "run": prefix + install,
+                "note": f"Install the {extra} extra with uv",
+                "cwd": str(dimos_dir),
+                "env": env,
+            }
+        )
     return commands

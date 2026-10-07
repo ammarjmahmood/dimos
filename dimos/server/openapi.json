@@ -1129,7 +1129,7 @@
             "title": "Robot"
           },
           "suggested_extras": {
-            "description": "dimos extras whose packages look like they'd provide missing_module (a name match: a hint)",
+            "description": "dimos extras that would install missing_module, smallest first: those requiring its package (by name, `cv2` as opencv-python), else bringing it as a dependency (uv.lock); none for a package dimos needs without extras. A hint",
             "examples": [
               [
                 "unitree-dds"
@@ -4912,7 +4912,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.8.0"
+    "version": "1.8.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5702,7 +5702,7 @@
     },
     "/dimos/extras/install": {
       "post": {
-        "description": "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> --torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. When that builds the cyclonedds package from source (unitree-dds, dds: it has wheels for python 3.10 only), it first gets the CycloneDDS C library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an out-link in the venv), else Homebrew's; none = 400 with `code: cyclonedds_missing`. With Desktop (`$DESKTOP_URL`) the commands go to its `POST /api/desktop/shell` for the asking app (default `launcher`): it shows them over that app, nothing runs until the user presses Run, a failure can be fixed in its terminal (by the user or Desktop's agent) and retried; the answer is `{ shell }`, the session to follow with Desktop's `GET /api/desktop/shell/{id}?wait=`. The server waits for it and rescans. Without Desktop it runs as a job (`{ job }`: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log). 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
+        "description": "Runs scripts/install.sh's command: `uv sync --locked --inexact --extra <x> ...` in a checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> --torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`; through Desktop, one such command per extra, run one at a time. Never sudo. When that builds the cyclonedds package from source (unitree-dds, dds: it has wheels for python 3.10 only), it first gets the CycloneDDS C library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an out-link in the venv), else Homebrew's; none = 400 with `code: cyclonedds_missing`. With Desktop (`$DESKTOP_URL`) the commands go to its `POST /api/desktop/shell` for the asking app (default `launcher`): it shows them over that app, nothing runs until the user presses Run, a failure can be fixed in its terminal (by the user or Desktop's agent) and retried; the answer is `{ shell }`, the session to follow with Desktop's `GET /api/desktop/shell/{id}?wait=`. The server waits for it and rescans. Without Desktop it runs as a job (`{ job }`: follow `<ns>/dimos/jobs/<job>` or GET /dimos/jobs/{job}/log). 400 for an unknown extra; 409 while another install runs; 500 when uv isn't found.",
         "operationId": "post_dimos_extras_install",
         "requestBody": {
           "content": {

@@ -22,8 +22,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import FastAPI, Path as PathParam, Query
-from packaging.requirements import InvalidRequirement, Requirement
-from packaging.utils import canonicalize_name
+from packaging.markers import default_environment
 
 from dimos.server import config, desktop, docs, extras, models
 from dimos.server.discovery import python_for
@@ -43,25 +42,6 @@ ModuleParam = Annotated[
     ),
 ]
 JobParam = Annotated[str, PathParam(description="a job id", examples=["extras-1-1791000000"])]
-
-
-def suggested_extras(declared: dict[str, list[str]], module: str | None) -> list[str]:
-    """Extras with a requirement whose name looks like the missing module's (`unitree_sdk2py` ->
-    `unitree-sdk2py-dimos` -> unitree-dds): a hint, by name only."""
-    if not module:
-        return []
-    wanted = canonicalize_name(module)
-    found = []
-    for extra, requirements in declared.items():
-        for text in requirements:
-            try:
-                name = canonicalize_name(Requirement(text).name)
-            except InvalidRequirement:
-                continue
-            if name != "dimos" and (name == wanted or name.startswith(wanted + "-")):
-                found.append(extra)
-                break
-    return found
 
 
 def add(app: FastAPI, state: ServerState) -> None:
@@ -132,9 +112,11 @@ def add(app: FastAPI, state: ServerState) -> None:
         ),
     )
     async def discovered_blueprints() -> dict[str, Any]:
-        declared = extras.declared(s.dimos_dir, {})
+        providers = extras.providing_extras(
+            s.dimos_dir, {key: str(value) for key, value in default_environment().items()}
+        )
         records = [
-            {**record, "suggested_extras": suggested_extras(declared, record.get("missing_module"))}
+            {**record, "suggested_extras": providers(record.get("missing_module"))}
             for record in discovery.blueprint_list()
         ]
         return {"stale": bool(discovery.status["stale"]), "blueprints": records}
@@ -298,9 +280,10 @@ def add(app: FastAPI, state: ServerState) -> None:
             "extras",
             "Install dimos extras through Desktop's shell tool (the user sees the commands and presses Run); "
             "discovery rescans when it ends",
-            "Runs scripts/install.sh's command for them: `uv sync --locked --inexact --extra <x> ...` in a "
-            "checkout (keeps every extra and group already installed), else `uv pip install --python <venv python> "
-            "--torch-backend cpu|cu128 'dimos[<x>,...]==<version>'`. Never sudo. When that builds the cyclonedds package "
+            "Runs scripts/install.sh's command: `uv sync --locked --inexact --extra <x> ...` in a checkout (keeps "
+            "every extra and group already installed), else `uv pip install --python <venv python> --torch-backend "
+            "cpu|cu128 'dimos[<x>,...]==<version>'`; through Desktop, one such command per extra, run one at a time. "
+            "Never sudo. When that builds the cyclonedds package "
             "from source (unitree-dds, dds: it has wheels for python 3.10 only), it first gets the CycloneDDS C "
             "library it builds against: $CYCLONEDDS_HOME, else `nix build <flake.lock's nixpkgs>#cyclonedds` (an "
             "out-link in the venv), else Homebrew's; none = 400 with `code: cyclonedds_missing`. With Desktop "

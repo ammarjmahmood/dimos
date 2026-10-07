@@ -955,7 +955,9 @@ class DiscoveredBlueprint(ApiModel):
         description="The top-level module an import couldn't find", examples=["unitree_sdk2py"]
     )
     suggested_extras: list[str] = Field(
-        description="dimos extras whose packages look like they'd provide missing_module (a name match: a hint)",
+        description="dimos extras that would install missing_module, smallest first: those requiring its package "
+        "(by name, `cv2` as opencv-python), else bringing it as a dependency (uv.lock); none for a package dimos "
+        "needs without extras. A hint",
         examples=[["unitree-dds"]],
     )
     modules: list[DiscoveredModuleRef] = Field(

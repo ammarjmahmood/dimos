@@ -55,6 +55,7 @@ UV_LOCK = textwrap.dedent(
     [[package]]
     name = "dimos"
     version = "0.0.14"
+    dependencies = [{ name = "numpy" }]
     [package.optional-dependencies]
     sim = [{ name = "mujoco" }, { name = "pygame" }]
     unitree-dds = [{ name = "unitree-sdk2py-dimos" }, { name = "cyclonedds" }]
@@ -66,6 +67,9 @@ UV_LOCK = textwrap.dedent(
         { url = "https://x/mujoco-3.3.4-cp312-cp312-macosx_11_0_arm64.whl", size = 1000 },
         { url = "https://x/mujoco-3.3.4-cp312-cp312-manylinux_2_17_x86_64.whl", size = 2000 },
     ]
+    [[package]]
+    name = "numpy"
+    version = "2.0"
     [[package]]
     name = "glfw"
     version = "2.0"
@@ -411,15 +415,43 @@ def test_extras_shell_commands_get_cyclonedds_first(
     (tmp_path / "uv.lock").write_text("")
     monkeypatch.delenv("CYCLONEDDS_HOME", raising=False)
     monkeypatch.setattr(extras, "find_nix", lambda: "/nix/bin/nix")
-    nix_build, install = extras.shell_commands(tmp_path, ["dds"], "/v/python", None, "uv", True)
+    nix_build, dds, sim = extras.shell_commands(
+        tmp_path, ["dds", "sim"], "/v/python", None, "uv", True
+    )
     assert nix_build["run"].startswith(
         "/nix/bin/nix --extra-experimental-features 'nix-command flakes' build"
     )
-    assert install["run"].startswith('export CYCLONEDDS_HOME="$(cd ')
+    # one command per extra, each with the library's path
+    assert dds["run"].startswith('export CYCLONEDDS_HOME="$(cd ')
+    assert dds["run"].endswith("uv sync --locked --inexact --no-progress --extra dds")
+    assert sim["run"].startswith('export CYCLONEDDS_HOME="$(cd ')
+    assert sim["run"].endswith("--extra sim") and sim["note"] == "Install the sim extra with uv"
     monkeypatch.setattr(extras, "find_nix", lambda: None)
     monkeypatch.setattr(extras, "BREWED_CYCLONEDDS", (tmp_path / "no-brew",))
     with pytest.raises(MissingForJobError):
         extras.shell_commands(tmp_path, ["dds"], "/v/python", None, "uv", True)
+
+
+def test_a_library_install_gets_one_command_per_extra(tmp_path: Path) -> None:
+    perception, cuda = extras.shell_commands(
+        tmp_path, ["perception", "cuda"], "/v/python", "0.0.14", "uv", False
+    )
+    # each its own, with the CUDA torch build the set asked for
+    assert perception["run"] == (
+        "uv pip install --no-progress --python /v/python --torch-backend cu128 'dimos[perception]==0.0.14'"
+    )
+    assert cuda["run"].endswith("'dimos[cuda]==0.0.14'")
+
+
+def test_extras_that_provide_a_missing_module(repo: Path) -> None:
+    providers = extras.providing_extras(repo, PROBE["environment"])  # type: ignore[arg-type]
+    # by its package's name (`all` includes unitree-dds: the smaller one is enough)
+    assert providers("unitree_sdk2py") == ["unitree-dds"]
+    assert providers("mujoco") == ["sim"]
+    # a dependency of an extra's package (uv.lock)
+    assert providers("glfw") == ["sim"]
+    # dimos needs it without extras, or nothing has it
+    assert providers("numpy") == [] and providers("pyzed") == [] and providers(None) == []
 
 
 def test_extras_install_is_a_job_without_desktop(
