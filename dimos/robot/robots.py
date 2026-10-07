@@ -24,7 +24,7 @@ all_blueprints.py current checks it too (`problems`), so the two can't drift:
   (c) every listed blueprint is registered in all_blueprints.py;
   (d) every arg names a real GlobalConfig field, or (`module_arg_problems`, which imports the blueprints) a real
       config field of a module in that blueprint;
-  (e) it matches robots.schema.json, and its tags, groups and starter ranks are consistent;
+  (e) it matches robots.schema.json, and its tags, groups, starter ranks and recommended blueprints are consistent;
   (f) each robot's `type` (dog, wheeled, humanoid, arm, drone, or null: not a robot) and `manufacturer` agree with
       where its code lives (`kind_problems`);
   (g) every arg's `docs` link resolves, its #anchor too (`link_problems`, which goes online).
@@ -189,7 +189,7 @@ def _each_mode(doc: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any]]
 
 
 def consistency_problems(doc: dict[str, Any]) -> list[str]:
-    """(d) GlobalConfig names, and (e) tags, groups, starter ranks."""
+    """(d) GlobalConfig names, and (e) tags, groups, starter ranks, recommended blueprints."""
     from dimos.core.global_config import GlobalConfig
 
     fields = GlobalConfig.model_fields
@@ -206,6 +206,12 @@ def consistency_problems(doc: dict[str, Any]) -> list[str]:
             problems.append(
                 f"robots.{robot_id}.group is {robot['group']!r}, not one of groups: {', '.join(doc['groups'])}"
             )
+        for name in robot.get("recommended", []):
+            if name not in robot["blueprints"]:
+                problems.append(
+                    f"robots.{robot_id}.recommended: {name!r} is not one of its blueprints"
+                    f"{_guess(name, robot['blueprints'])}"
+                )
         for name, blueprint in robot["blueprints"].items():
             for tag in blueprint["tags"]:
                 if tag in MODE_TAGS:
@@ -510,6 +516,7 @@ def resolved(doc: dict[str, Any], registry: dict[str, str] | None = None) -> dic
         robot.pop("defaults", None)
         robot.setdefault("group", None)
         robot.setdefault("recommended_app", None)
+        robot.setdefault("recommended", [])
     if registry is not None:
         out["unlisted"] = sorted(set(registry) - listed)
     return out

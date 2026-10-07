@@ -197,6 +197,15 @@
         "recommended_app": {
           "$ref": "#/$defs/app"
         },
+        "recommended": {
+          "description": "The blueprints to suggest first for this robot, best first (a launcher lists them on top). Each is one of this robot's `blueprints`.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "defaults": {
           "description": "What a blueprint of this robot has unless it says otherwise.",
           "type": "object",

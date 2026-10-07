@@ -226,6 +226,23 @@ def test_tags_groups_and_starter_ranks(root: Path) -> None:
     assert any("robots.dog.group is 'legs'" in p for p in found)
 
 
+def test_recommended_blueprints_are_the_robots_own(root: Path) -> None:
+    doc = sample()
+    doc["robots"]["dog"]["recommended"] = ["dog-basic", "dog-basik"]
+    found = robots.problems(doc, REGISTRY, root)
+    assert any(
+        "robots.dog.recommended: 'dog-basik' is not one of its blueprints (did you mean dog-basic?)"
+        in p
+        for p in found
+    )
+    doc["robots"]["dog"]["recommended"] = ["dog-basic"]
+    assert robots.problems(doc, REGISTRY, root) == []
+    assert robots.resolved(doc)["robots"]["dog"]["recommended"] == ["dog-basic"]
+    # optional: none is an empty list
+    del doc["robots"]["dog"]["recommended"]
+    assert robots.resolved(doc)["robots"]["dog"]["recommended"] == []
+
+
 def test_resolved_applies_defaults() -> None:
     doc = sample()
     before = copy.deepcopy(doc)
@@ -265,6 +282,7 @@ def test_the_real_file_lists_every_robot_dir_blueprint() -> None:
     basic = out["robots"]["go2"]["blueprints"]["unitree-go2-basic"]
     assert list(basic["modes"]) == ["robot", "replay", "sim"]
     assert basic["recommended_app"]["id"] == "dim-go2-dash"
+    assert out["robots"]["go2"]["recommended"][0] == "unitree-go2-basic"
 
 
 def test_dimos_yaml_points_at_it() -> None:

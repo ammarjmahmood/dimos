@@ -185,6 +185,12 @@
         "url": "https://github.com/jeff-hykin/dim-go2-dash",
         "ref": "main"
       },
+      "recommended": [
+        "unitree-go2-basic",
+        "unitree-go2",
+        "unitree-go2-agentic",
+        "unitree-go2-webrtc-keyboard-teleop"
+      ],
       "defaults": {
         "modes": {
           "robot": {

@@ -454,6 +454,12 @@ class Robot(ApiModel):
         description="Its code directories in the checkout", examples=[["dimos/robot/unitree/go2"]]
     )
     recommended_app: RecommendedApp | None = Field(description="The app to install for it, or null")
+    recommended: list[str] = Field(
+        default_factory=list,
+        description="The blueprints to suggest first for it, best first (each one of its `blueprints`); empty "
+        "when robots.json names none",
+        examples=[["unitree-go2-basic", "unitree-go2"]],
+    )
     blueprints: dict[str, RobotBlueprint] = Field(description="Its blueprints by name, in order")
 
 

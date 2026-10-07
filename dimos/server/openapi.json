@@ -3597,6 +3597,20 @@
             "title": "Name",
             "type": "string"
           },
+          "recommended": {
+            "description": "The blueprints to suggest first for it, best first (each one of its `blueprints`); empty when robots.json names none",
+            "examples": [
+              [
+                "unitree-go2-basic",
+                "unitree-go2"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Recommended",
+            "type": "array"
+          },
           "recommended_app": {
             "anyOf": [
               {
@@ -4912,7 +4926,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.8.1"
+    "version": "1.9.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6243,7 +6257,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential args, the app to install, starter picks, hidden ones",
+        "summary": "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential args, the app to install, starter picks, recommended blueprints, hidden ones",
         "tags": [
           "blueprints"
         ],
