@@ -35,3 +35,7 @@ Seeed calibration procedure: https://wiki.seeedstudio.com/rebot_b601_rs_getting_
 One separately authorized motor 7 opening test ran through the actual DimOS adapter on the Jetson. Reported position moved from 0.022 to 0.857 motor degrees, but did not reach the five degree target within five seconds. All 100 recorded temperatures were 31 C. Only motor 7 was enabled. The diagnostic used speed two degrees per second, torque limit 0.5 N m and MIT gains 2 and 0.1. Cleanup called motor 7 disable and an independent inspection confirmed CAN down, controller stopped and zero CAN error counters. No closing target or arm joint motion was commanded.
 
 Physical activation and timestamped status receipt worked. Opening travel, measured speed, torque enforcement, motor timeout, emergency stop and full agent execution remain unqualified. Low diagnostic gain or mechanical resistance may explain the small movement, but the cause is unverified. No repeat or increased gain or torque is authorized. The PR remains a draft.
+
+A new numerical regression exposed abrupt endpoint velocity reset. The planner now includes discrete step braking margin. Twenty two adapter and feedback tests and four diagnostic harness tests pass on the desktop. Physical retesting remains pending.
+
+The same twenty two adapter and feedback tests passed on the physical Jetson in 1.00 seconds. Four diagnostic harness mock tests passed there in 0.13 seconds. These tests used mocks without CAN access. Ruff formatting and checks pass.

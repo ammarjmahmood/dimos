@@ -465,7 +465,19 @@ class RebotRSAdapter:
             acceleration = self._acceleration[index]
             maximum = self._velocity_max[index] * self._velocity_scale
             desired = (
-                math.copysign(min(maximum, math.sqrt(2.0 * acceleration * abs(error))), error)
+                math.copysign(
+                    min(
+                        maximum,
+                        max(
+                            0.0,
+                            math.sqrt(
+                                2.0 * acceleration * abs(error) + (acceleration * self._period) ** 2
+                            )
+                            - acceleration * self._period,
+                        ),
+                    ),
+                    error,
+                )
                 if error
                 else 0.0
             )

@@ -115,6 +115,28 @@ def adapter_with(positions: list[float] | None = None) -> tuple[RebotRSAdapter, 
     return adapter, controller
 
 
+def test_diagnostic_trajectory_reaches_target_with_bounded_speed_and_acceleration() -> None:
+    adapter, controller = adapter_with()
+    adapter._active_indices = (6,)
+    adapter._velocity_scale = 1.0
+    adapter._velocity_max[6] = math.radians(2.0)
+    adapter._acceleration[6] = math.radians(5.0)
+    adapter._targets[6] = math.radians(5.0)
+    previous_rate = 0.0
+    previous_position = 0.0
+    for _ in range(500):
+        adapter._advance()
+        assert 0.0 <= adapter._commands[6] <= math.radians(5.0)
+        assert adapter._commands[6] >= previous_position
+        assert abs(adapter._rates[6]) <= math.radians(2.0) + 1e-12
+        assert abs(adapter._rates[6] - previous_rate) <= math.radians(5.0) * adapter._period + 1e-12
+        assert adapter._commands[:6] == [0.0] * 6
+        previous_rate = adapter._rates[6]
+        previous_position = adapter._commands[6]
+    assert adapter._commands[6] == pytest.approx(math.radians(5.0))
+    assert not controller.motors
+
+
 class FakeFeedback:
     """Timestamped status source that can preserve a stale cached motor."""
 
