@@ -32,7 +32,8 @@ use tracing::{debug, info, warn};
 
 /// Messages queued to the worker in arrival order.
 enum Job {
-    Lidar(PointCloud2),
+    /// A live cloud and when it was queued.
+    Lidar(PointCloud2, Instant),
     ClearMask(PointCloud2),
     LoadedMap(PointCloud2),
     /// A loaded map placed in the world and split into tiles, or None when
@@ -142,7 +143,7 @@ impl RayTracingVoxelMap {
     }
 
     async fn on_lidar(&mut self, msg: PointCloud2) {
-        self.enqueue(Job::Lidar(msg)).await;
+        self.enqueue(Job::Lidar(msg, Instant::now())).await;
     }
 
     async fn on_voxel_clear_mask(&mut self, msg: PointCloud2) {
@@ -167,7 +168,8 @@ impl RayTracingVoxelMap {
 }
 
 /// A seed load in progress, applied a pass budget of tiles at a time and
-/// handed on region by region as each one completes.
+/// handed on region by region as each one completes. Counts the live frames
+/// folded in meanwhile and how long they waited behind seed work.
 struct SeedLoad {
     regions: Vec<SeedRegion>,
     next_region: usize,
@@ -178,6 +180,11 @@ struct SeedLoad {
     started: Instant,
     max_tile_ms: f64,
     sum_tile_ms: f64,
+    frames: usize,
+    max_wait_ms: f64,
+    sum_wait_ms: f64,
+    sum_process_ms: f64,
+    max_backlog: usize,
 }
 
 impl SeedLoad {
@@ -192,11 +199,33 @@ impl SeedLoad {
             started: Instant::now(),
             max_tile_ms: 0.0,
             sum_tile_ms: 0.0,
+            frames: 0,
+            max_wait_ms: 0.0,
+            sum_wait_ms: 0.0,
+            sum_process_ms: 0.0,
+            max_backlog: 0,
         }
     }
 
     fn mean_tile_ms(&self) -> f64 {
         self.sum_tile_ms / self.tiles_done.max(1) as f64
+    }
+
+    fn mean_wait_ms(&self) -> f64 {
+        self.sum_wait_ms / self.frames.max(1) as f64
+    }
+
+    fn mean_process_ms(&self) -> f64 {
+        self.sum_process_ms / self.frames.max(1) as f64
+    }
+
+    /// Account a live frame folded in during this load.
+    fn record_frame(&mut self, wait_ms: f64, process_ms: f64, backlog: usize) {
+        self.frames += 1;
+        self.max_wait_ms = self.max_wait_ms.max(wait_ms);
+        self.sum_wait_ms += wait_ms;
+        self.sum_process_ms += process_ms;
+        self.max_backlog = self.max_backlog.max(backlog);
     }
 
     /// Apply the next tile. The region it completed, if any.
@@ -307,10 +336,6 @@ impl Worker {
                 }
             };
             if let Some(job) = job {
-                let backlog = self.jobs.len();
-                if backlog > 1 && matches!(job, Job::Lidar(_)) {
-                    debug!(backlog, "lidar frames waiting behind this one");
-                }
                 self.handle(&mut state, job).await;
             }
             self.seed_step(&mut state).await;
@@ -322,19 +347,31 @@ impl Worker {
 
     async fn handle(&self, state: &mut State, job: Job) {
         match job {
-            Job::Lidar(msg) => self.ingest_frame(state, msg).await,
+            Job::Lidar(msg, queued) => {
+                let wait_ms = queued.elapsed().as_secs_f64() * 1e3;
+                let backlog = self.jobs.len();
+                let start = Instant::now();
+                self.ingest_frame(state, msg).await;
+                let process_ms = start.elapsed().as_secs_f64() * 1e3;
+                debug!(wait_ms, process_ms, backlog, "lidar frame folded in");
+                if let SeedState::Loading(load) = &mut state.seed {
+                    load.record_frame(wait_ms, process_ms, backlog);
+                }
+            }
             Job::ClearMask(msg) => self.apply_clear_mask(state, msg),
             Job::LoadedMap(msg) => self.place_loaded_map(state, msg).await,
             Job::SeedPrepared(partition) => {
                 if let Some(part) = &partition {
+                    let mapper = &mut state.mapper;
+                    let reserve_start = Instant::now();
+                    tokio::task::block_in_place(|| mapper.reserve_voxels(part.voxels));
                     info!(
                         regions = part.regions.len(),
                         tiles = part.tile_count(),
                         voxels = part.voxels,
+                        reserve_ms = reserve_start.elapsed().as_secs_f64() * 1e3,
                         "Seed load started."
                     );
-                    let mapper = &mut state.mapper;
-                    tokio::task::block_in_place(|| mapper.reserve_voxels(part.voxels));
                 }
                 state.seed.placed(partition);
             }
@@ -564,6 +601,9 @@ impl Worker {
                     regions = load.regions.len(),
                     max_tile_ms = load.max_tile_ms,
                     mean_tile_ms = load.mean_tile_ms(),
+                    frames = load.frames,
+                    max_wait_ms = load.max_wait_ms,
+                    max_backlog = load.max_backlog,
                     "Seed load in progress."
                 );
             }
@@ -589,6 +629,11 @@ impl Worker {
             load_s = load.started.elapsed().as_secs_f64(),
             max_tile_ms = load.max_tile_ms,
             mean_tile_ms = load.mean_tile_ms(),
+            frames = load.frames,
+            max_wait_ms = load.max_wait_ms,
+            mean_wait_ms = load.mean_wait_ms(),
+            mean_process_ms = load.mean_process_ms(),
+            max_backlog = load.max_backlog,
             "Seeded the voxel map from a loaded map cloud."
         );
         state.seed = SeedState::Done;
@@ -923,6 +968,24 @@ mod tests {
         assert_eq!(second, Some(centers[1]));
         assert!(load.finished());
         assert_eq!((load.tiles_done, load.tile_count, load.created), (3, 3, 3));
+    }
+
+    #[test]
+    fn seed_load_reports_the_frames_it_delayed() {
+        let mut load = SeedLoad::new(two_region_seed());
+        assert_eq!(
+            (load.frames, load.mean_wait_ms(), load.mean_process_ms()),
+            (0, 0.0, 0.0)
+        );
+
+        load.record_frame(4.0, 30.0, 0);
+        load.record_frame(26.0, 50.0, 3);
+        load.record_frame(6.0, 40.0, 1);
+        assert_eq!(load.frames, 3);
+        assert_eq!(load.max_wait_ms, 26.0);
+        assert_eq!(load.mean_wait_ms(), 12.0);
+        assert_eq!(load.mean_process_ms(), 40.0);
+        assert_eq!(load.max_backlog, 3);
     }
 
     #[test]
