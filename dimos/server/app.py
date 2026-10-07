@@ -35,7 +35,13 @@ from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Path as PathParam, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BeforeValidator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -55,6 +61,9 @@ from dimos.server.openapi import document, operation_id, route_doc
 from dimos.server.uploads import Uploads
 
 LIST_TTL_S = 60.0
+# the blueprint view's page and files (GET /dimos/blueprint_view): only these names are served from its folder
+VIEW_DIR = Path(__file__).parent / "blueprint_view"
+VIEW_FILE = re.compile(r"[a-z_]+\.(js|css)")
 INTROSPECT_TTL_S = 600.0
 
 
@@ -345,6 +354,72 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         if not path.is_file():
             raise ApiError(404, f"no such file: {file}")
         return {"file": file, "text": await asyncio.to_thread(path.read_text, "utf-8", "replace")}
+
+    @app.get(
+        "/dimos/blueprint_view",
+        response_class=HTMLResponse,
+        **route_doc(
+            "blueprints",
+            "A page showing a blueprint: its modules (rarest first) beside its module graph, each module's streams, "
+            "skills, RPC methods and code",
+            "An HTML page (plain JS and CSS, its files at /dimos/blueprint_view/{file}) that reads GET "
+            "/dimos/blueprints/{name}, /dimos/catalog, /dimos/source and /dimos/runs. The graph is drawn from the "
+            "blueprint's wiring; while the blueprint runs inside dimOS Desktop it shows Desktop's live topic rates "
+            "(GET /api/topics/rates). It styles itself with Desktop's /theme.css and skin (Portal off Desktop). In "
+            'an iframe it posts to its parent, on its own origin: {type:"dimos:open-in-editor", file, line} (the '
+            'parent answers {type:"dimos:open-in-editor-result", ok, text}) and {type:"dimos:close"} (Escape). 404 '
+            "for a blueprint dimos doesn't list. No side effects.",
+            errors=(400, 404),
+            ok={"content": {"text/html": {"schema": {"type": "string"}}}},
+            answer="an HTML page",
+        ),
+    )
+    async def blueprint_view(
+        name: Annotated[
+            str,
+            Query(
+                description="blueprint name, e.g. unitree-go2-basic", examples=["unitree-go2-basic"]
+            ),
+        ],
+    ) -> str:
+        check_name(name)
+        listed = await blueprint_list()
+        if not any(entry["name"] == name for entry in listed["blueprints"]):
+            raise ApiError(404, f"no such blueprint: {name}")
+        return await asyncio.to_thread((VIEW_DIR / "index.html").read_text, "utf-8")
+
+    @app.get(
+        "/dimos/blueprint_view/{file}",
+        response_class=Response,
+        **route_doc(
+            "blueprints",
+            "One of the blueprint view page's own files (its scripts and styles)",
+            "Serves app.js, graph.js, layout.js, view.css or portal.css from dimos/server/blueprint_view/: only a "
+            "plain .js or .css name in that folder (404 for anything else). No side effects.",
+            errors=(404,),
+            ok={
+                "content": {
+                    "text/javascript": {"schema": {"type": "string"}},
+                    "text/css": {"schema": {"type": "string"}},
+                }
+            },
+            answer="the file",
+        ),
+    )
+    async def blueprint_view_file(
+        file: Annotated[
+            str, PathParam(description="the file's name, e.g. app.js", examples=["app.js"])
+        ],
+    ) -> Response:
+        path = VIEW_DIR / file
+        if not VIEW_FILE.fullmatch(file) or not path.is_file():
+            raise ApiError(404, f"no such file: {file}")
+        media = "text/css" if file.endswith(".css") else "text/javascript"
+        return Response(
+            await asyncio.to_thread(path.read_bytes),
+            media_type=f"{media}; charset=utf-8",
+            headers={"cache-control": "no-cache"},
+        )
 
     @app.get(
         "/dimos/blueprints/{name}/config",

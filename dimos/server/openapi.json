@@ -5147,10 +5147,125 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.10.0"
+    "version": "1.11.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/dimos/blueprint_view": {
+      "get": {
+        "description": "An HTML page (plain JS and CSS, its files at /dimos/blueprint_view/{file}) that reads GET /dimos/blueprints/{name}, /dimos/catalog, /dimos/source and /dimos/runs. The graph is drawn from the blueprint's wiring; while the blueprint runs inside dimOS Desktop it shows Desktop's live topic rates (GET /api/topics/rates). It styles itself with Desktop's /theme.css and skin (Portal off Desktop). In an iframe it posts to its parent, on its own origin: {type:\"dimos:open-in-editor\", file, line} (the parent answers {type:\"dimos:open-in-editor-result\", ok, text}) and {type:\"dimos:close\"} (Escape). 404 for a blueprint dimos doesn't list. No side effects.",
+        "operationId": "get_dimos_blueprint_view",
+        "parameters": [
+          {
+            "description": "blueprint name, e.g. unitree-go2-basic",
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "blueprint name, e.g. unitree-go2-basic",
+              "examples": [
+                "unitree-go2-basic"
+              ],
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "an HTML page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request: a missing or malformed body or parameter, or a value the server refuses (the message says which)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "A page showing a blueprint: its modules (rarest first) beside its module graph, each module's streams, skills, RPC methods and code",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
+    "/dimos/blueprint_view/{file}": {
+      "get": {
+        "description": "Serves app.js, graph.js, layout.js, view.css or portal.css from dimos/server/blueprint_view/: only a plain .js or .css name in that folder (404 for anything else). No side effects.",
+        "operationId": "get_dimos_blueprint_view_file",
+        "parameters": [
+          {
+            "description": "the file's name, e.g. app.js",
+            "in": "path",
+            "name": "file",
+            "required": true,
+            "schema": {
+              "description": "the file's name, e.g. app.js",
+              "examples": [
+                "app.js"
+              ],
+              "title": "File",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/css": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/javascript": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "the file"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such thing (the message names it)"
+          }
+        },
+        "summary": "One of the blueprint view page's own files (its scripts and styles)",
+        "tags": [
+          "blueprints"
+        ],
+        "x-agent": false,
+        "x-family": "dimos"
+      }
+    },
     "/dimos/blueprints": {
       "get": {
         "description": "What `dimos list` prints: built-in blueprints (without demo-*), then external ones from installed packages. Cached for 60 s; `fresh` refills the cache first. No other side effects. `importable`, `import_error` and `missing_module` come from the discovery cache (null until the scan reaches the blueprint: GET /dimos/discovery).",

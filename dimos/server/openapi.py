@@ -34,7 +34,7 @@ from dimos.server.models import DimosEvent, ErrorResponse
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-API_VERSION = "1.10.0"
+API_VERSION = "1.11.0"
 SPEC_FILE = Path(__file__).parent / "openapi.json"
 
 DESCRIPTION = """\

@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from dimos.constants import RECORDINGS_DIR
-from dimos.server import blueprints, config, events, runs
+from dimos.server import app as app_module, blueprints, config, events, runs
 from dimos.server.app import ServerState, create_app
 from dimos.server.uploads import Uploads
 
@@ -770,3 +770,40 @@ def test_robots(client: TestClient, checkout: Path) -> None:
     answer = client.get("/dimos/robots").json()
     assert list(answer["robots"]) == ["go2"] and answer["robots"]["go2"]["name"] == "My Go2"
     assert "spot" in answer["unlisted"]
+
+
+def test_blueprint_view_serves_its_page_and_only_its_own_files(client: TestClient) -> None:
+    page = client.get("/dimos/blueprint_view", params={"name": "unitree-go2-basic"})
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    assert '<script type="module" src="blueprint_view/app.js">' in page.text
+    unknown = client.get("/dimos/blueprint_view", params={"name": "no-such-blueprint"})
+    assert (unknown.status_code, unknown.json()) == (
+        404,
+        {"error": "no such blueprint: no-such-blueprint"},
+    )
+    assert client.get("/dimos/blueprint_view", params={"name": "-rf"}).status_code == 400
+    assert client.get("/dimos/blueprint_view").status_code == 400
+    for name, media in (
+        ("app.js", "text/javascript"),
+        ("graph.js", "text/javascript"),
+        ("layout.js", "text/javascript"),
+        ("view.css", "text/css"),
+        ("portal.css", "text/css"),
+    ):
+        served = client.get(f"/dimos/blueprint_view/{name}")
+        assert served.status_code == 200, name
+        assert served.headers["content-type"].startswith(media), name
+        assert (
+            served.content
+            == (Path(app_module.__file__).parent / "blueprint_view" / name).read_bytes()
+        )
+    for outside in (
+        "index.html",
+        "nope.js",
+        "..%2Fapp.py",
+        "..%2F..%2Fserver%2Fapp.py",
+        "%2E%2E%2Fopenapi.json",
+        "app.py",
+        "../app.py",
+    ):
+        assert client.get(f"/dimos/blueprint_view/{outside}").status_code == 404, outside
