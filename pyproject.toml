@@ -276,6 +276,7 @@ control = [
     "xarm-python-sdk>=1.17.0",
     "a750-control; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "can-motor-control>=0.0.8",
+    "motorbridge==0.5.6",
     "python-can>=4",
     "pygame>=2.6.1",
     "xacro",

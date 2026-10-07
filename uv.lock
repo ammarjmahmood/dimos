@@ -32,7 +32,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-09-30T04:17:58.172112756Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
@@ -1811,6 +1811,7 @@ all = [
     { name = "manifold3d" },
     { name = "matplotlib" },
     { name = "moondream" },
+    { name = "motorbridge" },
     { name = "mujoco" },
     { name = "ollama" },
     { name = "omegaconf" },
@@ -1899,6 +1900,7 @@ base = [
 control = [
     { name = "a750-control", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "can-motor-control" },
+    { name = "motorbridge" },
     { name = "piper-sdk" },
     { name = "pygame" },
     { name = "python-can" },
@@ -1949,6 +1951,7 @@ manipulation = [
     { name = "lap" },
     { name = "matplotlib" },
     { name = "moondream" },
+    { name = "motorbridge" },
     { name = "mujoco" },
     { name = "ollama" },
     { name = "omegaconf" },
@@ -2015,6 +2018,7 @@ planning = [
     { name = "drake", version = "1.45.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'aarch64' and sys_platform == 'darwin'" },
     { name = "drake", version = "1.49.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'aarch64' and sys_platform != 'darwin'" },
     { name = "matplotlib" },
+    { name = "motorbridge" },
     { name = "piper-sdk" },
     { name = "pycollada" },
     { name = "pygame" },
@@ -2407,6 +2411,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'planning'", specifier = ">=3.7.1" },
     { name = "mcap", marker = "extra == 'unitree-dds'", specifier = ">=1.2.0" },
     { name = "moondream", marker = "extra == 'perception'" },
+    { name = "motorbridge", marker = "extra == 'control'", specifier = "==0.5.6" },
     { name = "mujoco", marker = "extra == 'sim'", specifier = ">=3.3.4" },
     { name = "numba", specifier = ">=0.60.0" },
     { name = "numpy", specifier = ">=1.26.4" },
@@ -5667,6 +5672,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/e9/253e759e6e00b9cfbb4e95e7fe079b0e971b3c81c75f059bf2c2be3216e9/mosek-11.1.2-cp39-abi3-manylinux2014_x86_64.whl", hash = "sha256:5c3566d2a603d94a1773bcd27097c8390dba1d9a1543534f3527deb56f1d0a55", size = 15359313, upload-time = "2026-01-07T08:22:00.805Z" },
     { url = "https://files.pythonhosted.org/packages/41/ea/17bb932e0d307c31de685ba817a3cba822e2757a9810e7cc516778c2baa3/mosek-11.1.2-cp39-abi3-manylinux_2_27_aarch64.whl", hash = "sha256:67c13d56a9b7adf2670e4ed6fb62aa92560ae2ff1050f6e756d0d3f82c42c19f", size = 11073007, upload-time = "2026-01-07T08:22:03.118Z" },
     { url = "https://files.pythonhosted.org/packages/f2/67/6f2b6e544cf5e284c7f0baebffbc82b55e7db5b7ed5d711b621fa965d4df/mosek-11.1.2-cp39-abi3-win_amd64.whl", hash = "sha256:ad81cfd53af508db89241c7869ddce7ceaae13ef057f7b98007d57dccbb63c92", size = 11191977, upload-time = "2026-01-07T08:22:05.845Z" },
+]
+
+[[package]]
+name = "motorbridge"
+version = "0.5.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/be/3c5fc8f1166119c0d5e8e4cb8452481ad50253117f4f251018b98070004c/motorbridge-0.5.6.tar.gz", hash = "sha256:07abecd895f173b3b790fac114e0fe8e02a4ba87f9de71299b5c2a1b70a3bca4", size = 42965, upload-time = "2026-09-20T09:50:25.808Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/af/13ab257f0b940672d02870458ad957e073d7601f67d52077b2c1450487ac/motorbridge-0.5.6-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:e5903c2e972fe4cc32542dcb94df1bc527b95b10d7d814c441cf655ae389f04e", size = 1250540, upload-time = "2026-09-20T09:50:05.158Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/a4/0a4cf28c362c2456a4e5b323ce61ef7088e28dd52a2f6ac22d078eb1b017/motorbridge-0.5.6-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3bb4dbdd6bf82d9d08000da3e8d252dfc5df6e1a9fc03c62f1d69bec0aaf92df", size = 1351232, upload-time = "2026-09-20T09:50:06.747Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/a8/5c35bd17f365891d86203b175bd63922ef951b8932a27656dd32b6643e58/motorbridge-0.5.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ed8612084e1a5cc333d3287d0d7ce53959d8751cf3eb4aa9cc07f139ac2a549f", size = 1370149, upload-time = "2026-09-20T09:50:07.936Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/d9/3c7bb6b7987548a6af195333a5b147b7f6df48772ab7441a2d5662af0816/motorbridge-0.5.6-cp310-cp310-win_amd64.whl", hash = "sha256:ff0184f94ac5bc9849356d44a404c20f6eb342aa3fe75d0c080c17cf6499edad", size = 1034046, upload-time = "2026-09-20T09:50:09.31Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/5d/20472d229e129e779878d3efbd7476a5334b1752be56af80bad75bbda589/motorbridge-0.5.6-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:fd119812909705594b79568e54bc8408bb20eb5d31912eca74e51ea1e4260cf2", size = 1250540, upload-time = "2026-09-20T09:50:10.57Z" },
+    { url = "https://files.pythonhosted.org/packages/69/f3/8aab1afd9d32d7c1d1e102c3b0cc7fccb4763defda3c6f7d76d4afbdf027/motorbridge-0.5.6-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:38b7d0f1d58efa3c73b93dbccf75f985fb6281f95f0dc57fe508d83655fc860d", size = 1351234, upload-time = "2026-09-20T09:50:11.905Z" },
+    { url = "https://files.pythonhosted.org/packages/60/5e/dd706c96ce0e2342eedd3f2799c865d259ccf95f81184be8fbf8edf4e234/motorbridge-0.5.6-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a4dbb84e06fc66c92a403ac03985c9ae4dbd8090eaba66030bdb4e70814c3751", size = 1370149, upload-time = "2026-09-20T09:50:13.185Z" },
+    { url = "https://files.pythonhosted.org/packages/54/a2/9f92450eac197e1dc232844fe211630f49c6bc13e3bc833c1f9de8b6f0f0/motorbridge-0.5.6-cp311-cp311-win_amd64.whl", hash = "sha256:d9d24b028ed9c38ebf627cfb4d2d4233e03da1ca3ef7c2b97f1e4d3b994412cb", size = 1034048, upload-time = "2026-09-20T09:50:14.347Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/63/f224844b78ade34040f37622fd83865e37a64b79caaed89953030763000d/motorbridge-0.5.6-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4530ec25a5f4411c62bd8d3eb3063e54193379e99c064991df73e6797a884a3a", size = 1250541, upload-time = "2026-09-20T09:50:15.495Z" },
+    { url = "https://files.pythonhosted.org/packages/63/9e/8fff58a53aa6997a7792425aa9d49646641ec574f399a30f1a60933a18d6/motorbridge-0.5.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5349821bedfe63f60a196f967dd7892029bd925d3e5e35b258bde50182bc3478", size = 1351233, upload-time = "2026-09-20T09:50:16.672Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/95/109590e8f82e3078a2d27e241ab3b4e4d0445502eed87f33e661d1c6a725/motorbridge-0.5.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b05438f6c086b63ebc90b57e115949d4ae0dcdeb977b5f45f27f2a9af816b3e0", size = 1370149, upload-time = "2026-09-20T09:50:17.867Z" },
+    { url = "https://files.pythonhosted.org/packages/09/5a/b9cb201294acd1c0c136d63fdb855451be3364bafc6ce9a9a4ff3741608e/motorbridge-0.5.6-cp312-cp312-win_amd64.whl", hash = "sha256:c738539994dcf4836d133a89a7b7d0bdcbe5baa9fe0a2ecd5017780c8241bc64", size = 1034047, upload-time = "2026-09-20T09:50:18.927Z" },
 ]
 
 [[package]]
