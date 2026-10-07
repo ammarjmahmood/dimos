@@ -248,6 +248,19 @@ class TestCoordinatorIntegration:
         assert len(trajectory.points) > 1
         assert trajectory.joint_names == module.config.model.joint_names
 
+    def test_planning_publishes_the_tool_path(self, module, joint_state_zeros):
+        """The tip's path for a fresh plan goes out before anything executes."""
+        module._on_joint_state(joint_state_zeros)
+        paths = []
+        module.planned_tool_path.subscribe(paths.append)
+
+        result = module.plan_to_joints({"manipulator": JointState(position=[0.05] * 7)})
+        assert result.succeeded, result.message
+
+        assert len(paths) == 1
+        assert paths[0].frame_id == "world"
+        assert len(paths[0].poses) == len(module._last_plan.path) >= 2
+
     def test_execute_publishes_the_planned_trajectory(self, module, joint_state_zeros):
         """The plan sent to the coordinator is published for recording."""
         module._on_joint_state(joint_state_zeros)

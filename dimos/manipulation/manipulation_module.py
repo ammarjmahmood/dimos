@@ -96,6 +96,7 @@ from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
+from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
@@ -224,6 +225,8 @@ class ManipulationModule(Module):
     # The plan handed to the coordinator, once per execute(); the coordinator's
     # applied_joint_position_command is what the hardware then accepted.
     planned_joint_trajectory: Out[JointTrajectory]
+    # The tip's path through the world for the plan just made, before it runs.
+    planned_tool_path: Out[Path]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -629,7 +632,25 @@ class ManipulationModule(Module):
             self._last_plan = plan
             self._state = ManipulationState.COMPLETED
             self._error_message = ""
+        self._publish_planned_tool_path(plan)
         return plan
+
+    def _publish_planned_tool_path(self, plan: GeneratedPlan) -> None:
+        """Forward kinematics of the first planned group's tip along the plan."""
+        if self._world_monitor is None or not plan.path or not plan.group_ids:
+            return
+        world = self._world_monitor.world
+        group_id = plan.group_ids[0]
+        poses: list[PoseStamped] = []
+        try:
+            with world.scratch_context() as ctx:
+                for joint_state in plan.path:
+                    world.set_joint_state(ctx, joint_state)
+                    poses.append(world.get_group_ee_pose(ctx, group_id))
+        except Exception as exc:
+            logger.debug("Planned tool path not published", error=str(exc))
+            return
+        self.planned_tool_path.publish(Path(frame_id=self.config.world_frame, poses=poses))
 
     def _plan_selected_path(
         self,

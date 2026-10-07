@@ -25,6 +25,7 @@ from dimos.agents.capabilities import CAP_MOVEMENT
 from dimos.agents.skill_result import SkillResult
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
+from dimos.core.stream import Out
 from dimos.manipulation.grasp_verification import (
     GraspVerificationConfig,
     GripperSettle,
@@ -35,10 +36,12 @@ from dimos.manipulation.grasp_verification import (
 from dimos.manipulation.grasping.grasp_gen_spec import GraspGenSpec
 from dimos.manipulation.manipulation_spec import ExecutionResult, ManipulationSpec, PlanResult
 from dimos.manipulation.planning.spec.models import PlanningGroupID
+from dimos.msgs.geometry_msgs.PoseArray import PoseArray
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.manipulation_msgs.GraspCandidateArray import GraspCandidateArray
+from dimos.msgs.std_msgs.Header import Header
 from dimos.perception.experimental.object_scene_registration_spec import ObjectSceneRegistrationSpec
 
 
@@ -76,6 +79,11 @@ class PickAndPlaceModule(Module):
     """Coordinate scene registration, grasp generation, and manipulation execution."""
 
     config: PickAndPlaceModuleConfig
+    # For the viewer: every proposal of the latest pick, ranked, and the one
+    # being attempted, both in the planning frame.
+    grasp_candidates: Out[PoseArray]
+    grasp_target: Out[PoseStamped]
+
     _scene: ObjectSceneRegistrationSpec
     _grasp_generator: GraspGenSpec
     _manipulation: ManipulationSpec
@@ -151,6 +159,12 @@ class PickAndPlaceModule(Module):
         candidates = self._grasp_generator.propose_grasps(pointcloud)
         self._grasp_candidates = candidates
         self._manipulation.show_grasp_proposals(candidates)
+        self.grasp_candidates.publish(
+            PoseArray(
+                Header(candidates.header.timestamp, candidates.header.frame_id),
+                [candidate.pose for candidate in candidates.candidates],
+            )
+        )
         if candidates.header.frame_id != self.config.planning_frame:
             raise RuntimeError(
                 f"Grasp candidates are in frame {candidates.header.frame_id!r}; "
@@ -173,6 +187,7 @@ class PickAndPlaceModule(Module):
                 ),
                 group,
             )
+            self.grasp_target.publish(grasp)
             pregrasp = self._offset_pose(grasp, self._pregrasp_offset())
             blocked = self._move(pregrasp, group) or self._servo(pregrasp, grasp, group)
             if isinstance(blocked, PlanResult):

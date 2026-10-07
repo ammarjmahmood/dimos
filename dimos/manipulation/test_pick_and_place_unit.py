@@ -461,3 +461,19 @@ def test_pregrasp_along_tool_z_backs_off_the_other_way(module: PickAndPlaceModul
     assert result.is_success()
     preplace = manipulation.plan_to_poses.call_args_list[0].args[0]["arm/tool"]
     assert preplace.position.z == pytest.approx(0.1)
+
+
+def test_grasp_proposals_and_the_attempt_are_published_for_the_viewer(
+    module: PickAndPlaceModule,
+) -> None:
+    arrays: list[Any] = []
+    targets: list[PoseStamped] = []
+    module.grasp_candidates.subscribe(arrays.append)
+    module.grasp_target.subscribe(targets.append)
+
+    assert module.pick_object("cup-1").message == "Pick complete"
+
+    assert [len(array.poses) for array in arrays] == [1]
+    assert arrays[0].header.frame_id == "world"
+    assert [target.frame_id for target in targets] == ["world"]
+    assert targets[0].position.x == pytest.approx(0.1)
