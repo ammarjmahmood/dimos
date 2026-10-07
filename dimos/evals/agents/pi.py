@@ -192,6 +192,8 @@ class PiAdapter(Agent):
         self.validate_tools()
         if self.config.no_dimos and environment.has_robot and not environment.provides_raw_robot:
             raise ValueError("no_dimos on a robot environment needs raw_bridge=True")
+        if self.config.no_dimos and environment.provides_raw_robot and not environment.raw_guide:
+            raise ValueError("no_dimos needs the suite's raw_guide, the ROBOT.md template")
         missing = [p for p in self.config.skills if not Path(p).expanduser().resolve().exists()]
         if missing:
             raise RuntimeError(f"Pi skill paths do not exist: {missing}")
@@ -278,8 +280,7 @@ class PiAdapter(Agent):
         files = dict(env.artifacts)
         files.pop("recording", None)  # a dimOS memory store; not readable without dimOS
         if env.raw_endpoint:
-            if env.raw_guide is None:
-                raise ValueError("a raw_endpoint needs raw_guide, the ROBOT.md template")
+            assert env.raw_guide is not None, "checked in preflight"
             readme = run_dir / "ROBOT.md"
             readme.write_text(
                 env.raw_guide.format(

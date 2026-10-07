@@ -94,7 +94,8 @@ Binary payloads carry an attachment {{"t": unix_seconds}}.
                            one; a zero twist stops. Components clamp to {max_ee_linear:g} m/s and
                            {max_ee_angular:g} rad/s; omitted fields are zero.
   robot/arm/gripper/json   publish {{"opening": 0..1}}, 0 closed and 1 open; persists until changed.
-Commands get no acknowledgement; malformed or out-of-range ones are dropped.
+Commands get no acknowledgement. Twists are clamped to the limits above; a gripper opening
+outside 0..1 or a malformed packet is dropped.
 
 Motion is local IK tracking without collision checking. Distance is velocity x time and
 only approximate, so check ee_pose and the cameras after every move. The robot base is

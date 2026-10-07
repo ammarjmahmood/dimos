@@ -248,6 +248,7 @@ class RawRobotBridge(Module):
         self._stop = threading.Event()
         self._moving = {"base": False, "arm": False}
         self._drive_thread: threading.Thread | None = None
+        self._depth_warned = False
 
     @rpc
     def start(self) -> None:
@@ -337,7 +338,9 @@ class RawRobotBridge(Module):
         try:
             payload = depth_f32(image)
         except ValueError as exc:
-            logger.warning("Raw depth frame rejected", error=str(exc))
+            if not self._depth_warned:
+                self._depth_warned = True
+                logger.warning("Raw depth frames rejected", error=str(exc))
             return
         info = {
             "t": image.ts,
@@ -374,7 +377,11 @@ class RawRobotBridge(Module):
             closed, opened = self.config.gripper_range
             opening = (positions[gripper_joint] - closed) / (opened - closed)
             message["gripper_opening"] = float(np.clip(opening, 0.0, 1.0))
-        self._put("arm/state/json", json.dumps(message), state.ts)
+        try:
+            payload = json.dumps(message, allow_nan=False)
+        except ValueError:
+            return  # a non-finite joint value would make invalid JSON
+        self._put("arm/state/json", payload, state.ts)
 
     def _on_tf(self, message: TFMessage) -> None:
         for transform in message.transforms:

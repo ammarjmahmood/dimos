@@ -70,6 +70,10 @@ class Sim(Environment):
     def provides_raw_robot(self) -> bool:
         return self.config.raw_bridge
 
+    @property
+    def raw_guide(self) -> str | None:
+        return self.config.raw_guide
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._recording: Store | None = None

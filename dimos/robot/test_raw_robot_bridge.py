@@ -323,3 +323,15 @@ def test_bridge_drives_again_after_a_restart() -> None:
         wait_for(lambda: module.ee_twist_command.publish.call_count > 0)
     finally:
         module.stop()
+
+
+def test_state_with_a_non_finite_joint_is_not_sent(bridge: RawRobotBridge) -> None:
+    bridge._on_joint_state(JointState(name=["j1"], position=[float("nan")], ts=1.0))
+    assert not _published(bridge, "arm/state/json")
+
+
+def test_rejected_depth_warns_once(bridge: RawRobotBridge, mocker) -> None:  # type: ignore[no-untyped-def]
+    warn = mocker.patch("dimos.robot.raw_robot_bridge.logger.warning")
+    for _ in range(3):
+        bridge._on_depth(Image(data=np.zeros((2, 3, 3), dtype=np.uint8), format=ImageFormat.RGB))
+    assert warn.call_count == 1

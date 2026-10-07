@@ -134,15 +134,12 @@ def test_suite_guide_becomes_robot_md(tmp_path):
     assert "0.1 m/s" in guide and "0.5 rad/s" in guide  # limits filled in
 
 
-def test_raw_endpoint_without_a_guide_is_refused(tmp_path):
+def test_no_dimos_run_without_a_guide_is_refused_before_launch():
     from dimos.evals.agents.pi import PiAdapter
-    from dimos.evals.types import RunningEnvironment
 
-    env = RunningEnvironment(
-        mcp_url="unused", streams=(), artifacts={}, raw_endpoint="tcp/127.0.0.1:12345"
-    )
-    with pytest.raises(ValueError, match="needs raw_guide"):
-        PiAdapter(no_dimos=True)._no_dimos_files(env, tmp_path)
+    unguided = MujocoEnvironment(blueprint=["xarm-sim"], raw_bridge=True)
+    with pytest.raises(ValueError, match="raw_guide"):
+        PiAdapter(no_dimos=True).preflight(unguided)
 
 
 def test_navigation_suites_keep_the_go2_guide():
