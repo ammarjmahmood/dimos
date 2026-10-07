@@ -52,7 +52,6 @@ from dimos.evals.constants import (
     RAW_MAX_EE_ANGULAR_RPS,
     RAW_MAX_EE_LINEAR_MPS,
     RAW_MAX_LINEAR_MPS,
-    RAW_README,
 )
 from dimos.evals.environments.base import Environment
 from dimos.evals.types import (
@@ -279,9 +278,11 @@ class PiAdapter(Agent):
         files = dict(env.artifacts)
         files.pop("recording", None)  # a dimOS memory store; not readable without dimOS
         if env.raw_endpoint:
+            if env.raw_guide is None:
+                raise ValueError("a raw_endpoint needs raw_guide, the ROBOT.md template")
             readme = run_dir / "ROBOT.md"
             readme.write_text(
-                (env.raw_guide or RAW_README).format(
+                env.raw_guide.format(
                     endpoint=env.raw_endpoint,
                     max_cmd_s=RAW_MAX_CMD_S,
                     max_linear=RAW_MAX_LINEAR_MPS,

@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from dimos.e2e_tests.dimos_cli_call import DimosCliCall
+from dimos.evals.constants import RAW_README, RAW_XARM7_README
 from dimos.evals.environments.mujoco_sim import MujocoEnvironment
 from dimos.memory.store.memory import MemoryStore
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -105,7 +106,9 @@ def test_raw_manipulation_uses_the_shared_bridge_and_suite_owned_interface():
     from dimos.core.coordination.blueprint_config.parser import BlueprintConfigParser
     from dimos.robot.manipulators.xarm.blueprints.simulation import xarm_sim
 
-    env = MujocoEnvironment(blueprint=["xarm-sim", "mcp-server"], raw_bridge=True)
+    env = MujocoEnvironment(
+        blueprint=["xarm-sim", "mcp-server"], raw_bridge=True, raw_guide=RAW_XARM7_README
+    )
     assert env.provides_raw_robot
     parsed = BlueprintConfigParser(xarm_sim).parse(environ={})
     tasks = parsed.module_kwargs("ControlCoordinator")["tasks"]
@@ -131,15 +134,23 @@ def test_suite_guide_becomes_robot_md(tmp_path):
     assert "0.1 m/s" in guide and "0.5 rad/s" in guide  # limits filled in
 
 
-def test_default_guide_is_still_written_for_navigation(tmp_path):
+def test_raw_endpoint_without_a_guide_is_refused(tmp_path):
     from dimos.evals.agents.pi import PiAdapter
     from dimos.evals.types import RunningEnvironment
 
     env = RunningEnvironment(
         mcp_url="unused", streams=(), artifacts={}, raw_endpoint="tcp/127.0.0.1:12345"
     )
-    guide = PiAdapter(no_dimos=True)._no_dimos_files(env, tmp_path)["robot"].read_text()
-    assert "cmd_vel/json" in guide and "tcp/127.0.0.1:12345" in guide
+    with pytest.raises(ValueError, match="needs raw_guide"):
+        PiAdapter(no_dimos=True)._no_dimos_files(env, tmp_path)
+
+
+def test_navigation_suites_keep_the_go2_guide():
+    from dimos.evals.suites.belief_apartment_qa import SUITE as BELIEF
+    from dimos.evals.suites.dimsim_apartment_qa import SUITE as DIMSIM
+
+    for suite in (DIMSIM, BELIEF):
+        assert {case.environment.config.raw_guide for case in suite} == {RAW_README}
 
 
 def test_ready_needs_fresh_streams_and_tracked_body_poses():

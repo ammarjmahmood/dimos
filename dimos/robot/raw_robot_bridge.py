@@ -202,11 +202,10 @@ class RawRobotBridgeConfig(ModuleConfig):
     drive_hz: float = RAW_DRIVE_HZ
     state_hz: float = 20.0
     stale_s: float = 1.0
-    # Robot-specific frames and joints, set per robot (unset: not published).
-    camera_frame: str | None = None  # optical frame whose TF becomes camera_pose/json
-    ee_frame: str | None = None  # TF child carrying the measured end-effector pose
-    gripper_joint: str | None = None  # reported as a 0-1 opening instead of a joint
-    gripper_range: tuple[float, float] = (0.0, 1.0)  # native (closed, open)
+    camera_frame: str | None = None
+    ee_frame: str | None = None
+    gripper_joint: str | None = None
+    gripper_range: tuple[float, float] = (0.0, 1.0)
 
 
 class RawRobotBridge(Module):

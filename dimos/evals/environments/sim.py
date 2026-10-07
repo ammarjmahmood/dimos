@@ -46,7 +46,7 @@ class SimConfig(BaseConfig):
     disable: tuple[str, ...] = ()
     # Also expose the robot as plain Zenoh topics (raw-robot-bridge) for agents without dimOS.
     raw_bridge: bool = False
-    # ROBOT.md template describing this robot's raw topics; None: the default RAW_README.
+    # ROBOT.md template describing this robot's raw topics; required with raw_bridge.
     raw_guide: str | None = None
     attach: bool = False
     launch_timeout_s: float = 1200.0
