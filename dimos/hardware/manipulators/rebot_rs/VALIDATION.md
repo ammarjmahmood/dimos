@@ -16,7 +16,7 @@ The actual DimOS registry then created `rebot_rs` using the installed native Mot
 
 ## Qualification still required
 
-Zero calibration reconciliation, gripper range, independent emergency stop, per joint signs, holding behavior, timeout behavior, tracking faults, thermal checks and control timing under load remain pending. No physical movement was performed during this validation session.
+Zero calibration reconciliation, gripper range, independent emergency stop, per joint signs, holding behavior, timeout behavior, tracking faults, thermal checks and control timing under load remain pending. No physical movement was performed during the initial connection probes.
 
 The initial adapter used cached Motorbridge `get_state()` without receive timestamps. That calculation did not establish that every motor had delivered a new report. It has now been replaced with an independent local SocketCAN status receiver using Linux kernel packet timestamps. Every active motor is checked individually, including when other motors keep reporting. Old queued packets retain their original timestamps. Physical node loss protection remains unqualified until these checks and each motor timeout are tested on hardware.
 
@@ -26,6 +26,12 @@ After explicit operator authorization, all seven motors were disabled and their 
 
 Twenty one adapter and feedback mock tests now pass on the x86 desktop and physical Jetson. The Jetson run took 1.01 seconds. They include individual stale motor detection, original packet timestamp preservation, missing initial status refusal, partial enable failure cleanup and a motor 7 diagnostic that never enables or commands the six arm motors. The Jetson kernel accepted the timestamp socket option while CAN stayed down; this validates socket setup, not timestamp receipt under physical traffic.
 
-The gripper diagnostic is prepared but has not been physically run. It restricts targets to zero through five motor degrees, speed to two degrees per second, acceleration to five degrees per second squared, sets and reads back a 0.5 N m torque limit, and uses MIT gains 2 and 0.1. Its external test script permits five seconds maximum and disables motor 7 afterward without a closing command. Fresh temperature, motor timeout, independent emergency stop and actual motion qualification remain pending. Keep the PR in draft.
+The gripper diagnostic was initially prepared without physical execution. It restricts targets to zero through five motor degrees, speed to two degrees per second, acceleration to five degrees per second squared, sets and reads back a 0.5 N m torque limit, and uses MIT gains 2 and 0.1. Its external test script permits five seconds maximum and disables motor 7 afterward without a closing command. Fresh temperature, motor timeout, independent emergency stop and actual motion qualification remain pending. Keep the PR in draft.
 
 Seeed calibration procedure: https://wiki.seeedstudio.com/rebot_b601_rs_getting_started/ . RobStride protocol evidence: https://github.com/RobStride/Python_Sample/blob/main/robstride_dynamics/protocol.py and https://github.com/RobStride/Python_Sample/blob/main/robstride_dynamics/bus.py . Motorbridge feedback semantics: https://github.com/motorbridge/motorbridge/blob/main/bindings/python/README.md .
+
+## Authorized physical gripper test
+
+One separately authorized motor 7 opening test ran through the actual DimOS adapter on the Jetson. Reported position moved from 0.022 to 0.857 motor degrees, but did not reach the five degree target within five seconds. All 100 recorded temperatures were 31 C. Only motor 7 was enabled. The diagnostic used speed two degrees per second, torque limit 0.5 N m and MIT gains 2 and 0.1. Cleanup called motor 7 disable and an independent inspection confirmed CAN down, controller stopped and zero CAN error counters. No closing target or arm joint motion was commanded.
+
+Physical activation and timestamped status receipt worked. Opening travel, measured speed, torque enforcement, motor timeout, emergency stop and full agent execution remain unqualified. Low diagnostic gain or mechanical resistance may explain the small movement, but the cause is unverified. No repeat or increased gain or torque is authorized. The PR remains a draft.
