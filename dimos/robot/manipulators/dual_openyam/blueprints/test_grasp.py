@@ -181,3 +181,39 @@ def test_viewer_glyphs_build_for_proposals_target_and_path() -> None:
         poses=[PoseStamped(frame_id="world", position=(0.3, 0, k)) for k in (0.1, 0.2)],
     )
     assert isinstance(planned_tool_path_to_rerun(path), rr.LineStrips3D)
+
+
+def test_planning_model_carries_collision_geometry_cameras_and_measured_spacing() -> None:
+    import xml.etree.ElementTree as ET
+
+    from dimos.robot.manipulators.dual_openyam.blueprints.grasp import (
+        DUAL_OPENYAM_BASE_SPACING,
+        DUAL_OPENYAM_WRIST_CAMERA_BOXES,
+    )
+
+    config = dual_openyam_grasp_model_config()
+    root = ET.fromstring(config.model.load().xml)
+    links = {link.get("name"): link for link in root.findall("link")}
+
+    # Every link with a visual mesh collides as its convex hull.
+    for name, link in links.items():
+        if link.find("visual/geometry/mesh") is not None:
+            assert link.find("collision/geometry/mesh") is not None, name
+    assert root.find(".//{http://drake.mit.edu}declare_convex") is not None
+
+    # The wrist camera and its bracket are boxes on each gripper link.
+    for side in ("left", "right"):
+        boxes = {c.get("name") for c in links[f"{side}_gripper"].findall("collision")}
+        assert {f"{side}_{name}" for name, _, _ in DUAL_OPENYAM_WRIST_CAMERA_BOXES} <= boxes
+
+    # The bases stand where the tape says, not where the ABC bench had them.
+    half = DUAL_OPENYAM_BASE_SPACING / 2
+    for side, expected in (("left", half), ("right", -half)):
+        origin = root.find(f"joint[@name='{side}_arm_fixed_joint']/origin")
+        assert origin is not None
+        xyz = origin.get("xyz")
+        assert xyz is not None
+        assert float(xyz.split()[1]) == pytest.approx(expected)
+
+    assert ("left_tip_left", "left_tip_right") in config.collision_exclusion_pairs
+    assert ("right_link4", "right_gripper") in config.collision_exclusion_pairs

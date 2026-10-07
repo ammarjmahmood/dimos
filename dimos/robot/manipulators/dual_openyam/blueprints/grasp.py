@@ -67,6 +67,39 @@ from dimos.robot.manipulators.dual_openyam.config import (
 )
 from dimos.visualization.rerun.bridge import RerunBridgeModule
 
+# Arm base spacing measured on the rig with a tape, centre to centre
+# (2026-10-03); the URDF carries the ABC bench's 0.62 m.
+DUAL_OPENYAM_BASE_SPACING = 0.43
+
+# Wrist camera: a D405 on a 6 cm bracket that leaves the top of the wrist tube
+# at 45 deg, leaning toward the wrist (sketch of 2026-10-06). It sits on the
+# gripper link's -X side, the side that points up at the rest pose. Boxes in
+# the gripper frame with 1.5 cm of margin per side and 2 cm for the USB plug.
+_WRIST_TUBE_HALF_WIDTH = 0.0325
+_BRACKET_RPY = (0.0, -math.pi / 4, 0.0)
+DUAL_OPENYAM_WRIST_CAMERA_BOXES = [
+    # name, size, xyz: the bracket, then the camera body at its end.
+    ("wrist_camera_bracket", (0.034, 0.055, 0.090), (-0.054, 0.0, 0.021)),
+    ("wrist_camera", (0.072, 0.072, 0.073), (-0.090, 0.0, 0.058)),
+]
+
+# The workcell in the world frame: the table top is 3 cm below the arm base
+# plates; the bin stands at the far edge, 20.5 cm ahead of the origin. Height
+# of the bin is a placeholder until measured.
+DUAL_OPENYAM_TABLE_TOP_Z = -0.03
+DUAL_OPENYAM_STATIC_BOXES = [
+    {
+        "name": "table",
+        "size": (0.60, 1.00, 0.10),
+        "xyz": (0.185, 0.0, DUAL_OPENYAM_TABLE_TOP_Z - 0.055),
+    },
+    {
+        "name": "bin",
+        "size": (0.304, 0.231, 0.13),
+        "xyz": (0.347, -0.024, DUAL_OPENYAM_TABLE_TOP_Z + 0.065),
+    },
+]
+
 # {side}_grasp_frame is 10 cm below the gripper link on its axis. The finger
 # pads (tip_left.stl, tip_right.stl at the URDF's closed zero position) meet on
 # that axis from 12.7 to 14.7 cm below the gripper link; plan to the pad centre.
@@ -159,14 +192,31 @@ DUAL_OPENYAM_GRASP_PROMPTS = [
 
 
 def dual_openyam_grasp_model_config() -> RobotModelConfig:
-    """Planning model in the world frame with a fingertip TCP per arm."""
+    """Planning model in the world frame: measured base spacing, collision
+    hulls on every link, the wrist cameras as boxes, a fingertip TCP per arm."""
     config = dual_openyam_model_config(base_pose=PoseStamped(frame_id="world"))
-    model = config.model
-    for side in DUAL_OPENYAM_SIDES:
+    model = config.model.with_collision_from_visuals()
+    for side, sign in zip(DUAL_OPENYAM_SIDES, (1.0, -1.0), strict=True):
+        model = model.with_joint_origin(
+            f"{side}_arm_fixed_joint", xyz=(0.0, sign * DUAL_OPENYAM_BASE_SPACING / 2, 0.0)
+        )
+        for name, size, xyz in DUAL_OPENYAM_WRIST_CAMERA_BOXES:
+            model = model.with_collision_box(
+                f"{side}_gripper", f"{side}_{name}", size=size, xyz=xyz, rpy=_BRACKET_RPY
+            )
         model = model.with_fixed_frame(
             f"{side}_tcp", f"{side}_grasp_frame", xyz=DUAL_OPENYAM_TCP_OFFSET
         )
     config.model = model
+    # The pads meet at the URDF's closed zero position, so the two fingertip
+    # hulls always touch, and the wrist assembly nests inside the gripper body
+    # so their hulls overlap by 6 cm at every pose; both pairs are rigidly
+    # close and filtered. Everything else is filtered as adjacent links.
+    config.collision_exclusion_pairs = [
+        *config.collision_exclusion_pairs,
+        *((f"{side}_tip_left", f"{side}_tip_right") for side in DUAL_OPENYAM_SIDES),
+        *((f"{side}_link4", f"{side}_gripper") for side in DUAL_OPENYAM_SIDES),
+    ]
     config.planning_groups = [
         replace(group, tip_link=f"{group.name.split('_')[0]}_tcp")
         for group in config.planning_groups
@@ -326,6 +376,7 @@ def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
             kinematics=DUAL_OPENYAM_GRASP_PINK,
             default_speed_scale=0.25,
             static_transforms=[DUAL_OPENYAM_CAMERA_TRANSFORM],
+            static_boxes=DUAL_OPENYAM_STATIC_BOXES,
             visualization={"backend": "viser"},
             world_frame="world",
         ),
