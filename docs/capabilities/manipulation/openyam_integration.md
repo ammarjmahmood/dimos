@@ -145,7 +145,7 @@ uvx dimos-viewer --connect rerun+http://<robot-ip>:9877/proxy --ws-url ws://<rob
 ```
 
 Every run records the policy-training data to `recordings/<run-id>/memory.db`
-without any flag; `--record ""` turns it off and `--record-topics` widens or
+without any flag; `--record=` (an empty value) turns it off and `--record-topics` widens or
 narrows the set. What is kept, against the data a learned policy needs:
 
 | Training input | Stream | Source |

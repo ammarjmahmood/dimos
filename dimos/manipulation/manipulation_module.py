@@ -570,6 +570,7 @@ class ManipulationModule(Module):
                 return None
         return None
 
+    @rpc
     def is_collision_free(self, joints: list[float]) -> bool:
         """Check if joint configuration is collision-free.
 

@@ -16,7 +16,7 @@
 ```bash
 dimos run dual-openyam-grasp --left-can-port follower_l --right-can-port follower_r
 dimos run dual-openyam-grasp ... --graspgen                  # GraspGenX grasps
-dimos run dual-openyam-grasp ... --record ""                 # no recording
+dimos run dual-openyam-grasp ... --record=                   # no recording
 dimos run dual-openyam-grasp                                 # in-memory arms, no CAN
 ```
 
@@ -28,7 +28,7 @@ with their own grippers, so ``pick_object`` takes ``left_manipulator`` or
 
 Every run records the policy-training streams (joint states, planned and
 accepted joint commands, all three cameras, TF) to
-``recordings/<run-id>/memory.db`` unless ``--record ""`` turns it off.
+``recordings/<run-id>/memory.db`` unless ``--record=`` turns it off.
 
 The grasp provider is chosen at import time from ``global_config.graspgen``,
 as the xArm stack chooses sim or hardware: the heuristic top-down grasp by
