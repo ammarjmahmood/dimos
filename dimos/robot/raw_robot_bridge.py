@@ -189,6 +189,10 @@ class Deadman:
         with self.lock:
             return self.values if time.monotonic() < self.until else self._zero
 
+    def clear(self) -> None:
+        with self.lock:
+            self.values, self.until = self._zero, 0.0
+
 
 class RawRobotBridgeConfig(ModuleConfig):
     endpoint: str = RAW_ENDPOINT
@@ -243,6 +247,7 @@ class RawRobotBridge(Module):
         self._last_state = float("-inf")
         self._stop = threading.Event()
         self._moving = {"base": False, "arm": False}
+        self._drive_thread: threading.Thread | None = None
 
     @rpc
     def start(self) -> None:
@@ -268,12 +273,21 @@ class RawRobotBridge(Module):
             self._topics.subscribe("arm/twist/json", self._command(self._arm.set)),
             self._topics.subscribe("arm/gripper/json", self._command(self._on_gripper)),
         ]
-        threading.Thread(target=self._drive, daemon=True, name="raw-robot-drive").start()
+        self._drive_thread = threading.Thread(
+            target=self._drive, daemon=True, name="raw-robot-drive"
+        )
+        self._drive_thread.start()
 
     @rpc
     def stop(self) -> None:
         if self._topics is not None:
             self._stop.set()
+            if self._drive_thread is not None:
+                self._drive_thread.join(timeout=1.0)  # one drive loop across restarts
+                self._drive_thread = None
+            self._base.clear()  # a restart must not resume a held command
+            self._arm.clear()
+            self._moving = {"base": False, "arm": False}
             self.cmd_vel.publish(Twist())
             self.ee_twist_command.publish(TwistStamped())
             self._topics.close()
@@ -352,6 +366,7 @@ class RawRobotBridge(Module):
             "velocities": [velocities.get(n, 0.0) for n in joints],
         }
         if self.config.ee_frame is not None:
+            # Unstamped: the 30 Hz tf pose trails `t` by at most ~33 ms; add its stamp if needed.
             with self._lock:
                 fresh = now - self._ee_seen <= self.config.stale_s
                 message["ee_pose"] = self._ee_pose if fresh else None

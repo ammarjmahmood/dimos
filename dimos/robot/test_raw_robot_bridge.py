@@ -311,9 +311,14 @@ def test_bridge_drives_again_after_a_restart() -> None:
         setattr(module, stream, MagicMock())
     try:
         module.start()
+        first_loop = module._drive_thread
+        module._arm.set(json.dumps({"vz": 0.05, "t": 2.0}))  # still held at stop()
         module.stop()
+        assert first_loop is not None and not first_loop.is_alive()
         module.ee_twist_command.reset_mock()  # stop() itself publishes one zero twist
         module.start()
+        time.sleep(0.3)  # three drive ticks
+        module.ee_twist_command.publish.assert_not_called()  # the held twist did not resume
         module._arm.set(json.dumps({"vz": 0.05, "t": 1.0}))
         wait_for(lambda: module.ee_twist_command.publish.call_count > 0)
     finally:
