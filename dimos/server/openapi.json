@@ -3475,6 +3475,193 @@
         "title": "RecommendedApp",
         "type": "object"
       },
+      "RecommendedSetting": {
+        "additionalProperties": true,
+        "description": "A setting to decide before running a blueprint: an arg, with the values to pick from.",
+        "properties": {
+          "choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SettingChoice"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The values to pick from (null: a free value)",
+            "title": "Choices"
+          },
+          "default": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "The value it starts with"
+          },
+          "docs": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A page on how to find this value (null: none)",
+            "examples": [
+              "https://docs.dimensional.org/platforms/quadruped/go2/setup/"
+            ],
+            "title": "Docs"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The module's config field (scope module)",
+            "examples": [
+              "ip"
+            ],
+            "title": "Field"
+          },
+          "global": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GlobalConfig field (scope global)",
+            "title": "Global"
+          },
+          "id": {
+            "description": "Its arg's id in robots.json's `args`, else its key",
+            "examples": [
+              "go2_ip",
+              "simulation"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "description": "The field, as dimos's options name it",
+            "examples": [
+              "robot_ip",
+              "spothighlevel.ip"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "description": "text, number, bool, or recording (pick a dimos recording)",
+            "enum": [
+              "text",
+              "number",
+              "bool",
+              "recording"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "description": "What to call it",
+            "examples": [
+              "Robot IP"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "module": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The module's name in the blueprint (scope module)",
+            "examples": [
+              "spothighlevel"
+            ],
+            "title": "Module"
+          },
+          "placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "An example value",
+            "examples": [
+              "192.168.12.1"
+            ],
+            "title": "Placeholder"
+          },
+          "required": {
+            "description": "The blueprint won't run without it",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "GlobalConfig, or a module's config",
+            "enum": [
+              "global",
+              "module"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "streams": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "recording: the streams it must have, each a list of acceptable names",
+            "examples": [
+              [
+                [
+                  "go2_lidar",
+                  "lidar"
+                ],
+                [
+                  "color_image"
+                ]
+              ]
+            ],
+            "title": "Streams"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "scope",
+          "label",
+          "kind",
+          "required"
+        ],
+        "title": "RecommendedSetting",
+        "type": "object"
+      },
       "RegistryRun": {
         "additionalProperties": true,
         "description": "A live run in dimos's run registry (also runs started from a terminal): a RunEntry's fields.",
@@ -3862,6 +4049,14 @@
             ],
             "description": "The app to install for it, or null"
           },
+          "recommended_config": {
+            "description": "The few settings to decide before running it, in order (its own, else its robot's): sim or the real robot, its IP, ...",
+            "items": {
+              "$ref": "#/components/schemas/RecommendedSetting"
+            },
+            "title": "Recommended Config",
+            "type": "array"
+          },
           "registered": {
             "description": "dimos's blueprint registry has it",
             "title": "Registered",
@@ -4242,6 +4437,32 @@
           "zenohNamespace"
         ],
         "title": "ServerProgram",
+        "type": "object"
+      },
+      "SettingChoice": {
+        "additionalProperties": true,
+        "properties": {
+          "label": {
+            "description": "What to call it",
+            "examples": [
+              "The MuJoCo simulator"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "The value it sets",
+            "examples": [
+              "mujoco"
+            ]
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "SettingChoice",
         "type": "object"
       },
       "SkillParam": {
@@ -4926,7 +5147,7 @@
   "info": {
     "description": "The dimos server's HTTP API: blueprints, global config, runs and their logs, events, Dimensional cloud uploads,\ndiscovery (blueprints, modules, message types), docs, extras and jobs.\n\ndimOS Desktop starts the server (`python -m dimos.server`, on a unix socket) and forwards `/dimos/...` to it unchanged.\nEvery answer is JSON unless the operation says otherwise; every error is `{\"error\": \"<message>\"}` (ErrorResponse).\nState is HTTP; changes are events, published on zenoh at `<ns>/dimos/events/<type>` (the `events` tag).\n\nExtensions: `x-family: dimos` on every operation; `x-agent: true` marks what Desktop's agent finds through\nsearch_endpoints; `x-mcp-tool` names an MCP tool that does the same; `x-zenoh-key` on an event schema is its key.\n",
     "title": "dimos server",
-    "version": "1.9.0"
+    "version": "1.10.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6257,7 +6478,7 @@
             "description": "The server couldn't do it: a child process, launch, stop or cloud call failed (the message says why)"
           }
         },
-        "summary": "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential args, the app to install, starter picks, recommended blueprints, hidden ones",
+        "summary": "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential args, the app to install, starter picks, recommended blueprints and settings, hidden ones",
         "tags": [
           "blueprints"
         ],

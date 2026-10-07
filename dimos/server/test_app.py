@@ -741,6 +741,9 @@ def test_robots(client: TestClient, checkout: Path) -> None:
     basic = answer["robots"]["go2"]["blueprints"]["unitree-go2-basic"]
     assert basic["robot"] == "go2" and basic["registered"] is True
     assert answer["robots"]["go2"]["recommended"][0] == "unitree-go2-basic"
+    sim, ip = basic["recommended_config"]
+    assert sim["key"] == "simulation" and [c["value"] for c in sim["choices"]] == ["", "mujoco"]
+    assert ip["id"] == "go2_ip" and ip["choices"] is None
     assert list(basic["modes"]) == ["robot", "replay", "sim"]
     robot_ip = basic["modes"]["robot"]["args"][0]
     assert (robot_ip["key"], robot_ip["scope"], robot_ip["global"]) == (

@@ -178,6 +178,24 @@ def _modes_of(robot: dict[str, Any], blueprint: dict[str, Any]) -> dict[str, Any
     return modes
 
 
+def _recommended_config_of(
+    robot: dict[str, Any], blueprint: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """A blueprint's recommended settings: its own, else its robot's defaults', else none."""
+    if "recommended_config" in blueprint:
+        return list(blueprint["recommended_config"])
+    return list(robot.get("defaults", {}).get("recommended_config", []))
+
+
+def _setting_spec(doc: dict[str, Any], setting: dict[str, Any]) -> dict[str, Any]:
+    """A recommended setting as an arg: the top-level arg it names (with its own label, choices and default on top),
+    or itself."""
+    if "arg" in setting:
+        rest = {k: v for k, v in setting.items() if k != "arg"}
+        return {**doc["args"].get(setting["arg"], {}), **rest}
+    return dict(setting)
+
+
 def _each_mode(doc: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any]]]:
     """(robot id, blueprint name, mode id, mode) for every blueprint's effective modes."""
     return [
@@ -189,7 +207,7 @@ def _each_mode(doc: dict[str, Any]) -> list[tuple[str, str, str, dict[str, Any]]
 
 
 def consistency_problems(doc: dict[str, Any]) -> list[str]:
-    """(d) GlobalConfig names, and (e) tags, groups, starter ranks, recommended blueprints."""
+    """(d) GlobalConfig names, and (e) tags, groups, starter ranks, recommended blueprints and settings."""
     from dimos.core.global_config import GlobalConfig
 
     fields = GlobalConfig.model_fields
@@ -259,6 +277,31 @@ def consistency_problems(doc: dict[str, Any]) -> list[str]:
                             f"{where} {mode_id} mode takes arg {arg_id!r}, which isn't defined in the top-level "
                             f"`args`{_guess(arg_id, doc['args'])}"
                         )
+            for setting in container.get("recommended_config", []):
+                if "arg" in setting:
+                    used.add(setting["arg"])
+                    if setting["arg"] not in doc["args"]:
+                        problems.append(
+                            f"{where}.recommended_config names arg {setting['arg']!r}, which isn't defined in the "
+                            f"top-level `args`{_guess(setting['arg'], doc['args'])}"
+                        )
+                        continue
+                spec = _setting_spec(doc, setting)
+                if "global" in spec and spec["global"] not in fields:
+                    problems.append(
+                        f"{where}.recommended_config: {spec['global']!r} is not a GlobalConfig field"
+                        f"{_guess(spec['global'], fields)}"
+                    )
+                values = [choice["value"] for choice in spec.get("choices", [])]
+                if len(values) != len({json.dumps(v) for v in values}):
+                    problems.append(
+                        f"{where}.recommended_config: {spec['label']!r} has a choice twice"
+                    )
+                if values and "default" in spec and spec["default"] not in values:
+                    problems.append(
+                        f"{where}.recommended_config: {spec['label']!r} defaults to {spec['default']!r}, "
+                        "which isn't one of its choices"
+                    )
     for arg_id in doc["args"]:
         if arg_id not in used:
             problems.append(f"args.{arg_id} is defined but no mode takes it: remove it")
@@ -334,13 +377,19 @@ def _guess(name: str, options: Any) -> str:
 
 
 def module_args(doc: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
-    """Blueprint name -> the (module, field) pairs its modes' args name."""
+    """Blueprint name -> the (module, field) pairs its modes' args and its recommended settings name."""
     found: dict[str, set[tuple[str, str]]] = {}
     for _, name, _, mode in _each_mode(doc):
         for arg_id in mode.get("args", []):
             arg = doc["args"].get(arg_id, {})
             if "module" in arg:
                 found.setdefault(name, set()).add((arg["module"], arg["field"]))
+    for robot in doc["robots"].values():
+        for name, blueprint in robot["blueprints"].items():
+            for setting in _recommended_config_of(robot, blueprint):
+                spec = _setting_spec(doc, setting)
+                if "module" in spec:
+                    found.setdefault(name, set()).add((spec["module"], spec["field"]))
     return found
 
 
@@ -484,7 +533,8 @@ def _resolved_arg(arg_id: str, arg: dict[str, Any]) -> dict[str, Any]:
 
 def resolved(doc: dict[str, Any], registry: dict[str, str] | None = None) -> dict[str, Any]:
     """robots.json with every blueprint's defaults applied: its modes (each arg inlined, with `id`, `key` and `scope`), its tags
-    including replay/sim from its modes, its robot, recommended app, `starter` and `hidden`. With the registry: each
+    including replay/sim from its modes, its robot, recommended app, `starter`, `hidden` and `recommended_config` (each
+    setting as a resolved arg, with `choices` or None). With the registry: each
     blueprint's `registered`, and `unlisted`, the registered blueprints no robot lists."""
     out = copy.deepcopy(doc)
     out.pop("$schema", None)
@@ -507,6 +557,20 @@ def resolved(doc: dict[str, Any], registry: dict[str, str] | None = None) -> dic
                 if tag in blueprint["tags"] or (tag in MODE_TAGS and tag in modes)
             ]
             blueprint["robot"] = robot_id
+            blueprint["recommended_config"] = [
+                {
+                    **_resolved_arg(
+                        setting.get("arg")
+                        or setting.get("global")
+                        or f"{setting['module']}.{setting['field']}",
+                        _setting_spec(doc, setting),
+                    ),
+                    "choices": copy.deepcopy(_setting_spec(doc, setting).get("choices")),
+                }
+                for setting in _recommended_config_of(
+                    doc["robots"][robot_id], doc["robots"][robot_id]["blueprints"][name]
+                )
+            ]
             if "recommended_app" not in blueprint:
                 blueprint["recommended_app"] = copy.deepcopy(robot.get("recommended_app"))
             blueprint.setdefault("starter", None)

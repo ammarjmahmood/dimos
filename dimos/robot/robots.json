@@ -192,6 +192,26 @@
         "unitree-go2-webrtc-keyboard-teleop"
       ],
       "defaults": {
+        "recommended_config": [
+          {
+            "global": "simulation",
+            "label": "Run it on",
+            "choices": [
+              {
+                "value": "",
+                "label": "The real Go2"
+              },
+              {
+                "value": "mujoco",
+                "label": "The MuJoCo simulator"
+              }
+            ],
+            "default": ""
+          },
+          {
+            "arg": "go2_ip"
+          }
+        ],
         "modes": {
           "robot": {
             "args": [

@@ -407,6 +407,23 @@ class RobotArg(ApiModel):
     )
 
 
+class SettingChoice(ApiModel):
+    value: JsonValue = Field(description="The value it sets", examples=["mujoco"])
+    label: str = Field(description="What to call it", examples=["The MuJoCo simulator"])
+
+
+class RecommendedSetting(RobotArg):
+    """A setting to decide before running a blueprint: an arg, with the values to pick from."""
+
+    id: str = Field(
+        description="Its arg's id in robots.json's `args`, else its key",
+        examples=["go2_ip", "simulation"],
+    )
+    choices: list[SettingChoice] | None = Field(
+        default=None, description="The values to pick from (null: a free value)"
+    )
+
+
 class RobotMode(ApiModel):
     set: dict[str, JsonValue] = Field(
         description="GlobalConfig values this mode sets", examples=[{"simulation": "mujoco"}]
@@ -431,6 +448,11 @@ class RobotBlueprint(ApiModel):
         description="A test, benchmark, mock or building block: list it only on request"
     )
     recommended_app: RecommendedApp | None = Field(description="The app to install for it, or null")
+    recommended_config: list[RecommendedSetting] = Field(
+        default_factory=list,
+        description="The few settings to decide before running it, in order (its own, else its robot's): "
+        "sim or the real robot, its IP, ...",
+    )
     robot: str = Field(description="Its robot's id", examples=["go2"])
     registered: bool = Field(description="dimos's blueprint registry has it")
 

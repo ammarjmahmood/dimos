@@ -243,6 +243,61 @@ def test_recommended_blueprints_are_the_robots_own(root: Path) -> None:
     assert robots.resolved(doc)["robots"]["dog"]["recommended"] == []
 
 
+SIM_CHOICE = {
+    "global": "simulation",
+    "label": "Run it on",
+    "choices": [{"value": "", "label": "The dog"}, {"value": "mujoco", "label": "MuJoCo"}],
+    "default": "",
+}
+
+
+def test_recommended_settings_from_the_robot_or_the_blueprint(root: Path) -> None:
+    doc = sample()
+    doc["robots"]["dog"]["defaults"]["recommended_config"] = [SIM_CHOICE, {"arg": "robot_ip"}]
+    doc["robots"]["dog"]["blueprints"]["dog-test"]["recommended_config"] = [
+        {"module": "dogdriver", "field": "gait", "label": "Gait", "default": "trot"}
+    ]
+    assert robots.problems(doc, REGISTRY, root) == []
+    out = robots.resolved(doc)["robots"]["dog"]["blueprints"]
+    sim, ip = out["dog-basic"]["recommended_config"]
+    assert (sim["id"], sim["key"], sim["scope"], sim["default"]) == (
+        "simulation",
+        "simulation",
+        "global",
+        "",
+    )
+    assert [c["value"] for c in sim["choices"]] == ["", "mujoco"]
+    # an arg brings its label (and docs, placeholder) along
+    assert (ip["id"], ip["key"], ip["label"], ip["required"], ip["choices"]) == (
+        "robot_ip",
+        "robot_ip",
+        "Robot IP",
+        True,
+        None,
+    )
+    # a blueprint's own list replaces the robot's; its module fields are checked like module args
+    (gait,) = out["dog-test"]["recommended_config"]
+    assert (gait["key"], gait["scope"]) == ("dogdriver.gait", "module")
+    assert ("dogdriver", "gait") in robots.module_args(doc)["dog-test"]
+
+
+def test_recommended_settings_must_exist(root: Path) -> None:
+    doc = sample()
+    doc["robots"]["dog"]["defaults"]["recommended_config"] = [
+        {**SIM_CHOICE, "global": "simulaton"},
+        {**SIM_CHOICE, "default": "gazebo"},
+        {"arg": "robot_pi"},
+    ]
+    found = robots.problems(doc, REGISTRY, root)
+    assert any(
+        "'simulaton' is not a GlobalConfig field (did you mean simulation?)" in p for p in found
+    )
+    assert any("defaults to 'gazebo', which isn't one of its choices" in p for p in found)
+    assert any("names arg 'robot_pi', which isn't defined" in p for p in found)
+    doc["robots"]["dog"]["defaults"]["recommended_config"] = [{"arg": "robot_ip", "global": "x"}]
+    assert any("recommended_config" in p for p in robots.problems(doc, REGISTRY, root))
+
+
 def test_resolved_applies_defaults() -> None:
     doc = sample()
     before = copy.deepcopy(doc)
@@ -283,6 +338,8 @@ def test_the_real_file_lists_every_robot_dir_blueprint() -> None:
     assert list(basic["modes"]) == ["robot", "replay", "sim"]
     assert basic["recommended_app"]["id"] == "dim-go2-dash"
     assert out["robots"]["go2"]["recommended"][0] == "unitree-go2-basic"
+    assert [s["key"] for s in basic["recommended_config"]] == ["simulation", "robot_ip"]
+    assert basic["recommended_config"][1]["docs"].startswith("https://")
 
 
 def test_dimos_yaml_points_at_it() -> None:

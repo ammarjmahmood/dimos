@@ -421,7 +421,7 @@ def create_app(state: ServerState, background: bool = True) -> FastAPI:
         **route_doc(
             "blueprints",
             "Every robot dimos supports and its blueprints: title, description, tags, modes and their essential "
-            "args, the app to install, starter picks, recommended blueprints, hidden ones",
+            "args, the app to install, starter picks, recommended blueprints and settings, hidden ones",
             "The checkout's dimos/robot/robots.json (dimos.yaml's `robots:`, also readable per tag without a "
             "server) with its defaults applied: each blueprint's modes (robot, replay, sim) with the GlobalConfig "
             "values each sets and its args (`key`, `scope`: global args are `--key value` before `run`, module args "

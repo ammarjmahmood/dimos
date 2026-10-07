@@ -213,6 +213,9 @@
           "properties": {
             "modes": {
               "$ref": "#/$defs/modes"
+            },
+            "recommended_config": {
+              "$ref": "#/$defs/recommended_config"
             }
           }
         },
@@ -273,6 +276,9 @@
               "type": "null"
             }
           ]
+        },
+        "recommended_config": {
+          "$ref": "#/$defs/recommended_config"
         }
       }
     },
@@ -393,6 +399,153 @@
           "description": "A page on how to find this value (where a robot's IP comes from); the Launcher links it beside the field. test_all_blueprints_generation.py checks it resolves.",
           "type": "string",
           "pattern": "^https://"
+        }
+      }
+    },
+    "recommended_config": {
+      "description": "The few settings a person should decide before running it, in order, shown first (a launcher's config editor puts them on top). Each is an arg from the top-level `args` (`arg`), or a GlobalConfig field (`global`) or module config field (`module`, `field`) written out, with an optional label, choices and default. On a blueprint it replaces the robot's defaults' list; [] means none.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/recommended_setting"
+      }
+    },
+    "recommended_setting": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "arg"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "global"
+                ]
+              },
+              {
+                "required": [
+                  "module"
+                ]
+              },
+              {
+                "required": [
+                  "field"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "global",
+            "label"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "arg"
+                ]
+              },
+              {
+                "required": [
+                  "module"
+                ]
+              },
+              {
+                "required": [
+                  "field"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "module",
+            "field",
+            "label"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "arg"
+                ]
+              },
+              {
+                "required": [
+                  "global"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "arg": {
+          "description": "an id of the top-level `args` (its label, docs and placeholder come along)",
+          "type": "string",
+          "minLength": 1
+        },
+        "global": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "module": {
+          "type": "string",
+          "minLength": 1
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$"
+        },
+        "label": {
+          "description": "what to ask (overrides the arg's label)",
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "description": "text (default), number, bool, or recording (a picker of dimos recordings)",
+          "enum": [
+            "text",
+            "number",
+            "bool",
+            "recording"
+          ]
+        },
+        "placeholder": {
+          "type": "string"
+        },
+        "docs": {
+          "description": "A page on how to find this value (where a robot's IP comes from); the Launcher links it beside the field. test_all_blueprints_generation.py checks it resolves.",
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "default": {
+          "description": "what to suggest"
+        },
+        "choices": {
+          "description": "the values to pick from, each with a label (without it: a free value)",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {},
+              "label": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         }
       }
     }
