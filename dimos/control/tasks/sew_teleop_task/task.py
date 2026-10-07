@@ -127,7 +127,7 @@ class SewTeleopTask(BaseControlTask):
         with self.lock:
             try:
                 return self._compute(state)
-            except Exception as exc:  # noqa: BLE001 - solver failures must disarm the entire group
+            except Exception as exc:
                 self.disarm(str(exc))
                 self.status = {"state": self.state, "reason": self.reason}
                 return None
