@@ -44,10 +44,10 @@ turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake"] 
 
 # The model's backend: Metal on a Mac, TensorRT with the `tensorrt` feature (Jetsons, NVIDIA PCs), else CPU (e.g. a Pi).
 # The flake builds one package per backend and module.py picks by hardware.
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "d21e75f" }
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "146bd28" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "d21e75f", features = ["metal"] }
+depth2depth = { git = "https://github.com/jeff-hykin/depth2depth.git", rev = "146bd28", features = ["metal"] }
 
 [features]
 tensorrt = ["depth2depth/tensorrt"]

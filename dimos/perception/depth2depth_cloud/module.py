@@ -45,8 +45,8 @@ class Depth2DepthCloudConfig(NativeModuleConfig):
     base_fields: frozenset[str] = frozenset({"frame_id"})
 
     # Model input; multiples of 14, smaller is faster. TensorRT builds an engine per size (minutes, once).
-    model_height: int = 364
-    model_width: int = 448
+    model_height: int = 448
+    model_width: int = 560
     # JPEG decoded at 1/decode_scale of full size, then resampled to this pinhole image for the model;
     # 0 takes the decoded size and the CameraInfo's focal length at that scale.
     decode_scale: int = Field(default=2, ge=1, le=8)
