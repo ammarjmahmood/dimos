@@ -24,6 +24,7 @@ from dimos.manipulation.grasping.heuristic_grasp import HeuristicGraspModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.pick_and_place_module import PickAndPlaceModule
 from dimos.memory.tap import check_topics, matching
+from dimos.memory.utils.validation import validate_identifier
 from dimos.robot.manipulators.dual_openyam.blueprints.basic import DualOpenYamCoordinator
 from dimos.robot.manipulators.dual_openyam.blueprints.grasp import (
     DUAL_OPENYAM_RECORD_TOPICS,
@@ -99,14 +100,15 @@ def test_three_cameras_and_only_the_overhead_one_feeds_perception() -> None:
     cameras = [a for a in dual_openyam_grasp.active_blueprints if a.module is RealSenseCamera]
 
     assert sorted(a.name for a in cameras) == [
-        "left_wrist/realsensecamera",
+        "left_wrist_camera",
         "realsensecamera",
-        "right_wrist/realsensecamera",
+        "right_wrist_camera",
     ]
     assert len({a.kwargs["serial_number"] for a in cameras}) == 3
     names = {n for n, _ in stream_name_types(dual_openyam_grasp)}
-    # Perception subscribes color_image; the wrist copies live under their namespaces.
-    assert {"color_image", "left_wrist/color_image", "right_wrist/color_image"} <= names
+    # Perception subscribes color_image; the wrist copies carry a prefix.
+    assert {"color_image", "left_wrist_color_image", "right_wrist_color_image"} <= names
+    assert not {n for n in names if "/" in n}
 
 
 def test_every_run_records_the_policy_training_streams() -> None:
@@ -124,12 +126,15 @@ def test_every_run_records_the_policy_training_streams() -> None:
         "color_image",
         "depth_image",
         "camera_info",
-        "left_wrist/color_image",
-        "left_wrist/depth_image",
-        "right_wrist/color_image",
-        "right_wrist/depth_image",
+        "left_wrist_color_image",
+        "left_wrist_depth_image",
+        "right_wrist_color_image",
+        "right_wrist_depth_image",
         "tf",
     ):
         assert required in recorded, required
     # Globs stay tight: no empty infrared or IMU streams in the recording.
     assert not {n for n in recorded if "infrared" in n or "imu" in n}
+    # The recorder uses stream names as SQL identifiers.
+    for name in recorded:
+        validate_identifier(name)

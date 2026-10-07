@@ -99,8 +99,8 @@ RealSense over the table feeding perception and one RealSense on each wrist.
 Each arm is a planning group with its own gripper, so pick-and-place calls take
 `left_manipulator` or `right_manipulator`. The three D405 serials of the
 benchmark rig are the defaults; override them with
-`--realsensecamera.serial-number`, `--left_wrist/realsensecamera.serial-number`
-and `--right_wrist/realsensecamera.serial-number`.
+`--realsensecamera.serial-number`, `--left-wrist-camera.serial-number` and
+`--right-wrist-camera.serial-number`.
 
 ```bash
 # robot, heuristic top-down grasps
@@ -123,9 +123,9 @@ narrows the set. What is kept, against the data a learned policy needs:
 | joint trajectory | `planned_joint_trajectory` | ManipulationModule, the plan handed over per `execute()` |
 | joint commands | `applied_joint_position_command` | coordinator, the positions the hardware accepted, per tick |
 | camera images | `color_image`, `depth_image`, `camera_info` | overhead camera |
-| | `left_wrist/color_image`, `left_wrist/depth_image`, `left_wrist/camera_info` | left wrist camera |
-| | `right_wrist/color_image`, `right_wrist/depth_image`, `right_wrist/camera_info` | right wrist camera |
-| frames | `tf`, `left_wrist/tf`, `right_wrist/tf` | planner and cameras |
+| | `left_wrist_color_image`, `left_wrist_depth_image`, `left_wrist_camera_info` | left wrist camera |
+| | `right_wrist_color_image`, `right_wrist_depth_image`, `right_wrist_camera_info` | right wrist camera |
+| frames | `tf`, `left_wrist_tf`, `right_wrist_tf` | planner and cameras |
 
 `--graspgen` is a global flag read when the blueprint is imported, so it also
 works as `dimos --graspgen run dual-openyam-grasp ...`. GraspGenX has the same

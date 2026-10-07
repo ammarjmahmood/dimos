@@ -112,8 +112,8 @@ DUAL_OPENYAM_CAMERA_TRANSFORM = Transform(
 )
 
 # RealSense D405 serials on the benchmark rig; override per camera with
-# --realsensecamera.serial-number, --left_wrist/realsensecamera.serial-number
-# and --right_wrist/realsensecamera.serial-number.
+# --realsensecamera.serial-number, --left-wrist-camera.serial-number and
+# --right-wrist-camera.serial-number.
 DUAL_OPENYAM_OVERHEAD_CAMERA_SERIAL = "230322272156"
 # Sides verified 2026-10-06 by covering the left wrist lens.
 DUAL_OPENYAM_WRIST_CAMERA_SERIALS = {"left": "260322272983", "right": "260322276650"}
@@ -131,7 +131,7 @@ DUAL_OPENYAM_RECORD_TOPICS = ",".join(
         "camera_info",
         "tf",
         *(
-            f"{side}_wrist/{stream}"
+            f"{side}_wrist_{stream}"
             for side in DUAL_OPENYAM_SIDES
             for stream in ("color_image", "depth_image", "camera_info", "tf")
         ),
@@ -181,17 +181,26 @@ def dual_openyam_grasp_provider(graspgen: bool) -> Blueprint:
 
 
 def dual_openyam_wrist_camera(side: str) -> Blueprint:
-    """A wrist D405 under its own namespace, so its streams and frames never
-    collide with the overhead camera that feeds perception."""
+    """A wrist D405 whose streams and frames carry a ``{side}_wrist_`` prefix, so
+    they never collide with the overhead camera that feeds perception.
+
+    A prefix with an underscore, not a namespace: the recorder uses stream
+    names as SQL identifiers and rejects a slash.
+    """
     if side not in DUAL_OPENYAM_SIDES:
         raise ValueError(f"side must be 'left' or 'right', got {side!r}")
-    return RealSenseCamera.blueprint(
+    name = f"{side}_wrist_camera"
+    camera = RealSenseCamera.blueprint(
+        instance_name=name,
+        frame_id_prefix=f"{side}_wrist",
         width=640,
         height=480,
         fps=15,
         enable_pointcloud=False,
         serial_number=DUAL_OPENYAM_WRIST_CAMERA_SERIALS[side],
-    ).namespace(f"{side}_wrist")
+    )
+    streams = [stream.name for stream in camera.blueprints[0].streams]
+    return camera.remappings([(name, stream, f"{side}_wrist_{stream}") for stream in streams])
 
 
 def dual_openyam_grasp_modules(*, graspgen: bool) -> tuple[Blueprint, ...]:
