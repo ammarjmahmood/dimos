@@ -23,6 +23,9 @@
           config = nixpkgs.lib.optionalAttrs (nixpkgs.lib.hasSuffix "-linux" system) {
             allowUnfree = true;
             allowInsecurePredicate = pkg: nixpkgs.lib.hasInfix "tensorrt" (pkg.name or "");
+          } // nixpkgs.lib.optionalAttrs (system == "aarch64-linux") {
+            # Orin; it also makes nixpkgs pick JetPack's CUDA and TensorRT builds over the server-ARM ones.
+            cudaCapabilities = [ "8.7" ];
           };
         };
         cudaPackages = if system == "aarch64-linux" then pkgs.cudaPackages_12_6 else pkgs.cudaPackages_12_8;
