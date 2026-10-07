@@ -14,27 +14,27 @@ from dimos.hardware.spec import JointLimits
 MOTORS = tuple((motor_id, "rs-06" if motor_id <= 3 else "rs-00") for motor_id in range(1, 8))
 HOST_ID = 0xFD
 GAINS = (
-    (50.0, 2.0),
-    (100.0, 4.0),
-    (100.0, 4.0),
-    (40.0, 2.0),
-    (40.0, 1.5),
-    (40.0, 1.5),
-    (12.0, 0.05),
+    (50.0, 3.0),
+    (150.0, 10.0),
+    (150.0, 10.0),
+    (50.0, 5.0),
+    (50.0, 4.0),
+    (50.0, 4.0),
+    (50.0, 4.0),
 )
 ARM_LIMITS_DEG = (
-    (-155.0, 155.0),
-    (-3.0, 175.0),
-    (-3.0, 175.0),
-    (-85.0, 85.0),
-    (-85.0, 85.0),
-    (-179.0, 179.0),
+    (-150.0, 150.0),
+    (0.0, 220.0),
+    (0.0, 220.0),
+    (-90.0, 90.0),
+    (-90.0, 90.0),
+    (-180.0, 180.0),
 )
 ZERO_TOLERANCE = math.radians(6.0)
 TRACKING_LIMIT = math.radians(15.0)
 TRACKING_GRACE_S = 0.4
 FEEDBACK_TIMEOUT_S = 0.5
-TEMPERATURE_LIMIT_C = 80.0
+DEFAULT_TEMPERATURE_LIMIT_C = 110.0
 DEFAULT_VELOCITY = tuple(
     math.radians(value) for value in (20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 150.0)
 )
@@ -50,7 +50,8 @@ class RebotRSAdapter:
         self,
         channel: str = "can0",
         controller_factory: Callable[[str], Any] | None = None,
-        gripper_limits_deg: tuple[float, float] = (-180.0, 360.0),
+        gripper_limits_deg: tuple[float, float] = (0.0, 345.0),
+        temperature_limit_c: float = DEFAULT_TEMPERATURE_LIMIT_C,
         rate_hz: float = 200.0,
         **_: object,
     ) -> None:
@@ -62,6 +63,8 @@ class RebotRSAdapter:
             raise ValueError("gripper_limits_deg must contain two finite values")
         if gripper_limits_deg[0] >= gripper_limits_deg[1]:
             raise ValueError("gripper lower limit must be below its upper limit")
+        if not math.isfinite(temperature_limit_c) or not 50.0 <= temperature_limit_c <= 140.0:
+            raise ValueError("temperature_limit_c must be between 50 and 140")
         self._channel = channel
         self._factory = controller_factory
         self._period = 1.0 / rate_hz
@@ -73,6 +76,7 @@ class RebotRSAdapter:
         ]
         self._velocity_max = list(DEFAULT_VELOCITY)
         self._acceleration = list(DEFAULT_ACCELERATION)
+        self._temperature_limit = temperature_limit_c
         self._controller = None
         self._motors: list[Any] = []
         self._positions = [0.0] * 7
@@ -411,7 +415,9 @@ class RebotRSAdapter:
             self._feedback_at = now
         elif now - self._feedback_at > FEEDBACK_TIMEOUT_S:
             raise RuntimeError("Motor feedback stopped arriving")
-        if any(value is not None and value > TEMPERATURE_LIMIT_C for value in self._temperatures):
+        if any(
+            value is not None and value > self._temperature_limit for value in self._temperatures
+        ):
             raise RuntimeError("A motor is above the temperature limit")
         error = max(
             abs(measured - commanded)

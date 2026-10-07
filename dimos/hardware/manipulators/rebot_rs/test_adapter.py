@@ -107,6 +107,12 @@ def test_registry_protocol_and_motor_topology() -> None:
     assert adapter.get_info().model == "reBot Arm B601 RS"
     limits = adapter.get_limits()
     assert len(limits.position_lower) == len(limits.position_upper) == len(limits.velocity_max) == 7
+    assert limits.position_lower == pytest.approx(
+        [math.radians(value) for value in (-150.0, 0.0, 0.0, -90.0, -90.0, -180.0, 0.0)]
+    )
+    assert limits.position_upper == pytest.approx(
+        [math.radians(value) for value in (150.0, 220.0, 220.0, 90.0, 90.0, 180.0, 345.0)]
+    )
     adapter.disconnect()
     assert controller.closed
 
@@ -175,7 +181,7 @@ def test_temperature_fault_latches_and_blocks_new_commands() -> None:
     adapter.connect()
     adapter.confirm_zero_pose()
     adapter.activate()
-    controller.motors[0].temperature = 90.0
+    controller.motors[0].temperature = 120.0
     time.sleep(0.05)
     assert "temperature" in adapter.read_error()[1]
     assert not adapter.write_joint_positions([0.0] * 7)
