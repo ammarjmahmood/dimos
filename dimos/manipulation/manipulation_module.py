@@ -27,7 +27,7 @@ import traceback
 from typing import Any, Literal, TypeAlias
 
 import numpy as np
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.control.coordinator import ControlCoordinator
@@ -135,6 +135,16 @@ class ManipulationState(Enum):
     FAULT = 4
 
 
+class StaticBox(BaseModel):
+    """A box fixed in the world frame, added to the planning world at start:
+    a table top, a bin, a wall the arm must not sweep through."""
+
+    name: str
+    size: tuple[float, float, float]
+    xyz: tuple[float, float, float]
+    rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
 class ManipulationModuleConfig(ModuleConfig):
     """Configuration for ManipulationModule."""
 
@@ -157,6 +167,8 @@ class ManipulationModuleConfig(ModuleConfig):
     # to prevent the planner from routing trajectories below this height.
     # Set to None to disable.
     floor_z: float | None = None
+    # Fixed obstacles of the workcell, in the world frame.
+    static_boxes: list[StaticBox] = Field(default_factory=list)
     # Fixed mount edges published alongside the robot's own TF, for rigs bolted
     # to a link the model already publishes -- an eye-in-hand camera, say. One
     # publisher for the whole chain: a second module publishing the mount at its
@@ -326,6 +338,17 @@ class ManipulationModule(Module):
             )
             self._world_monitor.add_obstacle(floor_obs)
             logger.info("Floor obstacle added", z=fz)
+
+        for box in self.config.static_boxes:
+            self._world_monitor.add_obstacle(
+                Obstacle(
+                    name=box.name,
+                    pose=Pose(Vector3(*box.xyz), Quaternion.from_euler(Vector3(*box.rpy))),
+                    obstacle_type=ObstacleType.BOX,
+                    dimensions=tuple(box.size),
+                )
+            )
+            logger.info("Static obstacle added", name=box.name, size=box.size)
 
         self._world_monitor.start_state_monitor()
         self._world_monitor.start_obstacle_monitor()
