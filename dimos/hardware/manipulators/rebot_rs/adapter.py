@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any
 
+from dimos.hardware.manipulators.rebot_rs.feedback import SocketCANFeedback, require_fresh
 from dimos.hardware.manipulators.spec import ControlMode, ManipulatorInfo
 from dimos.hardware.spec import JointLimits
 
@@ -50,6 +51,7 @@ class RebotRSAdapter:
         self,
         channel: str = "can0",
         controller_factory: Callable[[str], Any] | None = None,
+        feedback_factory: Callable[[str], Any] | None = None,
         gripper_limits_deg: tuple[float, float] = (0.0, 345.0),
         temperature_limit_c: float = DEFAULT_TEMPERATURE_LIMIT_C,
         rate_hz: float = 200.0,
@@ -67,6 +69,10 @@ class RebotRSAdapter:
             raise ValueError("temperature_limit_c must be between 50 and 140")
         self._channel = channel
         self._factory = controller_factory
+        self._feedback_factory = feedback_factory or SocketCANFeedback
+        self._receiver = None
+        self._active_indices = tuple(range(7))
+        self._gripper_test = False
         self._period = 1.0 / rate_hz
         self._lower = [math.radians(pair[0]) for pair in ARM_LIMITS_DEG] + [
             math.radians(gripper_limits_deg[0])
@@ -143,12 +149,15 @@ class RebotRSAdapter:
             self._thread.join(timeout=1.0)
         if self._controller is not None:
             self._controller.close()
+        if self._receiver is not None:
+            self._receiver.close()
         with self._lock:
             self._controller = None
             self._motors = []
             self._thread = None
             self._zero_confirmed = False
             self._enabled = False
+            self._receiver = None
 
     def is_connected(self) -> bool:
         """Return whether the SocketCAN controller is open."""
@@ -174,6 +183,12 @@ class RebotRSAdapter:
         """Enable MIT position holding after zero pose confirmation."""
         return self.write_enable(True)
 
+    def activate_gripper(self) -> bool:
+        """Enable only calibrated motor 7 with conservative diagnostic limits."""
+        if self._enabled:
+            return False
+        return self._enable_indices((6,), gripper_test=True)
+
     def deactivate(self) -> bool:
         """Stop command progression and disable all motor torque."""
         if not self.is_connected():
@@ -182,10 +197,15 @@ class RebotRSAdapter:
         self._running.clear()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=1.0)
-        self._controller.disable_all()
+        for index in self._active_indices:
+            self._motors[index].disable()
+        if self._receiver is not None:
+            self._receiver.close()
+            self._receiver = None
         with self._lock:
             self._enabled = False
             self._thread = None
+            self._gripper_test = False
         return True
 
     def get_info(self) -> ManipulatorInfo:
@@ -232,6 +252,12 @@ class RebotRSAdapter:
         with self._lock:
             return self._efforts.copy()
 
+    def read_motor_temperatures(self) -> list[float | None]:
+        """Return temperatures from timestamped motor status reports."""
+        self._require_fresh_feedback()
+        with self._lock:
+            return self._temperatures.copy()
+
     def read_state(self) -> dict[str, int]:
         """Return enabled state and DimOS control mode index."""
         return {"state": int(self._enabled), "mode": list(ControlMode).index(self._control_mode)}
@@ -252,8 +278,19 @@ class RebotRSAdapter:
             return False
         if any(
             not math.isfinite(value) or value < lower or value > upper
-            for value, lower, upper in zip(positions, self._lower, self._upper, strict=True)
+            for value, lower, upper in (
+                (positions[index], self._lower[index], self._upper[index])
+                for index in self._active_indices
+            )
         ):
+            return False
+        if any(
+            abs(positions[index] - self._targets[index]) > 0.001
+            for index in range(7)
+            if index not in self._active_indices
+        ):
+            return False
+        if self._gripper_test and not 0.0 <= positions[6] <= math.radians(5.0):
             return False
         with self._lock:
             self._targets = positions.copy()
@@ -281,29 +318,73 @@ class RebotRSAdapter:
         if not enable:
             return self.deactivate() if self._enabled else True
         if self._enabled:
-            return True
+            return self._active_indices == tuple(range(7))
+        return self._enable_indices(tuple(range(7)))
+
+    def _enable_indices(self, indices: tuple[int, ...], gripper_test: bool = False) -> bool:
+        if not self.is_connected():
+            return False
         if not self._zero_confirmed or self._error:
             return False
         if not self.confirm_zero_pose():
             return False
         from motorbridge import Mode
 
-        with self._lock:
-            for motor in self._motors:
+        self._active_indices = indices
+        self._gripper_test = gripper_test
+        self._receiver = self._feedback_factory(self._channel)
+        try:
+            for index in indices:
+                motor = self._motors[index]
+                motor.disable()
+            initial = self._receiver.snapshot()
+            for index in indices:
+                state = initial.get(index + 1)
+                require_fresh(state, FEEDBACK_TIMEOUT_S)
+                if (
+                    state.fault_bits
+                    or state.mode_bits != 0
+                    or not math.isfinite(state.t_mos)
+                    or not 0.0 <= state.t_mos <= self._temperature_limit
+                ):
+                    raise RuntimeError("Motor initial status is not safe for activation")
+            for index in indices:
+                motor = self._motors[index]
                 motor.ensure_mode(Mode.MIT, 1000)
                 motor.set_can_timeout_ms(250)
+                if gripper_test:
+                    motor.robstride_write_param_f32(0x700B, 0.5)
+                    if abs(motor.robstride_get_param_f32(0x700B, 500) - 0.5) > 0.01:
+                        raise RuntimeError("Gripper torque limit readback failed")
             positions = self._read_positions_direct()
             self._positions = positions
             self._commands = positions.copy()
             self._targets = positions.copy()
             self._rates = [0.0] * 7
             self._velocity_scale = 1.0
-            for motor, position, gains in zip(self._motors, positions, GAINS, strict=True):
-                motor.send_mit(position, 0.0, gains[0], gains[1], 0.0)
-            self._controller.enable_all()
+            if gripper_test:
+                self._velocity_max[6] = math.radians(2.0)
+                self._acceleration[6] = math.radians(5.0)
+            for index in indices:
+                motor = self._motors[index]
+                kp, kd = (2.0, 0.1) if gripper_test else GAINS[index]
+                motor.send_mit(positions[index], 0.0, kp, kd, 0.0)
+                motor.enable()
             self._enabled = True
             self._feedback_at = time.monotonic()
             self._tracking_since = None
+        except (RuntimeError, ValueError, OSError) as error:
+            self._error = f"Activation refused: {error}"
+            self._enabled = False
+            for index in indices:
+                try:
+                    self._motors[index].disable()
+                except (RuntimeError, ValueError, OSError) as disable_error:
+                    self._error += f"; motor {index + 1} disable failed: {disable_error}"
+            if self._receiver is not None:
+                self._receiver.close()
+                self._receiver = None
+            return False
         self._running.set()
         self._thread = threading.Thread(target=self._loop, name="rebot-rs-mit", daemon=True)
         self._thread.start()
@@ -362,12 +443,13 @@ class RebotRSAdapter:
         while self._running.is_set():
             try:
                 with self._lock:
-                    self._advance()
-                    for motor, position, rate, gains in zip(
-                        self._motors, self._commands, self._rates, GAINS, strict=True
-                    ):
-                        motor.send_mit(position, rate, gains[0], gains[1], 0.0)
                     self._feedback()
+                    self._advance()
+                    for index in self._active_indices:
+                        kp, kd = (2.0, 0.1) if self._gripper_test else GAINS[index]
+                        self._motors[index].send_mit(
+                            self._commands[index], self._rates[index], kp, kd, 0.0
+                        )
             except (RuntimeError, ValueError, OSError) as error:
                 self._fail(f"Motor communication failed: {error}")
             next_tick += self._period
@@ -378,7 +460,7 @@ class RebotRSAdapter:
                 next_tick = time.perf_counter()
 
     def _advance(self) -> None:
-        for index in range(7):
+        for index in self._active_indices:
             error = self._targets[index] - self._commands[index]
             acceleration = self._acceleration[index]
             maximum = self._velocity_max[index] * self._velocity_scale
@@ -403,28 +485,37 @@ class RebotRSAdapter:
 
     def _feedback(self) -> None:
         now = time.monotonic()
-        fresh = False
-        for index, motor in enumerate(self._motors):
-            state = motor.get_state()
-            if state is None or not math.isfinite(state.pos):
-                continue
+        if self._receiver is None:
+            raise RuntimeError("Motor status receiver is absent")
+        states = self._receiver.snapshot()
+        for index in self._active_indices:
+            state = states.get(index + 1)
+            require_fresh(state, FEEDBACK_TIMEOUT_S)
+            if not all(
+                math.isfinite(value) for value in (state.pos, state.vel, state.torq, state.t_mos)
+            ):
+                raise RuntimeError("Motor status contains nonfinite data")
+            if state.fault_bits:
+                raise RuntimeError(f"Motor {index + 1} reports fault bits")
+            if state.mode_bits != 2:
+                raise RuntimeError(f"Motor {index + 1} reports an unexpected mode")
             self._positions[index] = state.pos
             self._velocities[index] = state.vel if math.isfinite(state.vel) else 0.0
             self._efforts[index] = state.torq if math.isfinite(state.torq) else 0.0
+            if self._gripper_test and abs(state.torq) > 0.75:
+                raise RuntimeError("Gripper measured torque exceeds diagnostic bound")
             if math.isfinite(state.t_mos):
                 self._temperatures[index] = state.t_mos
-            fresh = True
-        if fresh:
-            self._feedback_at = now
-        elif now - self._feedback_at > FEEDBACK_TIMEOUT_S:
-            raise RuntimeError("Motor feedback stopped arriving")
+        self._feedback_at = now
         if any(
             value is not None and value > self._temperature_limit for value in self._temperatures
         ):
             raise RuntimeError("A motor is above the temperature limit")
         error = max(
             abs(measured - commanded)
-            for measured, commanded in zip(self._positions[:6], self._commands[:6], strict=True)
+            for measured, commanded in (
+                (self._positions[index], self._commands[index]) for index in self._active_indices
+            )
         )
         if error > TRACKING_LIMIT:
             if self._tracking_since is None:
@@ -440,4 +531,11 @@ class RebotRSAdapter:
             self._commands = self._positions.copy()
             self._targets = self._positions.copy()
             self._rates = [0.0] * 7
+            self._zero_confirmed = False
+            self._enabled = False
         self._running.clear()
+        for index in self._active_indices:
+            try:
+                self._motors[index].disable()
+            except (RuntimeError, ValueError, OSError) as disable_error:
+                self._error += f"; motor {index + 1} disable failed: {disable_error}"
